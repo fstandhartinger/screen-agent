@@ -4,21 +4,24 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 namespace ScreenAgent;
-internal sealed record DeviceToken(string token,string deviceId,DateTimeOffset expiresAt);
+internal sealed record DeviceToken(string token,string deviceId,DateTimeOffset expiresAt,string? origin=null);
 internal sealed class DeviceClient : IDisposable
 {
     readonly HttpClient http;
+    readonly string origin;
     DeviceToken? device;
     static string TokenPath=>Path.Combine(ScreenConfig.Folder,"device.bin");
     public bool Paired=>device is not null&&device.expiresAt>DateTimeOffset.UtcNow;
     public DeviceClient(AppConfig config)
     {
+        origin=new Uri(config.DeskUrl).GetLeftPart(UriPartial.Authority);
         http=new(new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(30)};
-        try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(TokenPath),null,DataProtectionScope.CurrentUser));}catch{device=null;}
+        try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(TokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}catch{device=null;}
     }
     public void Pair(DeviceToken value)
     {
         if(string.IsNullOrWhiteSpace(value.token)||string.IsNullOrWhiteSpace(value.deviceId)||value.expiresAt<=DateTimeOffset.UtcNow)throw new InvalidDataException("Invalid device token");
+        value=value with{origin=origin};
         var bytes=ProtectedData.Protect(JsonSerializer.SerializeToUtf8Bytes(value),null,DataProtectionScope.CurrentUser);
         Directory.CreateDirectory(ScreenConfig.Folder);File.WriteAllBytes(TokenPath+".tmp",bytes);File.Move(TokenPath+".tmp",TokenPath,true);device=value;
     }
