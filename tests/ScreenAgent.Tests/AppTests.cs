@@ -67,4 +67,19 @@ public class AppTests
         var h=new Hotkeys();h.Feed(new(Key.Ctrl,true,0));var actions=h.Feed(new(Key.Win,true,10));
         Assert.Contains(ActionKind.DictationBind,actions);Assert.DoesNotContain(ActionKind.DictationStart,actions);
     }
+    [Fact]public void ConfigurableChordAndLeftRightModifiers()
+    {
+        var keys=new AppConfig().Hotkeys;keys["dictation"]="Ctrl+Alt";keys["session"]="Ctrl+Alt+Shift";keys["handsFree"]="Ctrl+Alt+F8";keys["pause"]="Ctrl+Alt+Shift+Q";keys["draw"]="F9";
+        var map=new HotkeyBindings(keys);
+        Assert.Equal(Key.Caps,map.Role(0x78));Assert.Equal(Key.Space,map.Role(0x77));Assert.Equal(Key.P,map.Role(0x51));
+        Assert.True(map.Feed(0xa2,true,out var key));Assert.Equal(Key.Ctrl,key);
+        Assert.False(map.Feed(0xa3,true,out _));Assert.False(map.Feed(0xa2,false,out _));
+        Assert.True(map.Feed(0xa4,true,out key));Assert.Equal(Key.Win,key);Assert.True(map.CtrlWin);Assert.False(map.PhysicalWin);
+        Assert.True(map.Feed(0xa3,false,out _));Assert.False(map.CtrlWin);
+    }
+    [Fact]public void WireUsesBareHexAndShortBoundingKeys()
+    {
+        Assert.Equal(new[]{"123abc","abcdef"},DevicePayloads.Ids(["a#123abc","ABCDEF","abcdef","unknown"]));
+        string json=JsonSerializer.Serialize(new Box(-10,20,100,200));Assert.Equal("{\"x\":-10,\"y\":20,\"w\":100,\"h\":200}",json);
+    }
 }

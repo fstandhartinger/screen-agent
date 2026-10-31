@@ -7,11 +7,12 @@ internal sealed class KeyboardHook : IDisposable
     readonly CancellationTokenSource stop=new();
     readonly Task consumer;
     readonly Hotkeys state=new();
+    readonly HotkeyBindings bindings;
     readonly Native.HookProc callback;
     readonly Thread thread;
     IntPtr hook;
     uint threadId;
-    volatile bool swallowCaps, ctrl,win,baseline,disposed,healthy;
+    volatile bool swallowCaps,baseline,disposed,healthy;
     bool capsOwned;
     readonly System.Threading.Timer watchdog;
     public event System.Action<ActionKind>? Action;
@@ -20,8 +21,9 @@ internal sealed class KeyboardHook : IDisposable
     public bool Session=>state.Session;
     public bool Paused=>state.Paused;
     public bool Dictating=>state.Dictating;
-    public KeyboardHook()
+    public KeyboardHook(HotkeyBindings? bindings=null)
     {
+        this.bindings=bindings??new HotkeyBindings(new AppConfig().Hotkeys);
         baseline=Native.Caps; callback=Callback;
         thread=new Thread(Run){IsBackground=true,Name="ScreenAgent keyboard hook"};thread.Start();
         consumer=Task.Run(async ()=>
@@ -52,13 +54,11 @@ internal sealed class KeyboardHook : IDisposable
         var k=Marshal.PtrToStructure<Native.Kbd>(l);
         if((k.flags&0x10)!=0)return Native.CallNextHookEx(hook,code,w,l); // ignore our synthetic events
         bool down=w.ToInt64() is 0x100 or 0x104;
-        var key=k.vk switch {0x11 or 0xa2 or 0xa3=>Core.Key.Ctrl,0x5b or 0x5c=>Core.Key.Win,0x10 or 0xa0 or 0xa1=>Core.Key.Shift,0x14=>Core.Key.Caps,0x50=>Core.Key.P,0x20=>Core.Key.Space,_=>Core.Key.Other};
-        if(key==Core.Key.Ctrl)ctrl=down;
-        if(key==Core.Key.Win)win=down;
+        bool transition=bindings.Feed((int)k.vk,down,out var key);
         // Bounded native-only mask before Win can be released; no UI/OCR/network in this callback.
-        if(down && ctrl && win && (key is Core.Key.Ctrl or Core.Key.Win))
+        if(down && bindings.CtrlWin && bindings.PhysicalWin && (key is Core.Key.Ctrl or Core.Key.Win))
             Native.SendInput(2,new[]{Native.Key(0xe8),Native.Key(0xe8,true)},Marshal.SizeOf<Native.Input>());
-        queue.Enqueue((new(key,down,Environment.TickCount64),Native.GetForegroundWindow()));
+        if(transition)queue.Enqueue((new(key,down,Environment.TickCount64),Native.GetForegroundWindow()));
         if(key==Core.Key.Caps)
         {
             if(down)capsOwned=swallowCaps;
@@ -78,8 +78,8 @@ internal sealed class KeyboardHook : IDisposable
     {
         foreach(var a in actions)
         {
-            if(a==ActionKind.CapsTap){baseline=!baseline;Native.Tap(0x14);}
-            if(a==ActionKind.SessionToggle){if(state.Session)baseline=Native.Caps;else Native.RestoreCaps(baseline);}
+            if(a==ActionKind.CapsTap){if(bindings.DrawVk==0x14)baseline=!baseline;Native.Tap((ushort)bindings.DrawVk);}
+            if(a==ActionKind.SessionToggle&&bindings.DrawVk==0x14){if(state.Session)baseline=Native.Caps;else Native.RestoreCaps(baseline);}
             if(a==ActionKind.DictationBind)BindTarget?.Invoke(window);
             else Action?.Invoke(a);
         }
@@ -90,6 +90,6 @@ internal sealed class KeyboardHook : IDisposable
         if(disposed)return;disposed=true;watchdog.Dispose();
         if(threadId!=0)Native.PostThreadMessage(threadId,0x12,UIntPtr.Zero,IntPtr.Zero);
         thread.Join(1000);stop.Cancel();try{consumer.Wait(1000);}catch(AggregateException){}
-        if(state.Session)Native.RestoreCaps(baseline);stop.Dispose();
+        if(state.Session&&bindings.DrawVk==0x14)Native.RestoreCaps(baseline);stop.Dispose();
     }
 }

@@ -21,7 +21,7 @@ internal static class Program
             var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};
             var config=ScreenConfig.Load();using var client=new DeviceClient(config);
             var bridge=new AgentBridge(config,client);app.MainWindow=bridge;var pill=new Pill();
-            hook=new KeyboardHook();using var controller=new AppController(config,client,bridge,hook,pill);
+            hook=new KeyboardHook(new HotkeyBindings(config.Hotkeys));using var controller=new AppController(config,client,bridge,hook,pill);
             var pause=new PauseControl(()=>controller.Pause());
             app.DispatcherUnhandledException+=(_,e)=>{hook.Dispose();e.Handled=false;};
             bridge.Closing+=(_,e)=>{if(!bridge.AllowClose){e.Cancel=true;bridge.Hide();}};

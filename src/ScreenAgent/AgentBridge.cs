@@ -52,7 +52,7 @@ internal sealed class AgentBridge : Window
                         {
                             case "device-token":
                                 client.Pair(new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,(m.GetProperty("expiresAt").ValueKind==System.Text.Json.JsonValueKind.Number?DateTimeOffset.FromUnixTimeMilliseconds(m.GetProperty("expiresAt").GetInt64()):m.GetProperty("expiresAt").GetDateTimeOffset())));
-                                browser.Source=new Uri(origin,"/?companion=1");break;
+                                browser.Source=new Uri(origin,"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider));break;
                             case "session":
                                 SessionId=m.TryGetProperty("sid",out var sid)&&sid.ValueKind==System.Text.Json.JsonValueKind.String?sid.GetString():null;
                                 SessionChanged?.Invoke();break;
@@ -68,7 +68,7 @@ internal sealed class AgentBridge : Window
                     if(e.PermissionKind==CoreWebView2PermissionKind.Microphone)
                         e.State=Trusted(e.Uri)&&MessageBox.Show(this,"Allow the Desk to use your microphone?","Screen Agent",MessageBoxButton.YesNo)==MessageBoxResult.Yes?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
                 };
-                browser.Source=new Uri(origin,client.Paired?"/?companion=1":"/device");
+                browser.Source=new Uri(origin,client.Paired?"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider):"/device");
             }
             catch(Exception ex){Content=new System.Windows.Controls.TextBlock{Text="WebView2 Runtime required: "+ex.Message,TextWrapping=TextWrapping.Wrap};}
         };

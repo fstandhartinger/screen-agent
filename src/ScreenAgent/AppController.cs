@@ -18,7 +18,7 @@ internal sealed class AppController : IDisposable
     readonly List<DrawOverlay> drawings=[];
     bool paused,busy,disposed;
     long capturedAt,version,noticeUntil;
-    IntPtr lastForeground,underlying;
+    IntPtr lastForeground,underlying,hashForeground;
     ulong? lastHash;
     string[] ids=[],terms=[];
     TextInjector.Target? target,audioTarget;
@@ -128,15 +128,20 @@ internal sealed class AppController : IDisposable
         {
             var monitor=System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position).Bounds;
             using var frame=privacy.Capture(monitor,true,false);
-            if(frame is null){ids=[];Notice("Privat · nicht erfasst");return;}
-            ulong hash=PerceptualHash(frame);if(lastHash==hash)return;
+            if(frame is null)
+            {
+                ids=[];lastHash=null;bridge.Screen(ids);Notice("Privat · nicht erfasst");
+                if(Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen",new ScreenPayload([],new("",true),++version),ct);
+                return;
+            }
+            ulong hash=PerceptualHash(frame);if(lastHash==hash&&hashForeground==fg)return;
             var window=privacy.Snapshot(monitor).FirstOrDefault(w=>w.Handle==fg);if(window is null||window.Blocked)return;
             byte[] png=PrivacyCapture.Png(frame);var ocr=await Task.Run(()=>Ocr.ReadMemory(png),ct);
             var confirmed=await client.Exists(ocr.Ids,ct);
             if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg)return;
             await client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen",DevicePayloads.Screen(confirmed,window.Process,++version),ct);
             if(!Active||ct.IsCancellationRequested)return;
-            lastHash=hash;ids=confirmed;bridge.Screen(ids);
+            lastHash=hash;hashForeground=fg;ids=confirmed;bridge.Screen(ids);
             if(terms.Length==0)terms=await client.Dictionary(ct);
         }
         finally{busy=false;}
@@ -167,6 +172,12 @@ internal sealed class AppController : IDisposable
                 var bounds=Rectangle.Intersect(new Rectangle(0,0,clean.Width,clean.Height),Rectangle.FromLTRB((int)minX-margin,(int)minY-margin,(int)maxX+margin+1,(int)maxY+margin+1));
                 using var crop=clean.Clone(bounds,PixelFormat.Format32bppArgb);
                 byte[] png=PrivacyCapture.Png(crop);
+                int cropWidth=crop.Width,cropHeight=crop.Height;
+                while(png.Length>2*1024*1024&&cropWidth>64&&cropHeight>64)
+                {
+                    cropWidth=Math.Max(1,(int)(cropWidth*.8));cropHeight=Math.Max(1,(int)(cropHeight*.8));
+                    using var resized=new Bitmap(crop,new Size(cropWidth,cropHeight));png=PrivacyCapture.Png(resized);
+                }
                 double scale=Math.Min(1,1280.0/Math.Max(clean.Width,clean.Height));
                 using var small=new Bitmap(clean,new Size(Math.Max(1,(int)(clean.Width*scale)),Math.Max(1,(int)(clean.Height*scale))));
                 using var stream=new MemoryStream();small.Save(stream,ImageFormat.Jpeg);

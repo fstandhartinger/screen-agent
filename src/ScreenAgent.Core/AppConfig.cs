@@ -16,8 +16,7 @@ public sealed class AppConfig
         var c=JsonSerializer.Deserialize<AppConfig>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??throw new InvalidDataException("Invalid config");
         if(!Uri.TryCreate(c.DeskUrl,UriKind.Absolute,out var uri)||uri.Scheme!="https"||uri.AbsolutePath!="/"||uri.Query!=""||uri.Fragment!=""||uri.UserInfo!="")throw new InvalidDataException("Desk URL must be an HTTPS origin");
         if(c.IntervalMs<1000||c.IntervalMs>60000)throw new InvalidDataException("Interval must be 1000..60000 ms");
-        var defaults=new AppConfig().Hotkeys;
-        if(c.Hotkeys.Count!=defaults.Count||defaults.Any(p=>!c.Hotkeys.TryGetValue(p.Key,out var v)||v!=p.Value))throw new InvalidDataException("This release supports the documented default hotkeys only");
+        _=new HotkeyBindings(c.Hotkeys);
         return c;
     }
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};
