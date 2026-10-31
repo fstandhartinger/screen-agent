@@ -9,6 +9,10 @@ internal sealed class AgentBridge : Window
     readonly Uri origin;
     TaskCompletionSource<bool>? muteAck;
     bool requestedMute;
+    TaskCompletionSource<bool>? voiceAck;
+    bool requestedVoice;
+    public bool VoiceOn {get;private set;}
+    readonly SemaphoreSlim muteGate=new(1,1);
     public bool AllowClose {get;set;}
     public string? SessionId {get;private set;}
     public event System.Action? SessionChanged;
@@ -56,6 +60,14 @@ internal sealed class AgentBridge : Window
                             case "session":
                                 string? next=m.TryGetProperty("sid",out var sid)&&sid.ValueKind==System.Text.Json.JsonValueKind.String?sid.GetString():null;
                                 if(next!=SessionId){SessionId=next;SessionChanged?.Invoke();}break;
+                            case "voice-ack":
+                                if(m.TryGetProperty("on",out var voiceOn)&&voiceOn.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)
+                                {
+                                    VoiceOn=voiceOn.GetBoolean();
+                                    if(VoiceOn==requestedVoice)voiceAck?.TrySetResult(true);
+                                    else if(m.TryGetProperty("state",out var state)&&state.GetString()=="error")voiceAck?.TrySetResult(false);
+                                }
+                                break;
                             case "mute-ack":if(!m.TryGetProperty("on",out var on)||on.GetBoolean()==requestedMute)muteAck?.TrySetResult(true);break;
                         }
                     }
@@ -66,14 +78,31 @@ internal sealed class AgentBridge : Window
                 {
                     // Explicit WebView permission prompt for the Desk's own microphone request.
                     if(e.PermissionKind==CoreWebView2PermissionKind.Microphone)
-                        e.State=Trusted(e.Uri)&&MessageBox.Show(this,"Allow the Desk to use your microphone?","Screen Agent",MessageBoxButton.YesNo)==MessageBoxResult.Yes?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
+                        e.State=Trusted(e.Uri)&&MessageBox.Show(this,"Darf Desk dein Mikrofon verwenden?","Screen Agent",MessageBoxButton.YesNo)==MessageBoxResult.Yes?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
                 };
                 browser.Source=new Uri(origin,client.Paired?"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider):"/device");
             }
-            catch(Exception ex){Content=new System.Windows.Controls.TextBlock{Text="WebView2 Runtime required: "+ex.Message,TextWrapping=TextWrapping.Wrap};}
+            catch(Exception ex){Content=new System.Windows.Controls.TextBlock{Text="WebView2-Laufzeit erforderlich: "+ex.Message,TextWrapping=TextWrapping.Wrap};}
         };
     }
+    public async Task<bool> Voice(bool on,string provider)
+    {
+        if(browser.CoreWebView2 is null)return false;
+        var ack=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);voiceAck=ack;requestedVoice=on;
+        try
+        {
+            browser.CoreWebView2.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="voice",on,provider=provider=="default"?"xai":provider}));
+            return await Task.WhenAny(ack.Task,Task.Delay(2000))==ack.Task&&await ack.Task;
+        }
+        catch{return false;}
+        finally{if(voiceAck==ack)voiceAck=null;}
+    }
     public async Task<bool> Mute(bool on)
+    {
+        await muteGate.WaitAsync();
+        try{return await MuteCore(on);}finally{muteGate.Release();}
+    }
+    async Task<bool> MuteCore(bool on)
     {
         if(SessionId is null)return true;
         if(browser.CoreWebView2 is null)return false;

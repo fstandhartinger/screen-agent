@@ -4,6 +4,7 @@ public sealed record WindowContext(string process,bool blocked);
 public sealed record ScreenPayload(string[] ids,WindowContext window,long frameVersion);
 public sealed record Box(int x,int y,int w,int h);
 public sealed record HighlightPayload(string crop,string context,Box bbox,string[] ids);
+public sealed record IdsHighlightPayload(string[] ids,Box bbox,bool noImage=true);
 public sealed record DictationContext(string process,string fieldBefore,string[] visibleIds,string[] recentTerms);
 public static class DevicePayloads
 {

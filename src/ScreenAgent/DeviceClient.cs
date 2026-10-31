@@ -31,7 +31,7 @@ internal sealed class DeviceClient : IDisposable
         if(!Paired)throw new InvalidOperationException("Pair this device first");
         using var request=new HttpRequestMessage(method,path){Content=body};request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",device!.token);
         var response=await http.SendAsync(request,ct);
-        if(!response.IsSuccessStatusCode){response.Dispose();throw new HttpRequestException("Desk refused device request");}return response;
+        if(!response.IsSuccessStatusCode){var status=response.StatusCode;response.Dispose();throw new HttpRequestException("Desk-Anfrage abgelehnt",null,status);}return response;
     }
     public async Task<string[]> Exists(string[] ids,CancellationToken ct)
     {

@@ -80,11 +80,15 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path publish/ScreenAgent.exe) {
+            Compress-Archive -Path publish/tessdata -DestinationPath publish/tessdata.zip -Force
             $file = Get-Item publish/ScreenAgent.exe
             $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
             "$hash  ScreenAgent.exe" | Set-Content publish/SHA256SUMS.txt
+            $zip = Get-Item publish/tessdata.zip
+            $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+            "$zipHash  tessdata.zip" | Add-Content publish/SHA256SUMS.txt
             $models = (Get-ChildItem publish/tessdata -File | Measure-Object Length -Sum).Sum
-            @{ exeBytes=$file.Length; sha256=$hash; modelBytes=$models; commit=$env:GITHUB_SHA } | ConvertTo-Json | Tee-Object artifacts/manifest.json
+            @{ exeBytes=$file.Length; sha256=$hash; modelBytes=$models; tessdataZipBytes=$zip.Length; tessdataZipSha256=$zipHash; commit=$env:GITHUB_SHA } | ConvertTo-Json | Tee-Object artifacts/manifest.json
           }
       - uses: actions/upload-artifact@v4
         if: always()
@@ -93,6 +97,7 @@ jobs:
           path: |
             publish/ScreenAgent.exe
             publish/tessdata/
+            publish/tessdata.zip
             publish/SHA256SUMS.txt
             artifacts/
           if-no-files-found: error
