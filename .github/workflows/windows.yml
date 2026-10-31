@@ -34,9 +34,10 @@ jobs:
       - name: Unpackaged OCR selftests
         shell: pwsh
         run: |
+          . ./ci/invoke-sa.ps1
           New-Item -ItemType Directory -Force artifacts | Out-Null
           foreach ($size in @(24,36,48)) {
-            $out = & ./publish/ScreenAgent.exe --selftest-ocr "fixtures/ocr-$size.png"
+            $out = Invoke-SA --selftest-ocr "fixtures/ocr-$size.png"
             $out | Set-Content "artifacts/ocr-$size.json"
             Write-Host $out
             if ($LASTEXITCODE -ne 0) { throw "OCR failed at $size" }
@@ -48,9 +49,10 @@ jobs:
       - name: In-memory OCR and forced bundled Tesseract selftests
         shell: pwsh
         run: |
+          . ./ci/invoke-sa.ps1
           foreach ($mode in @('memory-ocr','tesseract')) {
             foreach ($size in @(24,36,48)) {
-              $out = & ./publish/ScreenAgent.exe "--selftest-$mode" "fixtures/ocr-$size.png"
+              $out = Invoke-SA "--selftest-$mode" "fixtures/ocr-$size.png"
               $out | Set-Content "artifacts/$mode-$size.json"
               Write-Host $out
               if ($LASTEXITCODE -ne 0) { throw "$mode failed at $size" }
@@ -63,12 +65,14 @@ jobs:
           }
       - name: Overlay selftest
         run: |
-          & ./publish/ScreenAgent.exe --selftest-ui | Tee-Object artifacts/overlay.json
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-ui | Tee-Object artifacts/overlay.json
           if ($LASTEXITCODE -ne 0) { throw 'Overlay selftest failed' }
       - name: Notepad injection and read-back
         shell: pwsh
         run: |
-          & ./publish/ScreenAgent.exe --selftest-inject | Tee-Object artifacts/inject.json
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-inject | Tee-Object artifacts/inject.json
           $code = $LASTEXITCODE
           if ($code -eq 2) {
             Write-Warning 'Injection selftest skipped; see inject.json for the exact runner limitation. Manual checklist remains required.'
