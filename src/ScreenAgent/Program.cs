@@ -20,7 +20,7 @@ internal static class Program
             if(args.FirstOrDefault()=="--selftest-ui")return UiTest();
             var app=new Application{ShutdownMode=ShutdownMode.OnMainWindowClose};
             var bridge=new AgentBridge();app.MainWindow=bridge;var pill=new Pill();var pause=new PauseControl(()=>manualPause=!manualPause);
-            var privacy=new PrivacyCapture(ScreenConfig.Load().Policy());List<DrawOverlay> draw=[];IntPtr underlying=IntPtr.Zero;
+            var privacy=new PrivacyCapture(ScreenConfig.Load().Policy(),()=>hook is not null&&hook.Healthy&&hook.Session&&!hook.Paused&&!manualPause);List<DrawOverlay> draw=[];IntPtr underlying=IntPtr.Zero;
             hook=new KeyboardHook();
             hook.Action+=a=>app.Dispatcher.BeginInvoke(new System.Action(()=>
             {
@@ -52,11 +52,13 @@ internal static class Program
             timer.Tick+=(_,_)=>{
                 if(manualPause && draw.Count>0){foreach(var d in draw)d.Close();draw.Clear();}
                 pill.SetMode(!hook.Healthy||!hook.Session||hook.Paused||manualPause?"Pausiert":draw.Count>0?"Zeichnen":hook.Dictating?"Diktat":"Sitzung");};timer.Start();
-            long captureAt=0;bool capturing=false;
+            long captureAt=0;bool capturing=false;IntPtr lastForeground=IntPtr.Zero;
             var captureTimer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(250)};
             captureTimer.Tick+=async (_,_)=>
             {
-                if(capturing||!hook.Healthy||!hook.Session||hook.Paused||manualPause||draw.Count>0||Environment.TickCount64-captureAt<4000)return;
+                IntPtr foreground=Native.GetForegroundWindow();
+                if(capturing||!hook.Healthy||!hook.Session||hook.Paused||manualPause||draw.Count>0||(foreground==lastForeground && Environment.TickCount64-captureAt<4000))return;
+                lastForeground=foreground;
                 capturing=true;captureAt=Environment.TickCount64;
                 try
                 {

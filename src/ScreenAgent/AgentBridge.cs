@@ -9,7 +9,22 @@ internal sealed class AgentBridge : Window
     {
         Title="Screen Agent · Desk";Width=420;Height=640;Topmost=true;ShowActivated=false;
         Left=SystemParameters.WorkArea.Right-Width;Top=SystemParameters.WorkArea.Top;Content=browser;
-        SourceInitialized+=(_,_)=>OverlayStyle.Apply(this,false);
+        SourceInitialized+=(_,_)=>
+        {
+            OverlayStyle.Apply(this,false);
+            var h=new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            System.Windows.Interop.HwndSource.FromHwnd(h)?.AddHook((IntPtr hwnd,int msg,IntPtr w,IntPtr l,ref bool handled)=>
+            {
+                if(msg==0x21) // WM_MOUSEACTIVATE: explicit user click may activate the login/editor.
+                {
+                    long ex=Native.GetWindowLongPtr(hwnd,-20).ToInt64();
+                    Native.SetWindowLongPtr(hwnd,-20,(IntPtr)(ex&~0x08000000L));
+                    handled=true;return (IntPtr)1; // MA_ACTIVATE
+                }
+                return IntPtr.Zero;
+            });
+        };
+        Deactivated+=(_,_)=>OverlayStyle.Apply(this,false);
         Loaded+=async (_,_)=>
         {
             try

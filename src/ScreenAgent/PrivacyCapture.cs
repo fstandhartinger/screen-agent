@@ -8,7 +8,8 @@ internal sealed record WindowInfo(IntPtr Handle,string Process,string Title,stri
 internal sealed class PrivacyCapture
 {
     readonly PrivacyPolicy policy;
-    public PrivacyCapture(PrivacyPolicy policy)=>this.policy=policy;
+    readonly Func<bool> stillAllowed;
+    public PrivacyCapture(PrivacyPolicy policy,Func<bool>? stillAllowed=null){this.policy=policy;this.stillAllowed=stillAllowed??(()=>true);}
     public List<WindowInfo> Snapshot(Rectangle monitor)
     {
         var list=new List<WindowInfo>();
@@ -52,7 +53,7 @@ internal sealed class PrivacyCapture
     }
     public Bitmap? Capture(Rectangle monitor,bool sessionActive,bool paused,IntPtr underlying=default)
     {
-        if(!sessionActive||paused)return null;
+        if(!sessionActive||paused||!stillAllowed())return null;
         IntPtr desktop=Native.OpenInputDesktop(0,false,0x0100); // DESKTOP_SWITCHDESKTOP access fails on secure desktop
         if(desktop==IntPtr.Zero)return null;
         try
@@ -68,6 +69,7 @@ internal sealed class PrivacyCapture
         var image=new Bitmap(monitor.Width,monitor.Height,PixelFormat.Format32bppArgb);
         try
         {
+            if(!stillAllowed()){image.Dispose();return null;}
             using(var g=Graphics.FromImage(image))
             {
                 g.CopyFromScreen(monitor.Location,Point.Empty,monitor.Size,CopyPixelOperation.SourceCopy);
@@ -76,7 +78,7 @@ internal sealed class PrivacyCapture
             }
             var after=Snapshot(System.Windows.Forms.SystemInformation.VirtualScreen);
             // Stronger than title/URL-only recheck: any visible-window identity/geometry/order change discards.
-            if(!before.SequenceEqual(after)||(underlying==IntPtr.Zero && Native.GetForegroundWindow()!=foreground))
+            if(!stillAllowed()||!before.SequenceEqual(after)||(underlying==IntPtr.Zero && Native.GetForegroundWindow()!=foreground))
             {image.Dispose();return null;}
             return image;
         }

@@ -1,0 +1,1 @@
+Windows CI is the only build host. `fixtures.ps1` creates synthetic OCR PNGs there; no user screen content or dictionary seed is committed. Workflow output contains fixture OCR and the synthetic Notepad phrase only.
