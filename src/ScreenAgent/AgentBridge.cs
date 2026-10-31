@@ -8,6 +8,8 @@ internal sealed class AgentBridge : Window
     readonly DeviceClient client;
     readonly Uri origin;
     TaskCompletionSource<bool>? muteAck;
+    bool requestedMute;
+    public bool AllowClose {get;set;}
     public string? SessionId {get;private set;}
     public event System.Action? SessionChanged;
     bool Trusted(string url)=>Uri.TryCreate(url,UriKind.Absolute,out var u)&&u.GetLeftPart(UriPartial.Authority)==origin.GetLeftPart(UriPartial.Authority);
@@ -49,12 +51,12 @@ internal sealed class AgentBridge : Window
                         switch(m.GetProperty("type").GetString())
                         {
                             case "device-token":
-                                client.Pair(new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,m.GetProperty("expiresAt").GetDateTimeOffset()));
+                                client.Pair(new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,(m.GetProperty("expiresAt").ValueKind==System.Text.Json.JsonValueKind.Number?DateTimeOffset.FromUnixTimeMilliseconds(m.GetProperty("expiresAt").GetInt64()):m.GetProperty("expiresAt").GetDateTimeOffset())));
                                 browser.Source=new Uri(origin,"/?companion=1");break;
                             case "session":
                                 SessionId=m.TryGetProperty("sid",out var sid)&&sid.ValueKind==System.Text.Json.JsonValueKind.String?sid.GetString():null;
                                 SessionChanged?.Invoke();break;
-                            case "mute-ack":muteAck?.TrySetResult(true);break;
+                            case "mute-ack":if(!m.TryGetProperty("on",out var on)||on.GetBoolean()==requestedMute)muteAck?.TrySetResult(true);break;
                         }
                     }
                     catch{ /* Invalid page message never changes device credentials. */ }
@@ -75,7 +77,7 @@ internal sealed class AgentBridge : Window
     {
         if(SessionId is null)return true;
         if(browser.CoreWebView2 is null)return false;
-        var ack=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);muteAck=ack;
+        var ack=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);muteAck=ack;requestedMute=on;
         browser.CoreWebView2.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="mute",on}));
         try{return await Task.WhenAny(ack.Task,Task.Delay(500))==ack.Task&&await ack.Task;}
         finally{if(muteAck==ack)muteAck=null;}

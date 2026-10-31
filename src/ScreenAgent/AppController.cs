@@ -21,7 +21,7 @@ internal sealed class AppController : IDisposable
     IntPtr lastForeground,underlying;
     ulong? lastHash;
     string[] ids=[],terms=[];
-    TextInjector.Target? target;
+    TextInjector.Target? target,audioTarget;
     string before="",process="";
     DictationCapture? audio;
     string? audioSession;
@@ -32,6 +32,11 @@ internal sealed class AppController : IDisposable
         this.config=config;this.client=client;this.bridge=bridge;this.hook=hook;this.pill=pill;
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy());
         bridge.SessionChanged+=Reset;
+        hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
+        {
+            if(audio!=null)return;
+            try{target=Native.GetForegroundWindow()==window?TextInjector.Bind():null;if(target!=null&&!TextInjector.Safe(target,config.Policy()))target=null;}catch{target=null;}
+        }));
         hook.Action+=a=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Action(a)));
         timer=new(){Interval=TimeSpan.FromMilliseconds(100)};timer.Tick+=async (_,_)=>
         {
@@ -48,7 +53,7 @@ internal sealed class AppController : IDisposable
         menu.Items.Add("Pause",null,(_,_)=>Pause());
         menu.Items.Add("Desk anzeigen",null,(_,_)=>bridge.Show());
         menu.Items.Add("Gerät trennen",null,(_,_)=>{Pause(true);bridge.Disconnect();});
-        menu.Items.Add("Beenden",null,(_,_)=>System.Windows.Application.Current.Shutdown());
+        menu.Items.Add("Beenden",null,(_,_)=>{bridge.AllowClose=true;System.Windows.Application.Current.Shutdown();});
         tray=new(){Icon=SystemIcons.Application,Text="Screen Agent",Visible=true,ContextMenuStrip=menu};tray.DoubleClick+=(_,_)=>bridge.Show();
     }
     bool Active=>!disposed&&client.Paired&&bridge.SessionId is not null&&hook.Healthy&&hook.Session&&!hook.Paused&&!paused;
@@ -62,11 +67,6 @@ internal sealed class AppController : IDisposable
     }
     void Action(ActionKind action)
     {
-        if(action==ActionKind.DictationBind)
-        {
-            try{target=TextInjector.Bind();if(!TextInjector.Safe(target,config.Policy()))target=null;}catch{target=null;}
-            return;
-        }
         if(action is ActionKind.DictationStart or ActionKind.DictationStop or ActionKind.DictationDiscard){QueueAudio(action);return;}
         if(action is ActionKind.SessionToggle or ActionKind.PauseToggle){Reset();return;}
         if(action==ActionKind.DrawStart&&Active&&drawings.Count==0)
@@ -93,16 +93,16 @@ internal sealed class AppController : IDisposable
             if(action==ActionKind.DictationStart)
             {
                 if(audio!=null||target is null||paused||hook.Paused||!client.Paired||!TextInjector.Safe(target,config.Policy()))return;
-                audioSession=bridge.SessionId;
+                audioTarget=target;audioSession=bridge.SessionId;
                 if(!await bridge.Mute(true)){await bridge.Mute(false);Notice("Diktat · Mikrofon nicht bestätigt");return;}
-                if(paused||hook.Paused||target is null||!TextInjector.Safe(target,config.Policy())||audioSession!=bridge.SessionId){await bridge.Mute(false);return;}
-                process=TextInjector.ProcessName(target.Window);
-                before=TextInjector.Terminal(target.Window)?"":TextInjector.Read(target.Element)??"";
+                if(paused||hook.Paused||audioTarget is null||!TextInjector.Safe(audioTarget,config.Policy())||audioSession!=bridge.SessionId){await bridge.Mute(false);return;}
+                process=TextInjector.ProcessName(audioTarget.Window);
+                before=TextInjector.Terminal(audioTarget.Window)?"":TextInjector.Read(audioTarget.Element)??"";
                 audio=new();Notice("Diktat");return;
             }
             if(audio is null)return;
             var recording=audio;audio=null;
-            var bound=target;string prior=before,proc=process;var ct=epoch.Token;
+            var bound=audioTarget;string prior=before,proc=process;var ct=epoch.Token;
             try
             {
                 byte[] wav=await recording.Finish();

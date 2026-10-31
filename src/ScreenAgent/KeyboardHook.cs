@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace ScreenAgent;
 internal sealed class KeyboardHook : IDisposable
 {
-    readonly ConcurrentQueue<KeyEvent> queue=new();
+    readonly ConcurrentQueue<(KeyEvent Event,IntPtr Window)> queue=new();
     readonly CancellationTokenSource stop=new();
     readonly Task consumer;
     readonly Hotkeys state=new();
@@ -15,6 +15,7 @@ internal sealed class KeyboardHook : IDisposable
     bool capsOwned;
     readonly System.Threading.Timer watchdog;
     public event System.Action<ActionKind>? Action;
+    public event System.Action<IntPtr>? BindTarget;
     public bool Healthy=>healthy;
     public bool Session=>state.Session;
     public bool Paused=>state.Paused;
@@ -57,7 +58,7 @@ internal sealed class KeyboardHook : IDisposable
         // Bounded native-only mask before Win can be released; no UI/OCR/network in this callback.
         if(down && ctrl && win && (key is Core.Key.Ctrl or Core.Key.Win))
             Native.SendInput(2,new[]{Native.Key(0xe8),Native.Key(0xe8,true)},Marshal.SizeOf<Native.Input>());
-        queue.Enqueue(new(key,down,Environment.TickCount64));
+        queue.Enqueue((new(key,down,Environment.TickCount64),Native.GetForegroundWindow()));
         if(key==Core.Key.Caps)
         {
             if(down)capsOwned=swallowCaps;
@@ -70,16 +71,17 @@ internal sealed class KeyboardHook : IDisposable
     // Dedicated lightweight consumer: UIA/OCR never delay hotkey state processing.
     void Drain()
     {
-        while(queue.TryDequeue(out var e))Apply(state.Feed(e));
+        while(queue.TryDequeue(out var e))Apply(state.Feed(e.Event),e.Window);
         Apply(state.Tick(Environment.TickCount64));swallowCaps=state.SwallowCaps;
     }
-    void Apply(IReadOnlyList<ActionKind> actions)
+    void Apply(IReadOnlyList<ActionKind> actions,IntPtr window=default)
     {
         foreach(var a in actions)
         {
             if(a==ActionKind.CapsTap){baseline=!baseline;Native.Tap(0x14);}
             if(a==ActionKind.SessionToggle){if(state.Session)baseline=Native.Caps;else Native.RestoreCaps(baseline);}
-            Action?.Invoke(a);
+            if(a==ActionKind.DictationBind)BindTarget?.Invoke(window);
+            else Action?.Invoke(a);
         }
         swallowCaps=state.SwallowCaps;
     }

@@ -24,6 +24,7 @@ internal static class Program
             hook=new KeyboardHook();using var controller=new AppController(config,client,bridge,hook,pill);
             var pause=new PauseControl(()=>controller.Pause());
             app.DispatcherUnhandledException+=(_,e)=>{hook.Dispose();e.Handled=false;};
+            bridge.Closing+=(_,e)=>{if(!bridge.AllowClose){e.Cancel=true;bridge.Hide();}};
             bridge.StateChanged+=(_,_)=>{if(bridge.WindowState==WindowState.Minimized){bridge.Hide();bridge.WindowState=WindowState.Normal;}};
             app.Exit+=(_,_)=>{hook.Dispose();pill.Close();pause.Close();};
             pill.Show();pause.Show();app.Run(bridge);return 0;
