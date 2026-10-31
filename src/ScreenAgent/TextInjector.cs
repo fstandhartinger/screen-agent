@@ -14,7 +14,7 @@ internal static class TextInjector
         return null;
     }
     public static string Sanitize(string text)=>new(text.Select(c=>c is '\r' or '\n' or '\t'?' ':c).Where(c=>!char.IsControl(c)).ToArray());
-    static bool Elevated(IntPtr hwnd)
+    internal static bool Elevated(IntPtr hwnd)
     {
         Native.GetWindowThreadProcessId(hwnd,out uint pid);
         // An unreadable token fails closed; do not attempt UIPI workarounds.

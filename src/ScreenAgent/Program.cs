@@ -112,13 +112,20 @@ internal static class Program
                 string? initial=TextInjector.Read(edit);
                 if(initial is null)throw new InvalidOperationException("Notepad has no read-back pattern");
                 if(initial.Length!=0)throw new InvalidOperationException("Refusing non-empty Notepad target");
+                if(TextInjector.Elevated(hwnd))
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status="skipped",reason="Runner Notepad is elevated or its process token is unreadable; insertion safety refuses this target. Manual test with a non-elevated interactive editor required."}));exit=2;return;
+                }
                 var target=new TextInjector.Target(hwnd,edit);
+                bool foreground=Native.GetForegroundWindow()==hwnd;
+                bool focused=Automation.Compare(edit,AutomationElement.FocusedElement);
+                bool modifiersUp=Native.ModifiersUp;
                 bool pasted=await TextInjector.Inject(target,"Jev und JevBench",true,new PrivacyPolicy());
                 string? paste=TextInjector.Read(edit);
                 bool unicode=await TextInjector.Inject(target," Jev und JevBench",false,new PrivacyPolicy());
                 await Task.Delay(400);string? result=TextInjector.Read(edit);
                 bool pass=pasted&&unicode&&paste=="Jev und JevBench"&&result=="Jev und JevBench Jev und JevBench";
-                Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status=pass?"passed":"failed",clipboard=paste,unicode=result}));exit=pass?0:1;
+                Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status=pass?"passed":"failed",clipboard=paste,unicode=result,pasted,unicodeSent=unicode,foreground,focused,modifiersUp}));exit=pass?0:1;
             }
             catch(Exception ex){Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status="failed",error=ex.Message}));exit=1;}
             finally
