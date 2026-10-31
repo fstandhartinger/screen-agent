@@ -41,9 +41,9 @@ public sealed class HotkeyBindings
     public bool PhysicalWin=>held.Any(k=>k is 0x5b or 0x5c);
     public bool Feed(int vk,bool down,out Key key)
     {
-        key=Role(vk);bool was=held.Any(k=>Role(k)==key);
+        key=Role(vk);var role=key;bool was=held.Any(k=>Role(k)==role);
         if(down)held.Add(vk);else held.Remove(vk);
         if(key is not (Key.Ctrl or Key.Win or Key.Shift))return true;
-        return was!=held.Any(k=>Role(k)==key); // left+right copies remain logically held
+        return was!=held.Any(k=>Role(k)==role); // left+right copies remain logically held
     }
 }
