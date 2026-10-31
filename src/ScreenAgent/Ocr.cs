@@ -47,7 +47,21 @@ internal static class Ocr
     {
         NativeOcrLibraries.Ensure();
         using var tess=new Tesseract.TesseractEngine(Path.Combine(AppContext.BaseDirectory,"tessdata"),"eng+deu",Tesseract.EngineMode.LstmOnly);
-        using var pix=Tesseract.Pix.LoadFromMemory(png);using var page=tess.Process(pix);
-        string text=page.GetText();return new("tesseract",text,ArtifactMatcher.Find(text),null);
+        string text;
+        using(var pix=Tesseract.Pix.LoadFromMemory(png))
+        using(var page=tess.Process(pix,Tesseract.PageSegMode.Auto))text=page.GetText();
+        // Small antialiased screen fonts can merge adjacent f glyphs. A second,
+        // independently rasterized pass improves recall without relaxing ID syntax.
+        using var input=new MemoryStream(png);using var source=new System.Drawing.Bitmap(input);
+        using var scaled=new System.Drawing.Bitmap(source.Width*2,source.Height*2);
+        using(var graphics=System.Drawing.Graphics.FromImage(scaled))
+        {
+            graphics.InterpolationMode=System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            graphics.DrawImage(source,0,0,scaled.Width,scaled.Height);
+        }
+        using var bytes=new MemoryStream();scaled.Save(bytes,System.Drawing.Imaging.ImageFormat.Png);
+        using(var pix=Tesseract.Pix.LoadFromMemory(bytes.ToArray()))
+        using(var page=tess.Process(pix,Tesseract.PageSegMode.SparseText))text+="\n"+page.GetText();
+        return new("tesseract",text,ArtifactMatcher.Find(text),null);
     }
 }
