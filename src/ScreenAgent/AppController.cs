@@ -88,7 +88,7 @@ internal sealed class AppController : IDisposable
     }
     async Task RunAudioAfter(Task previous,ActionKind action)
     {
-        await previous;
+        try{await previous;}catch{ /* A failed lifecycle must not poison future key events. */ }
         try
         {
             if(action==ActionKind.DictationStart)
@@ -137,7 +137,9 @@ internal sealed class AppController : IDisposable
             }
             ulong hash=PerceptualHash(frame);if(lastHash==hash&&hashForeground==fg)return;
             var window=privacy.Snapshot(monitor).FirstOrDefault(w=>w.Handle==fg);if(window is null||window.Blocked)return;
-            byte[] png=PrivacyCapture.Png(frame);var ocr=await Task.Run(()=>Ocr.ReadMemory(png),ct);
+            double ocrScale=Math.Min(1,2560.0/Math.Max(frame.Width,frame.Height));
+            using var ocrFrame=new Bitmap(frame,new Size(Math.Max(1,(int)(frame.Width*ocrScale)),Math.Max(1,(int)(frame.Height*ocrScale))));
+            byte[] png=PrivacyCapture.Png(ocrFrame);var ocr=await Task.Run(()=>Ocr.ReadMemory(png),ct);
             var confirmed=await client.Exists(ocr.Ids,ct);
             if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg)return;
             await client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen",DevicePayloads.Screen(confirmed,window.Process,++version),ct);

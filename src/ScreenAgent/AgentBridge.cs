@@ -78,8 +78,12 @@ internal sealed class AgentBridge : Window
         if(SessionId is null)return true;
         if(browser.CoreWebView2 is null)return false;
         var ack=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);muteAck=ack;requestedMute=on;
-        browser.CoreWebView2.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="mute",on}));
-        try{return await Task.WhenAny(ack.Task,Task.Delay(500))==ack.Task&&await ack.Task;}
+        try
+        {
+            browser.CoreWebView2.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="mute",on}));
+            return await Task.WhenAny(ack.Task,Task.Delay(500))==ack.Task&&await ack.Task;
+        }
+        catch{return false;}
         finally{if(muteAck==ack)muteAck=null;}
     }
     public void Screen(string[] ids)=>browser.CoreWebView2?.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="screen",ids}));
