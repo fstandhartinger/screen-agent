@@ -1,0 +1,80 @@
+name: Windows spike
+on:
+  push:
+    branches: [spike]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build
+        run: dotnet build src/ScreenAgent/ScreenAgent.csproj -c Release
+      - name: Shared vectors, hotkey and privacy tests
+        run: dotnet test tests/ScreenAgent.Tests/ScreenAgent.Tests.csproj -c Release --logger "trx;LogFileName=core.trx" --results-directory artifacts
+      - name: Publish unpackaged single exe
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
+      - name: Local OCR fallback language models
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force publish/tessdata | Out-Null
+          foreach ($lang in @('eng','deu')) {
+            Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/$lang.traineddata" -OutFile "publish/tessdata/$lang.traineddata"
+          }
+          # Tesseract's native loader needs real paths for its unmanaged dependencies.
+          Get-ChildItem publish -Recurse | Select-Object FullName,Length
+      - name: Generate OCR fixtures
+        run: ./scripts/fixtures.ps1
+      - name: Unpackaged OCR selftests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          foreach ($size in @(24,36,48)) {
+            $out = & ./publish/ScreenAgent.exe --selftest-ocr "fixtures/ocr-$size.png"
+            $out | Set-Content "artifacts/ocr-$size.json"
+            Write-Host $out
+            if ($LASTEXITCODE -ne 0) { throw "OCR failed at $size" }
+            $json = $out | ConvertFrom-Json
+            foreach ($id in @('a#332179','a#b8c3ff')) {
+              if ($json.Ids -notcontains $id) { throw "Missing $id at font size $size" }
+            }
+          }
+      - name: Overlay selftest
+        run: |
+          & ./publish/ScreenAgent.exe --selftest-ui | Tee-Object artifacts/overlay.json
+          if ($LASTEXITCODE -ne 0) { throw 'Overlay selftest failed' }
+      - name: Notepad injection and read-back
+        shell: pwsh
+        run: |
+          & ./publish/ScreenAgent.exe --selftest-inject | Tee-Object artifacts/inject.json
+          $code = $LASTEXITCODE
+          if ($code -eq 2) { Write-Warning 'Interactive desktop unavailable: manual injection checklist remains required' }
+          elseif ($code -ne 0) { throw 'Injection selftest failed' }
+      - name: Measure and hash deliverables
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path publish/ScreenAgent.exe) {
+            $file = Get-Item publish/ScreenAgent.exe
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            "$hash  ScreenAgent.exe" | Set-Content publish/SHA256SUMS.txt
+            $models = (Get-ChildItem publish/tessdata -File | Measure-Object Length -Sum).Sum
+            @{ exeBytes=$file.Length; sha256=$hash; modelBytes=$models; commit=$env:GITHUB_SHA } | ConvertTo-Json | Tee-Object artifacts/manifest.json
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ScreenAgent-win-x64-spike
+          path: |
+            publish/ScreenAgent.exe
+            publish/tessdata/
+            publish/SHA256SUMS.txt
+            artifacts/
+          if-no-files-found: error
+          retention-days: 14
