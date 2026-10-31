@@ -37,15 +37,7 @@ internal static class TextInjector
     {
         text=Sanitize(text);
         for(int i=0;i<100&&!Native.ModifiersUp;i++)await Task.Delay(10);
-        bool safe=Native.ModifiersUp && Native.GetForegroundWindow()==target.Window && !Elevated(target.Window);
-        try
-        {
-            safe &= Automation.Compare(target.Element,AutomationElement.FocusedElement) && !target.Element.Current.IsPassword;
-            var monitor=System.Windows.Forms.Screen.FromHandle(target.Window).Bounds;
-            var info=new PrivacyCapture(policy).Snapshot(monitor).FirstOrDefault(w=>w.Handle==target.Window);
-            safe &= info is not null && !info.Blocked;
-        }
-        catch{safe=false;}
+        bool safe=Native.ModifiersUp && Safe(target,policy);
         if(!safe){SetTemporary(text);return false;} // explicit local clipboard fallback; caller shows a notice
         if(clipboard)
         {
@@ -63,6 +55,25 @@ internal static class TextInjector
             foreach(char c in text)Native.Send(Native.Key(0,false,c,true),Native.Key(0,true,c,true));
         }
         return true;
+    }
+    public static bool Terminal(IntPtr window)
+    {
+        Native.GetWindowThreadProcessId(window,out uint pid);
+        try{using var p=Process.GetProcessById((int)pid);return p.ProcessName is "WindowsTerminal" or "conhost" or "OpenConsole" or "cmd" or "powershell" or "pwsh";}catch{return true;}
+    }
+    public static string ProcessName(IntPtr window)
+    {
+        Native.GetWindowThreadProcessId(window,out uint pid);using var p=Process.GetProcessById((int)pid);return p.ProcessName;
+    }
+    public static bool Safe(Target target,PrivacyPolicy policy)
+    {
+        try
+        {
+            if(Native.GetForegroundWindow()!=target.Window||Elevated(target.Window)||!Automation.Compare(target.Element,AutomationElement.FocusedElement)||target.Element.Current.IsPassword)return false;
+            var info=new PrivacyCapture(policy).Snapshot(System.Windows.Forms.SystemInformation.VirtualScreen).FirstOrDefault(w=>w.Handle==target.Window);
+            return info is not null&&!info.Blocked&&!PrivacyPolicy.TransientHost(info.Process,info.Title);
+        }
+        catch{return false;}
     }
     static void SetTemporary(string text)
     {

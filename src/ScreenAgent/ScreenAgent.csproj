@@ -8,6 +8,8 @@
 </PropertyGroup>
 <ItemGroup><ProjectReference Include="../ScreenAgent.Core/ScreenAgent.Core.csproj"/>
 <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40"/>
+<PackageReference Include="NAudio" Version="2.2.1"/>
+<PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0"/>
 <PackageReference Include="Tesseract" Version="5.2.0" GeneratePathProperty="true"/>
 </ItemGroup>
 <Target Name="EmbedTesseractNative" BeforeTargets="PrepareForBuild">

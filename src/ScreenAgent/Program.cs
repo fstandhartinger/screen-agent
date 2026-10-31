@@ -18,69 +18,19 @@ internal static class Program
             }
             if(args.FirstOrDefault()=="--selftest-inject")return InjectTest();
             if(args.FirstOrDefault()=="--selftest-ui")return UiTest();
-            var app=new Application{ShutdownMode=ShutdownMode.OnMainWindowClose};
-            var bridge=new AgentBridge();app.MainWindow=bridge;var pill=new Pill();var pause=new PauseControl(()=>manualPause=!manualPause);
-            var privacy=new PrivacyCapture(ScreenConfig.Load().Policy(),()=>hook is not null&&hook.Healthy&&hook.Session&&!hook.Paused&&!manualPause);List<DrawOverlay> draw=[];IntPtr underlying=IntPtr.Zero;
-            hook=new KeyboardHook();
-            hook.Action+=a=>app.Dispatcher.BeginInvoke(new System.Action(()=>
-            {
-                if(a==ActionKind.SessionToggle && hook.Session)manualPause=false;
-                if(a==ActionKind.DictationStart)bridge.Dictating(true);
-                if(a is ActionKind.DictationStop or ActionKind.DictationDiscard)bridge.Dictating(false);
-                if(a==ActionKind.DrawStart && !manualPause)
-                {
-                    underlying=Native.GetForegroundWindow();
-                    foreach(var s in System.Windows.Forms.Screen.AllScreens)
-                    {
-                        using var probe=privacy.Capture(s.Bounds,hook.Session,hook.Paused||manualPause,underlying);
-                        if(probe is null)continue;
-                        var overlay=new DrawOverlay(s);draw.Add(overlay);overlay.Show();
-                    }
-                }
-                if(a==ActionKind.DrawStop || (a==ActionKind.SessionToggle&&!hook.Session) || a==ActionKind.PauseToggle)
-                {
-                    foreach(var d in draw)
-                    {
-                        using var clean=privacy.Capture(d.Monitor,hook.Session,hook.Paused||manualPause,underlying);
-                        if(clean!=null && d.Strokes.Any(s=>s.Count>0)){d.Composite(clean);lastHighlightBytes=PrivacyCapture.Png(clean).Length;} // discard pixels after spike proof; no upload
-                        d.Close();
-                    }
-                    draw.Clear();
-                }
-            }));
-            var timer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(10)};
-            timer.Tick+=(_,_)=>{
-                if(manualPause && draw.Count>0){foreach(var d in draw)d.Close();draw.Clear();}
-                pill.SetMode(!hook.Healthy||!hook.Session||hook.Paused||manualPause?"Pausiert":draw.Count>0?"Zeichnen":hook.Dictating?"Diktat":"Sitzung");};timer.Start();
-            long captureAt=0;bool capturing=false;IntPtr lastForeground=IntPtr.Zero;
-            var captureTimer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(250)};
-            captureTimer.Tick+=async (_,_)=>
-            {
-                IntPtr foreground=Native.GetForegroundWindow();
-                if(capturing||!hook.Healthy||!hook.Session||hook.Paused||manualPause||draw.Count>0||(foreground==lastForeground && Environment.TickCount64-captureAt<4000))return;
-                lastForeground=foreground;
-                capturing=true;captureAt=Environment.TickCount64;
-                try
-                {
-                    var screen=System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position);
-                    using var frame=privacy.Capture(screen.Bounds,hook.Session,hook.Paused||manualPause);
-                    if(frame==null){pill.SetMode("Pausiert · privat");return;}
-                    byte[] png=PrivacyCapture.Png(frame);var ocr=await Task.Run(()=>Ocr.ReadMemory(png));
-                    // Candidates remain local. Device pairing + /exists confirmation are deliberately absent in spike.
-                    if(hook.Session&&!hook.Paused&&!manualPause)pill.SetMode($"Sitzung · {ocr.Ids.Length} Kandidaten");
-                }
-                catch{pill.SetMode("Pausiert · OCR Fehler");manualPause=true;}
-                finally{capturing=false;}
-            };captureTimer.Start();
+            var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};
+            var config=ScreenConfig.Load();using var client=new DeviceClient(config);
+            var bridge=new AgentBridge(config,client);app.MainWindow=bridge;var pill=new Pill();
+            hook=new KeyboardHook();using var controller=new AppController(config,client,bridge,hook,pill);
+            var pause=new PauseControl(()=>controller.Pause());
             app.DispatcherUnhandledException+=(_,e)=>{hook.Dispose();e.Handled=false;};
-            bridge.Closed+=(_,_)=>{timer.Stop();captureTimer.Stop();hook.Dispose();foreach(var d in draw)d.Close();pill.Close();pause.Close();};
+            bridge.StateChanged+=(_,_)=>{if(bridge.WindowState==WindowState.Minimized){bridge.Hide();bridge.WindowState=WindowState.Normal;}};
+            app.Exit+=(_,_)=>{hook.Dispose();pill.Close();pause.Close();};
             pill.Show();pause.Show();app.Run(bridge);return 0;
         }
         catch(Exception ex){Console.WriteLine(JsonSerializer.Serialize(new{error=ex.ToString()}));return 1;}
         finally{hook?.Dispose();}
     }
-    static bool manualPause;
-    static int lastHighlightBytes;
     static int UiTest()
     {
         var app=new Application();var pill=new Pill();pill.Show();var h=new System.Windows.Interop.WindowInteropHelper(pill).Handle;

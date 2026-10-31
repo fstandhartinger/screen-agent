@@ -49,6 +49,9 @@ internal sealed class DrawOverlay : Window
     readonly double sx,sy;
     public IReadOnlyList<List<System.Drawing.PointF>> Strokes=>strokes;
     public Rectangle Monitor=>monitor;
+    public long LastStrokeAt {get;private set;}
+    public bool InStroke=>current!=null;
+    public void Fade(){IsHitTestVisible=false;BeginAnimation(OpacityProperty,new System.Windows.Media.Animation.DoubleAnimation(1,0,TimeSpan.FromMilliseconds(1500)));}
     public DrawOverlay(System.Windows.Forms.Screen screen)
     {
         monitor=screen.Bounds;
@@ -67,7 +70,7 @@ internal sealed class DrawOverlay : Window
             current=new(){Stroke=Brushes.Magenta,StrokeThickness=5/sx,StrokeLineJoin=PenLineJoin.Round};canvas.Children.Add(current);strokes.Add([]);canvas.CaptureMouse();Add(e.GetPosition(canvas));
         };
         canvas.MouseMove+=(_,e)=>{if(current!=null&&e.LeftButton==MouseButtonState.Pressed)Add(e.GetPosition(canvas));};
-        canvas.MouseLeftButtonUp+=(_,_)=>{current=null;canvas.ReleaseMouseCapture();};
+        canvas.MouseLeftButtonUp+=(_,_)=>{current=null;LastStrokeAt=Environment.TickCount64;canvas.ReleaseMouseCapture();};
     }
     void Add(System.Windows.Point p){current!.Points.Add(p);strokes[^1].Add(new((float)(p.X*sx),(float)(p.Y*sy)));}
     public void Composite(Bitmap clean)
