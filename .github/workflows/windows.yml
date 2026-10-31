@@ -45,6 +45,22 @@ jobs:
               if ($json.Ids -notcontains $id) { throw "Missing $id at font size $size" }
             }
           }
+      - name: In-memory OCR and forced bundled Tesseract selftests
+        shell: pwsh
+        run: |
+          foreach ($mode in @('memory-ocr','tesseract')) {
+            foreach ($size in @(24,36,48)) {
+              $out = & ./publish/ScreenAgent.exe "--selftest-$mode" "fixtures/ocr-$size.png"
+              $out | Set-Content "artifacts/$mode-$size.json"
+              Write-Host $out
+              if ($LASTEXITCODE -ne 0) { throw "$mode failed at $size" }
+              $json = $out | ConvertFrom-Json
+              foreach ($id in @('a#332179','a#b8c3ff')) {
+                if ($json.Ids -notcontains $id) { throw "Missing $id for $mode at font size $size" }
+              }
+              if ($mode -eq 'tesseract' -and $json.Engine -ne 'tesseract') { throw 'Tesseract fallback was not exercised' }
+            }
+          }
       - name: Overlay selftest
         run: |
           & ./publish/ScreenAgent.exe --selftest-ui | Tee-Object artifacts/overlay.json

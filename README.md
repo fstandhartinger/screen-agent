@@ -32,11 +32,11 @@ Defaults cover common German banks, neobanks, brokers, exchanges, password manag
 
 `%APPDATA%\ScreenAgent\config.json` is created on first run. Fields: `DeskUrl` (HTTPS origin), `IntervalMs` (1000–60000), `BlockProcesses`, `BlockDomains`, `BlockTitlePatterns`, `VoiceProvider`, `Hotkeys`, `RetainScreenshots` (false), `UserEmail` (optional local only). Defaults cannot be removed. Invalid configuration stops startup. The dictation chord can use any two distinct Ctrl/Alt/Win modifiers; session adds Shift, hands-free adds one action key, and pause adds Shift plus one action key. Draw, pause and hands-free action keys must differ and may be Caps, Space, A–Z or F1–F12. Invalid maps fail closed. `VoiceProvider` is passed to the companion page as its voice preference. Screenshot retention is disabled even if requested in config; the preview never writes captures to disk. UserEmail never enters API payloads.
 
-Live OCR uses bundled Tesseract eng+deu; file selftests prefer unpackaged Windows.Media.Ocr and fall back to Tesseract. Native OCR DLLs are embedded, extracted with SHA256 verification into local AppData, and loaded through an explicit search path. Tesseract 5.2.0 and pinned tessdata_fast 4.1.0 are Apache-2.0; NAudio 2.2.1 is MIT; WebView2 1.0.2903.40 uses Microsoft's license.
+Live and file OCR prefer Windows.Media.Ocr and fall back to bundled Tesseract eng+deu. The memory path never writes a temporary screenshot. Native OCR DLLs are embedded, extracted with SHA256 verification into local AppData, and loaded through an explicit search path. Tesseract 5.2.0 and pinned tessdata_fast 4.1.0 are Apache-2.0; NAudio 2.2.1 is MIT; WebView2 1.0.2903.40 uses Microsoft's license.
 
 ## Verification and manual checklist
 
-Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, and runs overlay/insertion selftests. `--selftest-ui` proves that the pill accepts the capture-affinity API, not pixel-level exclusion. `--selftest-inject` skips with documented exit 2 if the hosted runner cannot supply an interactive non-elevated editor. A skip does not prove insertion. Exact output and manifest accompany every CI artifact.
+Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. `--selftest-ui` proves that the pill accepts the capture-affinity API, not pixel-level exclusion. `--selftest-inject` skips with documented exit 2 if the hosted runner cannot supply an interactive non-elevated editor. A skip does not prove insertion. Exact output and manifest accompany every CI artifact.
 
 Before daily use, manually check on Windows:
 
@@ -47,6 +47,6 @@ Before daily use, manually check on Windows:
 - Recognize IDs at https://bittensor-earnings.lovable.app/reax and confirm they appear in the current Desk session. OCR text must stay local.
 - Test privacy blocklist foreground and background masking, browser address changes/unreadable address bars, lock/UAC/Alt-Tab/toasts, and pause/session changes during OCR or upload.
 - Correct the same term in two independent readable editor insertions; verify one learned entry. Check ambiguous spans, terminals, digits/email-like corrections and focus changes never learn.
-- Validate Tesseract fallback and the live memory OCR path; successful WinRT fixtures alone do not establish them. Force-kill/power-loss cannot run Caps/mic cleanup handlers.
+- Validate OCR on the actual screen with local language availability and the optional model folder removed/present. CI exercises synthetic file/memory WinRT and forced Tesseract paths. Force-kill/power-loss cannot run Caps/mic cleanup handlers.
 
 No manual gate is claimed passed by a green workflow. This is an unsigned review prerelease.

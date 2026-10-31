@@ -27,8 +27,23 @@ internal static class Ocr
         string fallback=page.GetText();
         return new("tesseract",fallback,ArtifactMatcher.Find(fallback),failure);
     }
-    // In-memory capture path: Windows bitmap -> PNG memory -> Tesseract, never a disk frame.
-    public static OcrOutput ReadMemory(byte[] png)
+    // WinRT consumes the masked PNG in memory; no temporary screenshot file.
+    public static async Task<OcrOutput> ReadMemory(byte[] png)
+    {
+        string? failure=null;
+        try
+        {
+            using var stream=new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            using(var writer=new Windows.Storage.Streams.DataWriter(stream)){writer.WriteBytes(png);await writer.StoreAsync();writer.DetachStream();}
+            stream.Seek(0);var decoder=await BitmapDecoder.CreateAsync(stream);
+            using var bitmap=await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8,BitmapAlphaMode.Premultiplied);
+            var engine=OcrEngine.TryCreateFromLanguage(new Language("en-US"))??OcrEngine.TryCreateFromUserProfileLanguages()??throw new InvalidOperationException("No WinRT OCR language installed");
+            string text=(await engine.RecognizeAsync(bitmap)).Text;return new("winrt",text,ArtifactMatcher.Find(text),null);
+        }
+        catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8}";}
+        return ReadTesseractMemory(png) with{WinRtFailure=failure};
+    }
+    public static OcrOutput ReadTesseractMemory(byte[] png)
     {
         NativeOcrLibraries.Ensure();
         using var tess=new Tesseract.TesseractEngine(Path.Combine(AppContext.BaseDirectory,"tessdata"),"eng+deu",Tesseract.EngineMode.LstmOnly);

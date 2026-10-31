@@ -16,8 +16,16 @@ internal static class Program
             {
                 var output=Ocr.Read(args[1]).GetAwaiter().GetResult();Console.WriteLine(JsonSerializer.Serialize(output));return output.Ids.Length>0?0:1;
             }
+            if(args.FirstOrDefault() is "--selftest-memory-ocr" or "--selftest-tesseract")
+            {
+                byte[] png=File.ReadAllBytes(args[1]);
+                var output=args[0]=="--selftest-tesseract"?Ocr.ReadTesseractMemory(png):Ocr.ReadMemory(png).GetAwaiter().GetResult();
+                Console.WriteLine(JsonSerializer.Serialize(output));return output.Ids.Length>0?0:1;
+            }
             if(args.FirstOrDefault()=="--selftest-inject")return InjectTest();
             if(args.FirstOrDefault()=="--selftest-ui")return UiTest();
+            using var instance=new Mutex(true,"Local\\ScreenAgent-"+System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value,out bool first);
+            if(!first)return 0;
             var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};
             var config=ScreenConfig.Load();using var client=new DeviceClient(config);
             var bridge=new AgentBridge(config,client);app.MainWindow=bridge;var pill=new Pill();
