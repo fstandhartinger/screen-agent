@@ -9,6 +9,8 @@ public sealed class Hotkeys
     bool cleanChord, dirtyChord, dictating, drawing, capsOwned;
     public bool Session { get; private set; }
     public bool Paused { get; private set; }
+    public bool Dictating => dictating;
+    public bool Drawing => drawing;
     public bool SwallowCaps => capsOwned || Session;
     public bool Masking => down.Contains(Key.Win) && down.Contains(Key.Ctrl);
     public IReadOnlyList<ActionKind> Tick(long ms)
@@ -28,7 +30,7 @@ public sealed class Hotkeys
         if (!e.Down) down.Remove(e.Key);
         bool ctrlWin = down.Contains(Key.Ctrl) && down.Contains(Key.Win);
         bool three = ctrlWin && down.Contains(Key.Shift);
-        if(e.Down && (e.Key is Key.Other or Key.P or Key.Space)) dirtyChord = true;
+        if(e.Down && (e.Key is Key.Other or Key.P or Key.Space or Key.Caps)) dirtyChord = true;
         if (e.Down && e.Key == Key.P && three)
         {
             Paused = !Paused; cleanChord = false; result.Add(ActionKind.PauseToggle);

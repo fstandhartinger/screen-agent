@@ -54,9 +54,15 @@ internal sealed class PrivacyCapture
     {
         if(!sessionActive||paused)return null;
         IntPtr desktop=Native.OpenInputDesktop(0,false,0x0100); // DESKTOP_SWITCHDESKTOP access fails on secure desktop
-        if(desktop==IntPtr.Zero)return null;Native.CloseDesktop(desktop);
+        if(desktop==IntPtr.Zero)return null;
+        try
+        {
+            var name=new StringBuilder(256);
+            if(!Native.GetUserObjectInformation(desktop,2,name,name.Capacity*2,out _) || !name.ToString().Equals("Default",StringComparison.OrdinalIgnoreCase))return null;
+        }
+        finally{Native.CloseDesktop(desktop);}
         IntPtr foreground=underlying==IntPtr.Zero?Native.GetForegroundWindow():underlying;
-        var before=Snapshot(monitor);var fg=before.FirstOrDefault(w=>w.Handle==foreground);
+        var before=Snapshot(System.Windows.Forms.SystemInformation.VirtualScreen);var fg=before.FirstOrDefault(w=>w.Handle==foreground);
         if(fg is null || fg.Blocked || PrivacyPolicy.TransientHost(fg.Process,fg.Title))return null;
         if(before.Any(w=>PrivacyPolicy.TransientHost(w.Process,w.Title)))return null;
         var image=new Bitmap(monitor.Width,monitor.Height,PixelFormat.Format32bppArgb);
@@ -68,7 +74,7 @@ internal sealed class PrivacyCapture
                 foreach(var w in before.Where(w=>w.Blocked))
                 { var r=Rectangle.Intersect(monitor,w.Rect);r.Offset(-monitor.X,-monitor.Y);g.FillRectangle(Brushes.Black,r); }
             }
-            var after=Snapshot(monitor);
+            var after=Snapshot(System.Windows.Forms.SystemInformation.VirtualScreen);
             // Stronger than title/URL-only recheck: any visible-window identity/geometry/order change discards.
             if(!before.SequenceEqual(after)||(underlying==IntPtr.Zero && Native.GetForegroundWindow()!=foreground))
             {image.Dispose();return null;}

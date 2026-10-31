@@ -4,21 +4,30 @@ namespace ScreenAgent;
 internal sealed class KeyboardHook : IDisposable
 {
     readonly ConcurrentQueue<KeyEvent> queue=new();
+    readonly CancellationTokenSource stop=new();
+    readonly Task consumer;
     readonly Hotkeys state=new();
     readonly Native.HookProc callback;
     readonly Thread thread;
     IntPtr hook;
     uint threadId;
-    volatile bool swallowCaps, ctrl,win,baseline,disposed;
+    volatile bool swallowCaps, ctrl,win,baseline,disposed,healthy;
     bool capsOwned;
     readonly System.Threading.Timer watchdog;
     public event System.Action<ActionKind>? Action;
+    public bool Healthy=>healthy;
     public bool Session=>state.Session;
     public bool Paused=>state.Paused;
+    public bool Dictating=>state.Dictating;
     public KeyboardHook()
     {
         baseline=Native.Caps; callback=Callback;
         thread=new Thread(Run){IsBackground=true,Name="ScreenAgent keyboard hook"};thread.Start();
+        consumer=Task.Run(async ()=>
+        {
+            try{while(!stop.IsCancellationRequested){Drain();await Task.Delay(5,stop.Token);}}
+            catch(OperationCanceledException){}
+        });
         // Reinstall proactively: Windows silently removes timed-out LL hooks, with no query API.
         watchdog=new System.Threading.Timer(_=>{if(threadId!=0)Native.PostThreadMessage(threadId,0x8001,UIntPtr.Zero,IntPtr.Zero);},null,30000,30000);
     }
@@ -34,7 +43,7 @@ internal sealed class KeyboardHook : IDisposable
     void Install()
     {
         if(hook!=IntPtr.Zero)Native.UnhookWindowsHookEx(hook);
-        hook=Native.SetWindowsHookEx(13,callback,Native.GetModuleHandle(null),0);
+        hook=Native.SetWindowsHookEx(13,callback,Native.GetModuleHandle(null),0);healthy=hook!=IntPtr.Zero;
     }
     IntPtr Callback(int code,IntPtr w,IntPtr l)
     {
@@ -58,8 +67,8 @@ internal sealed class KeyboardHook : IDisposable
         }
         return Native.CallNextHookEx(hook,code,w,l);
     }
-    // UI timer is the consumer. Callback only enqueues + bounded swallow/mask decisions.
-    public void Drain()
+    // Dedicated lightweight consumer: UIA/OCR never delay hotkey state processing.
+    void Drain()
     {
         while(queue.TryDequeue(out var e))Apply(state.Feed(e));
         Apply(state.Tick(Environment.TickCount64));swallowCaps=state.SwallowCaps;
@@ -68,8 +77,8 @@ internal sealed class KeyboardHook : IDisposable
     {
         foreach(var a in actions)
         {
-            if(a==ActionKind.CapsTap){Native.Tap(0x14);baseline=Native.Caps;}
-            if(a==ActionKind.SessionToggle && !state.Session)Native.RestoreCaps(baseline);
+            if(a==ActionKind.CapsTap){baseline=!baseline;Native.Tap(0x14);}
+            if(a==ActionKind.SessionToggle){if(state.Session)baseline=Native.Caps;else Native.RestoreCaps(baseline);}
             Action?.Invoke(a);
         }
         swallowCaps=state.SwallowCaps;
@@ -78,6 +87,7 @@ internal sealed class KeyboardHook : IDisposable
     {
         if(disposed)return;disposed=true;watchdog.Dispose();
         if(threadId!=0)Native.PostThreadMessage(threadId,0x12,UIntPtr.Zero,IntPtr.Zero);
-        thread.Join(1000);Native.RestoreCaps(baseline);
+        thread.Join(1000);stop.Cancel();try{consumer.Wait(1000);}catch(AggregateException){}
+        if(state.Session)Native.RestoreCaps(baseline);stop.Dispose();
     }
 }

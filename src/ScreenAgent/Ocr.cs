@@ -20,6 +20,7 @@ internal static class Ocr
             return new("winrt",text,ArtifactMatcher.Find(text),null);
         }
         catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8} {ex.Message}";}
+        NativeOcrLibraries.Ensure();
         using var tess=new Tesseract.TesseractEngine(Path.Combine(AppContext.BaseDirectory,"tessdata"),"eng+deu",Tesseract.EngineMode.LstmOnly);
         using var pix=Tesseract.Pix.LoadFromFile(path);
         using var page=tess.Process(pix,Tesseract.PageSegMode.Auto);
@@ -29,6 +30,7 @@ internal static class Ocr
     // In-memory capture path: Windows bitmap -> PNG memory -> Tesseract, never a disk frame.
     public static OcrOutput ReadMemory(byte[] png)
     {
+        NativeOcrLibraries.Ensure();
         using var tess=new Tesseract.TesseractEngine(Path.Combine(AppContext.BaseDirectory,"tessdata"),"eng+deu",Tesseract.EngineMode.LstmOnly);
         using var pix=Tesseract.Pix.LoadFromMemory(png);using var page=tess.Process(pix);
         string text=page.GetText();return new("tesseract",text,ArtifactMatcher.Find(text),null);

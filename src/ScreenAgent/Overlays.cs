@@ -56,9 +56,12 @@ internal sealed class DrawOverlay : Window
         WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;Topmost=true;ShowInTaskbar=false;ShowActivated=false;
         Left=monitor.Left;Top=monitor.Top;Width=monitor.Width;Height=monitor.Height;Content=canvas;
         new WindowInteropHelper(this).EnsureHandle();
-        uint dpi=GetDpiForWindow(new WindowInteropHelper(this).Handle);sx=sy=(dpi==0?96:dpi)/96.0;
+        var hwnd=new WindowInteropHelper(this).Handle;
+        Native.SetWindowPos(hwnd,(IntPtr)(-1),monitor.Left,monitor.Top,monitor.Width,monitor.Height,0x10);
+        uint dpi=GetDpiForWindow(hwnd);sx=sy=(dpi==0?96:dpi)/96.0;
         Left=monitor.Left/sx;Top=monitor.Top/sy;Width=monitor.Width/sx;Height=monitor.Height/sy;
         SourceInitialized+=(_,_)=>OverlayStyle.Apply(this,false);OverlayStyle.Apply(this,false);
+        Loaded+=(_,_)=>Native.SetWindowPos(hwnd,(IntPtr)(-1),monitor.Left,monitor.Top,monitor.Width,monitor.Height,0x10);
         canvas.MouseLeftButtonDown+=(_,e)=>
         {
             current=new(){Stroke=Brushes.Magenta,StrokeThickness=5/sx,StrokeLineJoin=PenLineJoin.Round};canvas.Children.Add(current);strokes.Add([]);canvas.CaptureMouse();Add(e.GetPosition(canvas));

@@ -24,6 +24,8 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] internal static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int cx,int cy,uint flags);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] internal static extern bool GetUserObjectInformation(IntPtr h,int index,System.Text.StringBuilder value,int size,out int needed);
     [DllImport("user32.dll")] internal static extern bool EnumWindows(EnumProc proc,IntPtr p);
     [DllImport("user32.dll")] internal static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr h,out Rect r);
