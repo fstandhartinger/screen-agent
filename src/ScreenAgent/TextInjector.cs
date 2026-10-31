@@ -14,18 +14,24 @@ internal static class TextInjector
         return null;
     }
     public static string Sanitize(string text)=>new(text.Select(c=>c is '\r' or '\n' or '\t'?' ':c).Where(c=>!char.IsControl(c)).ToArray());
-    internal static bool Elevated(IntPtr hwnd)
+    internal static bool Elevated(IntPtr hwnd)=>ElevationRefusal(hwnd) is not null;
+    internal static string? ElevationRefusal(IntPtr hwnd)
     {
         Native.GetWindowThreadProcessId(hwnd,out uint pid);
         // An unreadable token fails closed; do not attempt UIPI workarounds.
         try
         {
             using var p=Process.GetProcessById((int)pid);
-            if(!OpenProcessToken(p.Handle,8,out var token))return true;
-            try {int elevation=0;return !GetTokenInformation(token,20,ref elevation,4,out _)||elevation!=0;}
+            if(!OpenProcessToken(p.Handle,8,out var token))return "Notepad process token could not be opened";
+            try
+            {
+                int elevation=0;
+                if(!GetTokenInformation(token,20,ref elevation,4,out _))return "Notepad token elevation could not be read";
+                return elevation!=0?"Runner launched an elevated Notepad process":null;
+            }
             finally{CloseHandle(token);}
         }
-        catch{return true;}
+        catch(Exception ex){return "Notepad elevation check failed: "+ex.GetType().Name;}
     }
     public static async Task<bool> Inject(Target target,string text,bool clipboard,PrivacyPolicy policy)
     {

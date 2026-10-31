@@ -54,7 +54,10 @@ jobs:
         run: |
           & ./publish/ScreenAgent.exe --selftest-inject | Tee-Object artifacts/inject.json
           $code = $LASTEXITCODE
-          if ($code -eq 2) { Write-Warning 'Interactive desktop unavailable: manual injection checklist remains required' }
+          if ($code -eq 2) {
+            Write-Warning 'Injection selftest skipped; see inject.json for the exact runner limitation. Manual checklist remains required.'
+            exit 0
+          }
           elseif ($code -ne 0) { throw 'Injection selftest failed' }
       - name: Measure and hash deliverables
         if: always()

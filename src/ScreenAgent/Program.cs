@@ -112,9 +112,9 @@ internal static class Program
                 string? initial=TextInjector.Read(edit);
                 if(initial is null)throw new InvalidOperationException("Notepad has no read-back pattern");
                 if(initial.Length!=0)throw new InvalidOperationException("Refusing non-empty Notepad target");
-                if(TextInjector.Elevated(hwnd))
+                if(TextInjector.ElevationRefusal(hwnd) is string elevationReason)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status="skipped",reason="Runner Notepad is elevated or its process token is unreadable; insertion safety refuses this target. Manual test with a non-elevated interactive editor required."}));exit=2;return;
+                    Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status="skipped",reason=elevationReason+"; insertion safety refuses this target. Manual test with a non-elevated interactive editor required."}));exit=2;return;
                 }
                 var target=new TextInjector.Target(hwnd,edit);
                 bool foreground=Native.GetForegroundWindow()==hwnd;
