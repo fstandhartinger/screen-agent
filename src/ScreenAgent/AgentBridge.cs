@@ -51,11 +51,11 @@ internal sealed class AgentBridge : Window
                         switch(m.GetProperty("type").GetString())
                         {
                             case "device-token":
-                                client.Pair(new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,(m.GetProperty("expiresAt").ValueKind==System.Text.Json.JsonValueKind.Number?DateTimeOffset.FromUnixTimeMilliseconds(m.GetProperty("expiresAt").GetInt64()):m.GetProperty("expiresAt").GetDateTimeOffset())));
+                                client.Pair(new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,DeviceProtocol.Expiry(m.GetProperty("expiresAt"))));
                                 browser.Source=new Uri(origin,"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider));break;
                             case "session":
-                                SessionId=m.TryGetProperty("sid",out var sid)&&sid.ValueKind==System.Text.Json.JsonValueKind.String?sid.GetString():null;
-                                SessionChanged?.Invoke();break;
+                                string? next=m.TryGetProperty("sid",out var sid)&&sid.ValueKind==System.Text.Json.JsonValueKind.String?sid.GetString():null;
+                                if(next!=SessionId){SessionId=next;SessionChanged?.Invoke();}break;
                             case "mute-ack":if(!m.TryGetProperty("on",out var on)||on.GetBoolean()==requestedMute)muteAck?.TrySetResult(true);break;
                         }
                     }

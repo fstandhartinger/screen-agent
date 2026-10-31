@@ -17,6 +17,7 @@ internal sealed class KeyboardHook : IDisposable
     readonly System.Threading.Timer watchdog;
     public event System.Action<ActionKind>? Action;
     public event System.Action<IntPtr>? BindTarget;
+    public event System.Action<IntPtr>? BindDrawing;
     public bool Healthy=>healthy;
     public bool Session=>state.Session;
     public bool Paused=>state.Paused;
@@ -80,7 +81,8 @@ internal sealed class KeyboardHook : IDisposable
         {
             if(a==ActionKind.CapsTap){if(bindings.DrawVk==0x14)baseline=!baseline;Native.Tap((ushort)bindings.DrawVk);}
             if(a==ActionKind.SessionToggle&&bindings.DrawVk==0x14){if(state.Session)baseline=Native.Caps;else Native.RestoreCaps(baseline);}
-            if(a==ActionKind.DictationBind)BindTarget?.Invoke(window);
+            if(a==ActionKind.DrawBind)BindDrawing?.Invoke(window);
+            else if(a==ActionKind.DictationBind)BindTarget?.Invoke(window);
             else Action?.Invoke(a);
         }
         swallowCaps=state.SwallowCaps;

@@ -34,18 +34,13 @@ internal sealed class DeviceClient : IDisposable
     {
         if(ids.Length==0)return [];
         using var r=await Send(HttpMethod.Get,"api/device/exists?ids="+Uri.EscapeDataString(string.Join(',',DevicePayloads.Ids(ids))),null,ct);
-        using var json=JsonDocument.Parse(await r.Content.ReadAsStringAsync(ct));
-        var root=json.RootElement;
-        // Contract accepts the list itself or the named ids property; never trust unknown keys as ids.
-        if(root.ValueKind==JsonValueKind.Object&&root.TryGetProperty("known",out var list))root=list;
-        return root.ValueKind==JsonValueKind.Array?DevicePayloads.Ids(root.EnumerateArray().Where(e=>e.ValueKind==JsonValueKind.String).Select(e=>e.GetString()!)).Intersect(DevicePayloads.Ids(ids)).ToArray():[];
+        return DeviceProtocol.Known(await r.Content.ReadAsStringAsync(ct),ids);
     }
     public async Task Post(string path,object body,CancellationToken ct){using var r=await Send(HttpMethod.Post,path,JsonContent.Create(body),ct);}
     public async Task<string[]> Dictionary(CancellationToken ct)
     {
-        using var r=await Send(HttpMethod.Get,"api/device/dictionary",null,ct);using var j=JsonDocument.Parse(await r.Content.ReadAsStringAsync(ct));
-        var root=j.RootElement;if(root.ValueKind==JsonValueKind.Object){if(root.TryGetProperty("terms",out var terms))root=terms;else if(root.TryGetProperty("items",out var items))root=items;}
-        return root.ValueKind==JsonValueKind.Array?root.EnumerateArray().Select(e=>e.ValueKind==JsonValueKind.String?e.GetString():e.TryGetProperty("term",out var t)?t.GetString():null).Where(x=>!string.IsNullOrEmpty(x)&&x.Length<=100).Take(100).Select(x=>x!).ToArray():[];
+        using var r=await Send(HttpMethod.Get,"api/device/dictionary",null,ct);
+        return DeviceProtocol.Terms(await r.Content.ReadAsStringAsync(ct));
     }
     public async Task<string> Dictate(byte[] wav,DictationContext context,CancellationToken ct)
     {

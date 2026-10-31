@@ -82,4 +82,20 @@ public class AppTests
         Assert.Equal(new[]{"123abc","abcdef"},DevicePayloads.Ids(["a#123abc","ABCDEF","abcdef","unknown"]));
         string json=JsonSerializer.Serialize(new Box(-10,20,100,200));Assert.Equal("{\"x\":-10,\"y\":20,\"w\":100,\"h\":200}",json);
     }
+    [Fact]public void ProtocolFixturesMatchDeskSource()
+    {
+        Assert.Equal(new[]{"123abc"},DeviceProtocol.Known("{\"known\":[\"123abc\",\"abcdef\",42]}",["a#123abc"]));
+        Assert.Empty(DeviceProtocol.Known("{\"unknown\":[\"123abc\"]}",["a#123abc"]));
+        Assert.Equal(new[]{"Jev","JevBench"},DeviceProtocol.Terms("{\"items\":[{\"term\":\"Jev\",\"replace_from\":[\"Jeff\"]},{\"term\":\"JevBench\"},42]}"));
+        Assert.Equal(new[]{"Jev"},DeviceProtocol.Terms("{\"terms\":[\"Jev\"]}"));
+        using var ms=JsonDocument.Parse("1793440800000");using var iso=JsonDocument.Parse("\"2026-10-31T10:00:00Z\"");
+        Assert.Equal(DeviceProtocol.Expiry(iso.RootElement),DeviceProtocol.Expiry(ms.RootElement));
+    }
+    [Fact]public void BindDrawingAtKeyDown()
+    {
+        var h=new Hotkeys();h.Feed(new(Key.Ctrl,true,0));h.Feed(new(Key.Win,true,10));h.Feed(new(Key.Shift,true,20));
+        h.Feed(new(Key.Ctrl,false,30));h.Feed(new(Key.Win,false,40));h.Feed(new(Key.Shift,false,50));
+        Assert.Contains(ActionKind.DrawBind,h.Feed(new(Key.Caps,true,100)));
+        Assert.DoesNotContain(ActionKind.DrawStart,h.Tick(299));Assert.Contains(ActionKind.DrawStart,h.Tick(300));
+    }
 }

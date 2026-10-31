@@ -1,6 +1,6 @@
 namespace ScreenAgent.Core;
 public enum Key { Ctrl, Win, Shift, Caps, P, Space, Other }
-public enum ActionKind { SessionToggle, PauseToggle, DictationStart, DictationStop, DictationDiscard, DrawStart, DrawStop, CapsTap, MaskWin, DictationBind }
+public enum ActionKind { SessionToggle, PauseToggle, DictationStart, DictationStop, DictationDiscard, DrawStart, DrawStop, CapsTap, MaskWin, DictationBind, DrawBind }
 public readonly record struct KeyEvent(Key Key, bool Down, long Ms);
 public sealed class Hotkeys
 {
@@ -68,7 +68,7 @@ public sealed class Hotkeys
         }
         if(e.Key==Key.Caps)
         {
-            if(e.Down && Session) { capsSince=e.Ms; capsOwned=true; }
+            if(e.Down && Session) { capsSince=e.Ms; capsOwned=true;result.Add(ActionKind.DrawBind); }
             if(!e.Down && capsOwned)
             {
                 if(drawing) { drawing=false; result.Add(ActionKind.DrawStop); }

@@ -37,6 +37,7 @@ internal sealed class AppController : IDisposable
             if(audio!=null)return;
             try{target=Native.GetForegroundWindow()==window?TextInjector.Bind():null;if(target!=null&&!TextInjector.Safe(target,config.Policy()))target=null;}catch{target=null;}
         }));
+        hook.BindDrawing+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>underlying=window));
         hook.Action+=a=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Action(a)));
         timer=new(){Interval=TimeSpan.FromMilliseconds(100)};timer.Tick+=async (_,_)=>
         {
@@ -71,7 +72,7 @@ internal sealed class AppController : IDisposable
         if(action is ActionKind.SessionToggle or ActionKind.PauseToggle){Reset();return;}
         if(action==ActionKind.DrawStart&&Active&&drawings.Count==0)
         {
-            underlying=Native.GetForegroundWindow();
+            if(underlying==IntPtr.Zero||Native.GetForegroundWindow()!=underlying)return;
             foreach(var screen in System.Windows.Forms.Screen.AllScreens)
             {
                 using var probe=privacy.Capture(screen.Bounds,true,false,underlying);if(probe is null)continue;
@@ -92,10 +93,10 @@ internal sealed class AppController : IDisposable
         {
             if(action==ActionKind.DictationStart)
             {
-                if(audio!=null||target is null||paused||hook.Paused||!client.Paired||!TextInjector.Safe(target,config.Policy()))return;
+                if(audio!=null||!hook.Dictating||target is null||paused||hook.Paused||!client.Paired||!TextInjector.Safe(target,config.Policy()))return;
                 audioTarget=target;audioSession=bridge.SessionId;
                 if(!await bridge.Mute(true)){await bridge.Mute(false);Notice("Diktat · Mikrofon nicht bestätigt");return;}
-                if(paused||hook.Paused||audioTarget is null||!TextInjector.Safe(audioTarget,config.Policy())||audioSession!=bridge.SessionId){await bridge.Mute(false);return;}
+                if(!hook.Dictating||paused||hook.Paused||audioTarget is null||!TextInjector.Safe(audioTarget,config.Policy())||audioSession!=bridge.SessionId){await bridge.Mute(false);return;}
                 process=TextInjector.ProcessName(audioTarget.Window);
                 before=TextInjector.Terminal(audioTarget.Window)?"":TextInjector.Read(audioTarget.Element)??"";
                 audio=new();Notice("Diktat");return;
