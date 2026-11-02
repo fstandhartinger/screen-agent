@@ -43,6 +43,44 @@ internal static class Ocr
         catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8}";}
         return ReadTesseractMemory(png) with{WinRtFailure=failure};
     }
+    // The ids on the Desk's pages are small, faint and monospaced: whole-screen OCR misreads them (real pages at 100-200 %: 2 of 11 read right).
+    // So: tiles of the NATIVE frame, three times the size, and each tile flattened to "distance from its own background", which turns faint text
+    // into black on white while bright text simply stays black. Tiles already read are remembered by content, so a frame after a small change costs one tile.
+    // Wrong readings are harmless: the caller keeps only what the registry knows.
+    public static async Task<OcrOutput> FindIds(System.Drawing.Bitmap frame,CancellationToken ct)
+    {
+        var found=new List<string>();var engine=(Environment.GetEnvironmentVariable("SCREENAGENT_OCR_LANG") is {} only?OcrEngine.TryCreateFromLanguage(new Language(only)):OcrEngine.TryCreateFromLanguage(new Language("en-US")))??OcrEngine.TryCreateFromUserProfileLanguages();
+        if(engine is null)
+        {
+            using var whole=new MemoryStream();frame.Save(whole,System.Drawing.Imaging.ImageFormat.Png);
+            var fallback=ReadTesseractMemory(whole.ToArray());return fallback with{Ids=ArtifactMatcher.FindLoose(fallback.Text),WinRtFailure="no-ocr-language"};
+        }
+        foreach(var box in OcrTiles.Grid(frame.Width,frame.Height))
+        {
+            ct.ThrowIfCancellationRequested();
+            using var tile=frame.Clone(new System.Drawing.Rectangle(box.X,box.Y,box.W,box.H),System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            found.AddRange(await ReadTile(engine,tile));
+        }
+        return new("winrt+tiles:"+engine.RecognizerLanguage.LanguageTag,"",found.Distinct(StringComparer.Ordinal).ToArray(),null);
+    }
+    static readonly Dictionary<long,string[]> TileCache=[];
+    static async Task<string[]> ReadTile(OcrEngine engine,System.Drawing.Bitmap tile)
+    {
+        var data=tile.LockBits(new(0,0,tile.Width,tile.Height),System.Drawing.Imaging.ImageLockMode.ReadOnly,System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        byte[] raw=new byte[data.Stride*tile.Height];System.Runtime.InteropServices.Marshal.Copy(data.Scan0,raw,0,raw.Length);int stride=data.Stride;tile.UnlockBits(data);
+        var hash=new HashCode();hash.AddBytes(raw);long key=hash.ToHashCode();
+        lock(TileCache)if(TileCache.TryGetValue(key,out var known))return known;
+        var ids=new List<string>();
+        foreach(var pass in new[]{OcrTiles.Flatten(raw,stride,tile.Width,tile.Height,3,48),OcrTiles.Flatten(raw,stride,tile.Width,tile.Height,3,110)})
+        {
+            using var bitmap=Windows.Graphics.Imaging.SoftwareBitmap.CreateCopyFromBuffer(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(pass.Bgra),BitmapPixelFormat.Bgra8,pass.W,pass.H,BitmapAlphaMode.Premultiplied);
+            var result=await engine.RecognizeAsync(bitmap);
+            ids.AddRange(ArtifactMatcher.FindLoose(string.Join("\n",result.Lines.Select(l=>l.Text))));
+        }
+        var value=ids.Distinct(StringComparer.Ordinal).ToArray();
+        lock(TileCache){if(TileCache.Count>=128)TileCache.Clear();TileCache[key]=value;}
+        return value;
+    }
     public static async Task<string[]> IdsIntersecting(byte[] png,System.Drawing.Rectangle bounds)
     {
         try

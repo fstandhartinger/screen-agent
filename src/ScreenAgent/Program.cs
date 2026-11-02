@@ -22,6 +22,13 @@ internal static class Program
                 var output=args[0]=="--selftest-tesseract"?Ocr.ReadTesseractMemory(png):Ocr.ReadMemory(png).GetAwaiter().GetResult();
                 Console.WriteLine(JsonSerializer.Serialize(output));return output.Ids.Length>0?0:1;
             }
+            if(args.FirstOrDefault()=="--selftest-find-ids")
+            {
+                using var image=new System.Drawing.Bitmap(args[1]);
+                var clock=System.Diagnostics.Stopwatch.StartNew();
+                var output=Ocr.FindIds(image,CancellationToken.None).GetAwaiter().GetResult();
+                Console.WriteLine(JsonSerializer.Serialize(new{output.Engine,output.Ids,output.WinRtFailure,Ms=clock.ElapsedMilliseconds}));return 0;
+            }
             if(args.FirstOrDefault()=="--selftest-inject")return InjectTest();
             if(args.FirstOrDefault()=="--selftest-ui")return UiTest();
             if(args.FirstOrDefault()=="--selftest-hotkeys")return Selftests.Hotkeys();
