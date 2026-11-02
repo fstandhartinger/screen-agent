@@ -69,6 +69,21 @@ jobs:
           . ./ci/invoke-sa.ps1
           Invoke-SA --selftest-ui | Tee-Object artifacts/overlay.json
           if ($LASTEXITCODE -ne 0) { throw 'Overlay selftest failed' }
+      - name: Draw selftest (magenta 5 px strokes, clean capture, crop, click-through after release)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Invoke-SA --selftest-draw | Tee-Object artifacts/draw.json
+          $code = $LASTEXITCODE
+          if ($code -eq 2) { Write-Warning 'Draw selftest skipped; mouse input did not reach the overlay on this runner (see draw.json). Manual checklist remains required.'; exit 0 }
+          elseif ($code -ne 0) { throw 'Draw selftest failed' }
+      - name: Change test on a real bitmap (5-digit number counts, caret does not, planner)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-frame fixtures/ocr-36.png | Tee-Object artifacts/frame.json
+          if ($LASTEXITCODE -ne 0) { throw 'Frame change selftest failed' }
       - name: No console window (GUI subsystem)
         shell: pwsh
         run: |

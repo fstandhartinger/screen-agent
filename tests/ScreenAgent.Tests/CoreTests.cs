@@ -24,9 +24,25 @@ public class CoreTests
     [Fact] public void DictationHoldStopsOnRelease(){var h=new Hotkeys();Event(h,Key.Alt,true,0);Event(h,Key.Win,true,10);h.Tick(300);Assert.True(h.Dictating);Assert.Contains(ActionKind.DictationStop,Event(h,Key.Win,false,900));Assert.False(h.Dictating);}
     [Fact] public void DirtyChordCannotToggle(){var h=new Hotkeys();var all=new List<ActionKind>();foreach(var (k,d,t) in new[]{(Key.Ctrl,true,0),(Key.Win,true,10),(Key.Shift,true,20),(Key.Other,true,25),(Key.Ctrl,false,30),(Key.Win,false,40),(Key.Shift,false,50)})all.AddRange(Event(h,k,d,t));Assert.DoesNotContain(ActionKind.SessionToggle,all);}
     [Fact] public void PauseDoesNotToggleSession(){var h=Session();Event(h,Key.Ctrl,true,100);Event(h,Key.Win,true,110);Event(h,Key.Shift,true,120);Assert.Contains(ActionKind.PauseToggle,Event(h,Key.P,true,130));Event(h,Key.P,false,140);var rest=new List<ActionKind>();rest.AddRange(Event(h,Key.Ctrl,false,150));rest.AddRange(Event(h,Key.Win,false,160));rest.AddRange(Event(h,Key.Shift,false,170));Assert.DoesNotContain(ActionKind.SessionToggle,rest);Assert.True(h.Session);Assert.True(h.Paused);}
-    [Theory][InlineData("keepassxc","safe",null,true)][InlineData("notepad","my password",null,true)][InlineData("chrome","safe","https://accounts.google.com/a",true)][InlineData("chrome","safe",null,true)][InlineData("chrome","safe","https://accounts.google.com.evil.test",false)][InlineData("chrome","safe","https://sub.kraken.com",true)][InlineData("notepad","notes",null,false)][InlineData("chrome","Earnings","https://earnings.app.mintapis.com/password",true)]
-    public void Blocklist(string process,string title,string? url,bool blocked)=>Assert.Equal(blocked,new PrivacyPolicy().Blocked(process,title,url));
-
+    [Theory][InlineData("keepassxc","safe",null)][InlineData("notepad","my password",null)][InlineData("chrome","safe","https://accounts.google.com/a")][InlineData("chrome","safe",null)][InlineData("chrome","Kraken","https://sub.kraken.com")]
+    [InlineData("chrome","Earnings","https://bittensor-earnings.lovable.app/reax")][InlineData("","","")][InlineData("explorer","Start","")]
+    public void NothingIsBlockedByDefault(string process,string title,string? url)
+    {
+        var p=new PrivacyPolicy();Assert.False(p.HasLists);Assert.False(p.NeedsAddress("chrome"));Assert.False(p.Blocked(process,title,url));
+    }
+    [Theory][InlineData("LockApp",true)][InlineData("LogonUI",true)][InlineData("consent",true)][InlineData("ShellExperienceHost",false)][InlineData("StartMenuExperienceHost",false)][InlineData("chrome",false)]
+    public void OnlyTheSecureDesktopHostsAreLocked(string process,bool locked)=>Assert.Equal(locked,PrivacyPolicy.LockedHost(process));
+    [Fact] public void StartMenuAndAltTabAreOrdinaryWindows()
+    {
+        var p=new PrivacyPolicy{ExtraProcesses=["bank"]};
+        Assert.False(p.Blocked("ShellExperienceHost","Start"));Assert.False(p.Blocked("explorer","Task Switching"));Assert.False(p.Blocked("explorer","Task View"));
+    }
+    [Fact] public void AnUnreadableAddressNeverBlocks()
+    {
+        var p=new PrivacyPolicy{ExtraDomains=["bank.test"]};Assert.True(p.NeedsAddress("chrome"));Assert.False(p.NeedsAddress("notepad"));
+        Assert.False(p.Blocked("chrome","tab",null));Assert.False(p.Blocked("chrome","tab","not a url"));Assert.True(p.Blocked("chrome","tab","https://www.bank.test/x"));
+        Assert.False(p.Blocked("chrome","tab","https://bank.test.evil.example"));
+    }
     [Fact] public void ShiftBeforeDelayPreventsDictation()
     {
         var h=new Hotkeys();Event(h,Key.Alt,true,0);Event(h,Key.Win,true,10);Event(h,Key.Shift,true,259);
@@ -64,10 +80,17 @@ public class CoreTests
         Event(h,Key.P,false,140);Event(h,Key.Ctrl,false,150);Event(h,Key.Win,false,160);Event(h,Key.Shift,false,170);
         Event(h,Key.Caps,true,1000);Assert.DoesNotContain(ActionKind.DrawStart,Event(h,Key.Caps,false,1300));
     }
-    [Fact] public void PrivacyAdditionsAreAdditive()
+    [Fact] public void ConfiguredListsBlockExactlyTheirMatches()
     {
         var p=new PrivacyPolicy{ExtraProcesses=["private-"],ExtraDomains=["private.test"],ExtraTitlePatterns=["confidential"]};
+        Assert.True(p.HasLists);
         Assert.True(p.Blocked("private-app","notes"));Assert.True(p.Blocked("chrome","notes","https://sub.private.test"));
-        Assert.True(p.Blocked("notepad","Confidential report"));Assert.True(p.Blocked("keepassxc","notes"));
+        Assert.True(p.Blocked("notepad","Confidential report"));
+        Assert.False(p.Blocked("keepassxc","notes"));Assert.False(p.Blocked("chrome","Kraken","https://kraken.com"));
+    }
+    [Fact] public void ABrokenTitlePatternFallsBackToPlainText()
+    {
+        var p=new PrivacyPolicy{ExtraTitlePatterns=["(oops"]};
+        Assert.True(p.Blocked("notepad","an (oops here"));Assert.False(p.Blocked("notepad","fine"));
     }
 }

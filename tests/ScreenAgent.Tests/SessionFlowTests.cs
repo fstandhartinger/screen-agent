@@ -22,24 +22,6 @@ public class SessionFlowTests
         {s.Failure(now);Assert.Equal(now+delay,s.RetryAt);Assert.False(s.Ready(now));now=s.RetryAt;Assert.True(s.Ready(now));}
         s.Success(now);s.Failure(now);Assert.Equal(now+1000,s.RetryAt);
     }
-    [Theory]
-    [InlineData("https://bittensor-earnings.lovable.app/reax",PrivacyClass.IdsOnly)]
-    [InlineData("https://bittensor-earnings.lovable.app.evil.test",PrivacyClass.Allowed)]
-    [InlineData("https://kraken.com",PrivacyClass.Blocked)]
-    [InlineData(null,PrivacyClass.Blocked)]
-    public void PrivacyModes(string? url,PrivacyClass mode)=>Assert.Equal(mode,new PrivacyPolicy().Classify("chrome","Earnings",url));
-    [Fact] public void FullBlocksCannotBeDowngraded()
-    {
-        var p=new PrivacyPolicy{IdsOnlyDomains=["kraken.com"]};
-        Assert.Equal(PrivacyClass.Blocked,p.Classify("chrome","Earnings","https://kraken.com"));
-        Assert.Equal(PrivacyClass.Blocked,p.Classify("","notes"));
-        Assert.Equal(PrivacyClass.Blocked,p.Classify("chrome","password","https://bittensor-earnings.lovable.app"));
-    }
-    [Fact] public void NoImageHighlightHasNoImageFields()
-    {
-        var json=JsonSerializer.Serialize(new IdsHighlightPayload(["332179"],new(1,2,3,4)));
-        Assert.Contains("\"noImage\":true",json);Assert.DoesNotContain("crop",json);Assert.DoesNotContain("context",json);
-    }
     [Fact] public async Task SlowFirstDictationPreservesOrderWithoutBlockingCapture()
     {
         var q=new OrderedWork();var release=new TaskCompletionSource();var inserted=new List<int>();

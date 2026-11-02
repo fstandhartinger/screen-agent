@@ -31,6 +31,8 @@ internal static class Program
             }
             if(args.FirstOrDefault()=="--selftest-inject")return InjectTest();
             if(args.FirstOrDefault()=="--selftest-ui")return UiTest();
+            if(args.FirstOrDefault()=="--selftest-draw")return DrawSelftests.Draw();
+            if(args.FirstOrDefault()=="--selftest-frame")return DrawSelftests.Frame(args[1]);
             if(args.FirstOrDefault()=="--selftest-hotkeys")return Selftests.Hotkeys();
             if(args.FirstOrDefault()=="--selftest-windows")return Selftests.Windows();
             string sid=System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value??"";
