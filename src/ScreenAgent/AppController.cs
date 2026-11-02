@@ -348,7 +348,8 @@ internal sealed class AppController : IDisposable
         }
         catch(Exception ex){telemetry.Event("canvas.error",new(){["type"]=ex.GetType().Name});}
     }
-    void OnCanvasPending(){if(canvas is {IsOpen:true})return;_=ShowCanvas(false,"pending");}
+    void OnCanvasPending(){if(!bridge.VoiceOn||canvas is {IsOpen:true})return;   // a drawing from the text chat, or one replayed at page load, opens nothing
+        _=ShowCanvas(false,"pending");}
     void ToggleCanvas(){if(canvas is {IsOpen:true} open)open.HidePanel(true);else _=ShowCanvas(true,"toggle");}
     async Task Watch()
     {

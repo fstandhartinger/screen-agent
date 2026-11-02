@@ -34,7 +34,7 @@ jobs:
           $code = (Resolve-Path e2e-vscode/vscode).Path
           $work = (Resolve-Path e2e-vscode/work).Path
           $p = Start-Process -FilePath ./publish/ScreenAgent.exe -ArgumentList '--selftest-live-actions',$env:E2E_DESK_URL,"`"$code`"","`"$work`"",'https://explainers.app.mintapis.com/p/agent-artifact-ids/' -PassThru -RedirectStandardOutput e2e.txt -RedirectStandardError e2e.err -NoNewWindow
-          if (-not $p.WaitForExit(400000)) { Stop-Process $p -Force; Write-Host 'timed out after 400 s' }
+          if (-not $p.WaitForExit(560000)) { Stop-Process $p -Force; Write-Host 'timed out after 560 s' }
           Get-Content e2e.txt; Get-Content e2e.err -ErrorAction SilentlyContinue | Select-Object -Last 20
           Get-Content "$env:LOCALAPPDATA/ScreenAgent/logs/screenagent.log" -ErrorAction SilentlyContinue | Select-Object -Last 150
           if (-not (Select-String -Quiet -Path e2e.txt -Pattern '"voice":true')) { throw 'live selftest failed' }

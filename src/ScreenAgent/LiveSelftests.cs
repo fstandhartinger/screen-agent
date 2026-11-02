@@ -47,11 +47,11 @@ internal static class LiveSelftests
                 foreach(var a in new[]{"--new-window","--disable-workspace-trust","--skip-release-notes","--skip-welcome","--disable-gpu",folder,file})psi.ArgumentList.Add(a);
                 psi.Environment["ANTHROPIC_API_KEY"]="not-a-real-key";psi.Environment.Remove("ELECTRON_RUN_AS_NODE");System.Diagnostics.Process.Start(psi);
                 var prompt=new MainAgentPrompt(["Message input"],(_,_)=>{});IntPtr code=IntPtr.Zero;System.Windows.Automation.AutomationElement? box=null;
-                for(int i=0;i<180&&box is null;i++)
+                for(int i=0;i<30&&box is null;i++)
                 {
-                    await Task.Delay(500);
+                    await Task.Delay(1000);
                     var hit=MainAgentPrompt.Enumerate().FirstOrDefault(c=>c.Process=="Code - Insiders"&&c.Title.Contains("ws-live"));
-                    if(hit.Handle!=0){code=(IntPtr)hit.Handle;box=await Task.Run(()=>prompt.FindInput(code,500));}
+                    if(hit.Handle!=0){code=(IntPtr)hit.Handle;box=await Task.Run(()=>prompt.FindInput(code,2500));}
                 }
                 report["boxFoundBefore"]=box is not null;Step($"vscode box {box is not null}");
                 // A browser in front: what he talks about is not VS Code, which sits behind it.
