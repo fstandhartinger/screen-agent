@@ -1,48 +1,36 @@
-using System.Numerics;
 namespace ScreenAgent.Core;
-// 64-bit difference hash: the screen is reduced to a 9x8 luma grid, each bit says "this cell is brighter than its right neighbour".
-public static class DHash
-{
-    public const int Width=9,Height=8;
-    public static ulong Compute(ReadOnlySpan<float> luma)
-    {
-        if(luma.Length!=Width*Height)throw new ArgumentException("9x8 grid expected");
-        ulong hash=0;
-        for(int y=0;y<Height;y++)for(int x=0;x<Width-1;x++)if(luma[y*Width+x]>luma[y*Width+x+1])hash|=1UL<<(y*(Width-1)+x);
-        return hash;
-    }
-    public static int Distance(ulong a,ulong b)=>BitOperations.PopCount(a^b);
-}
 public enum FrameReason { Start, Interval, Foreground, Fresh }
 public enum FrameVerdict { Wait, Send, Deduped }
 public readonly record struct FrameDecision(FrameVerdict Verdict,FrameReason Reason);
 // Decides when a screenshot is taken and whether it goes out: one at the start, then every interval and at once on a window switch,
-// but only when the picture changed (hash distance above the threshold). A fresh request from the voice agent always sends.
-// MinGapMs keeps us below the gateway's 30 frames/min.
-public sealed class FramePlanner(int intervalMs=4000,int threshold=4,int minGapMs=2000)
+// but only when the picture changed against the last frame that was SENT (ChangeDetector). A skipped, failed, rejected or capped frame
+// never becomes the reference. A fresh request from the voice agent always sends. MinGapMs keeps us below the gateway's 30 frames/min.
+// A change that has to wait for the gap makes the next capture due as soon as the gap is over, so the agent's picture is at most one interval old.
+public sealed class FramePlanner(int intervalMs=4000,int minGapMs=2000)
 {
-    bool started;
-    long lastCaptureAt,lastSentAt;
-    ulong lastHash;
-    long lastForeground;
+    bool started,pending;
+    long lastCaptureAt,lastSentAt,lastSentForeground;
+    byte[]? lastSent;
     public int IntervalMs=>intervalMs;
-    public int Threshold=>threshold;
     public bool Started=>started;
-    public void Reset(){started=false;lastCaptureAt=lastSentAt=0;lastHash=0;lastForeground=0;}
+    public void Reset(){started=false;pending=false;lastCaptureAt=lastSentAt=lastSentForeground=0;lastSent=null;}
     // Is it time to look at the screen at all? Cheap: no capture needed to answer.
-    public bool CaptureDue(long now,long foreground,bool fresh)=>fresh||!started||foreground!=lastForeground&&now-lastCaptureAt>=minGapMs||now-lastCaptureAt>=intervalMs;
-    public void Captured(long now,long foreground){lastCaptureAt=now;lastForeground=foreground;}
-    public FrameDecision Decide(long now,ulong hash,long foreground,bool fresh)
+    public bool CaptureDue(long now,long foreground,bool fresh)=>fresh||!started||foreground!=lastSentForeground&&now-lastCaptureAt>=minGapMs||pending&&now-lastSentAt>=minGapMs||now-lastCaptureAt>=intervalMs;
+    public void Captured(long now,long foreground){lastCaptureAt=now;}
+    public FrameDecision Decide(long now,byte[] grid,long foreground,bool fresh)
     {
         if(fresh)return new(FrameVerdict.Send,FrameReason.Fresh);
-        if(!started)return new(FrameVerdict.Send,FrameReason.Start);
+        if(!started||lastSent is null)return new(FrameVerdict.Send,FrameReason.Start);
         bool gap=now-lastSentAt>=minGapMs;
-        if(foreground!=lastSentForeground)return gap?new(FrameVerdict.Send,FrameReason.Foreground):new(FrameVerdict.Wait,FrameReason.Foreground);
-        if(DHash.Distance(hash,lastHash)>threshold)return gap?new(FrameVerdict.Send,FrameReason.Interval):new(FrameVerdict.Wait,FrameReason.Interval);
-        return new(FrameVerdict.Deduped,FrameReason.Interval);
+        FrameReason reason;
+        if(foreground!=lastSentForeground)reason=FrameReason.Foreground;
+        else if(ChangeDetector.Changed(lastSent,grid))reason=FrameReason.Interval;
+        else{pending=false;return new(FrameVerdict.Deduped,FrameReason.Interval);}
+        pending=!gap;
+        return new(gap?FrameVerdict.Send:FrameVerdict.Wait,reason);
     }
-    long lastSentForeground;
-    public void Sent(long now,ulong hash,long foreground){started=true;lastSentAt=now;lastHash=hash;lastSentForeground=foreground;}
+    // Only a frame the gateway accepted is the new reference.
+    public void Sent(long now,byte[] grid,long foreground){started=true;pending=false;lastSentAt=now;lastSent=grid;lastSentForeground=foreground;}
 }
 // JPEG sizing: at most 1600 px wide, then a quality ladder until the file fits the gateway's 300 KB limit (aim 150-300 KB).
 public static class FrameSizing

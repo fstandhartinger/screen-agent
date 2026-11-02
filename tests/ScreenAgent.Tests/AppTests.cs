@@ -54,8 +54,15 @@ public class AppTests
     {
         var c=AppConfig.Parse("{}");Assert.Equal(4000,c.IntervalMs);Assert.False(c.RetainScreenshots);Assert.Null(c.UserEmail);
         c=AppConfig.Parse("{\"userEmail\":\"local-only\",\"blockProcesses\":[\"private\"]}");
-        Assert.True(c.Policy().Blocked("private","notes"));Assert.True(c.Policy().Blocked("keepassxc","notes"));
+        Assert.True(c.Policy().Blocked("private","notes"));Assert.False(c.Policy().Blocked("keepassxc","notes"));
+        Assert.False(AppConfig.Parse("{}").Policy().HasLists);
         Assert.DoesNotContain("local-only",JsonSerializer.Serialize(DevicePayloads.Screen([],"notepad",1)));
+    }
+    [Fact]public void OldConfigWithIdsOnlyDomainsIsSimplyIgnored()
+    {
+        var c=AppConfig.Parse("{\"idsOnlyDomains\":[\"bittensor-earnings.lovable.app\",\"x.test\"],\"IdsOnlyDomains\":[\"y.test\"],\"blockDomains\":[\"b.test\"],\"intervalMs\":5000}");
+        Assert.Equal(5000,c.IntervalMs);Assert.Equal(["b.test"],c.BlockDomains);Assert.DoesNotContain("IdsOnly",JsonSerializer.Serialize(c),StringComparison.OrdinalIgnoreCase);
+        Assert.False(c.Policy().Blocked("chrome","Earnings","https://bittensor-earnings.lovable.app/reax"));
     }
     [Theory][InlineData("{\"deskUrl\":\"http://example.test\"}")][InlineData("{\"deskUrl\":\"https://example.test/private\"}")]
     [InlineData("{\"intervalMs\":10}")][InlineData("{\"hotkeys\":{\"session\":\"Ctrl+Win\"}}")]public void BadConfigFailsClosed(string json)=>Assert.Throws<InvalidDataException>(()=>AppConfig.Parse(json));

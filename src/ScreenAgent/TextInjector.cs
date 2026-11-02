@@ -70,8 +70,9 @@ internal static class TextInjector
         try
         {
             if(Native.GetForegroundWindow()!=target.Window||Elevated(target.Window)||!Automation.Compare(target.Element,AutomationElement.FocusedElement)||target.Element.Current.IsPassword)return false;
-            var info=new PrivacyCapture(policy).Snapshot(System.Windows.Forms.SystemInformation.VirtualScreen).FirstOrDefault(w=>w.Handle==target.Window);
-            return info is not null&&!info.Blocked&&!PrivacyPolicy.TransientHost(info.Process,info.Title);
+            // Password fields and elevated windows above are the real dictation fences; the config lists (empty by default) can add windows.
+            var info=PrivacyCapture.Describe(target.Window,policy,policy.ExtraDomains.Length>0);
+            return !info.Blocked&&!PrivacyPolicy.LockedHost(info.Process);
         }
         catch{return false;}
     }
