@@ -35,7 +35,7 @@ public sealed class HotkeyBindings
     public Key Role(int vk)
     {
         string? mod=Modifier(vk);
-        return mod==Primary?Key.Ctrl:mod==Secondary?Key.Win:mod=="Shift"?Key.Shift:vk==DrawVk?Key.Caps:vk==pauseVk?Key.P:vk==spaceVk?Key.Space:Key.Other;
+        return mod==Primary?Key.Ctrl:mod==Secondary?Key.Win:mod=="Shift"?Key.Shift:mod is not null?Key.Foreign:vk==DrawVk?Key.Caps:vk==pauseVk?Key.P:vk==spaceVk?Key.Space:Key.Other;
     }
     public bool CtrlWin=>held.Any(k=>Role(k)==Key.Ctrl)&&held.Any(k=>Role(k)==Key.Win);
     // Ctrl+Win is Wispr Flow's dictation chord; binding it here makes both tools fight over the same keys.

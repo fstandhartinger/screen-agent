@@ -1,5 +1,6 @@
 namespace ScreenAgent.Core;
-public enum Key { Ctrl, Win, Shift, Caps, P, Space, Other }
+// Foreign = a modifier that is not part of our chord (for example Ctrl when the chord is Alt+Win): somebody else's shortcut.
+public enum Key { Ctrl, Win, Shift, Caps, P, Space, Other, Foreign }
 public enum ActionKind { SessionToggle, PauseToggle, DictationStart, DictationStop, DictationDiscard, DrawStart, DrawStop, CapsTap, MaskWin, DictationBind, DrawBind }
 public readonly record struct KeyEvent(Key Key, bool Down, long Ms);
 public sealed class Hotkeys
@@ -38,7 +39,7 @@ public sealed class Hotkeys
         if (!e.Down) down.Remove(e.Key);
         bool ctrlWin = down.Contains(Key.Ctrl) && down.Contains(Key.Win);
         bool three = ctrlWin && down.Contains(Key.Shift);
-        if(e.Down && (e.Key is Key.Other or Key.P or Key.Space or Key.Caps)) dirtyChord = true;
+        if(e.Down && (e.Key is Key.Other or Key.P or Key.Space or Key.Caps or Key.Foreign)) dirtyChord = true;
         if (e.Down && e.Key == Key.P && three)
         {
             Paused = !Paused; cleanChord = false; result.Add(ActionKind.PauseToggle);
@@ -74,6 +75,8 @@ public sealed class Hotkeys
             }
             cleanChord=false; dirtyChord=false;
         }
+        // Another tool's modifier (Ctrl while our chord is Alt+Win, e.g. Wispr's Ctrl+Win+Alt) held: the chord is not ours.
+        if(down.Contains(Key.Foreign)) { dirtyChord = true; dictSince = null; }
         if(e.Key==Key.Caps)
         {
             if(e.Down && Session) { capsSince=e.Ms; capsOwned=true;result.Add(ActionKind.DrawBind); }

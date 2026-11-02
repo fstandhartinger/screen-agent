@@ -32,7 +32,7 @@ public class FirstRunTests
     [Fact]public void CtrlWinIsAlwaysUntouched()
     {
         var rig=new Rig();
-        rig.Down(Ctrl,Win);rig.State.Tick(5000);rig.Up(Win,Ctrl);
+        rig.Down(Ctrl,Win);rig.Actions.AddRange(rig.State.Tick(5000));rig.Up(Win,Ctrl);
         Assert.Empty(rig.Actions);Assert.Equal(0,rig.Masks);Assert.False(rig.State.Session);Assert.False(rig.State.Dictating);
     }
     [Fact]public void OldSessionChordDoesNothingAndIsNotMasked()
@@ -45,7 +45,7 @@ public class FirstRunTests
     public void WisprCommandChordIsForeign(int a,int b,int c)
     {
         var rig=new Rig();
-        rig.Down(a,b,c);rig.State.Tick(5000);rig.Up(c,b,a);
+        rig.Down(a,b,c);rig.Actions.AddRange(rig.State.Tick(5000));rig.Up(c,b,a);
         Assert.Equal(0,rig.Masks);Assert.False(rig.State.Session);Assert.DoesNotContain(ActionKind.DictationStart,rig.Actions);
     }
     [Fact]public void ConfiguredChordTogglesSessionAndMasksOnce()
@@ -73,7 +73,7 @@ public class FirstRunTests
     [Fact]public void ForeignModifierIsNotOurRole()
     {
         var b=new HotkeyBindings(AppConfig.DefaultHotkeys());
-        Assert.Equal(Key.Other,b.Role(Ctrl));Assert.Equal(Key.Ctrl,b.Role(Alt));Assert.Equal(Key.Win,b.Role(Win));
+        Assert.Equal(Key.Foreign,b.Role(Ctrl));Assert.Equal(Key.Ctrl,b.Role(Alt));Assert.Equal(Key.Win,b.Role(Win));
         b.Feed(Ctrl,true,out _);Assert.True(b.ForeignModifierHeld);
     }
     [Fact]public void SettingsCanStillChooseCtrlWinButAreWarned()
