@@ -1,7 +1,7 @@
 name: Windows spike
 on:
   push:
-    branches: [spike, app, main]
+    branches: [spike, app, main, 'fusion/**']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -16,11 +16,11 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Build
-        run: dotnet build src/ScreenAgent/ScreenAgent.csproj -c Release
+        run: dotnet build src/ScreenAgent/ScreenAgent.csproj -c Release -p:SourceRevisionId=${{ github.sha }}
       - name: Shared vectors, hotkey and privacy tests
         run: dotnet test tests/ScreenAgent.Tests/ScreenAgent.Tests.csproj -c Release --logger "trx;LogFileName=core.trx" --results-directory artifacts
       - name: Publish unpackaged single exe
-        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
       - name: Local OCR fallback language models
         shell: pwsh
         run: |
@@ -79,7 +79,7 @@ jobs:
           New-Item -ItemType Directory -Force artifacts | Out-Null
           @{ subsystem = $subsystem; meaning = @{ 2 = 'WINDOWS_GUI (no console)'; 3 = 'WINDOWS_CUI (console window)' }[[int]$subsystem] } | ConvertTo-Json | Tee-Object artifacts/subsystem.json
           if ($subsystem -ne 2) { throw "ScreenAgent.exe is subsystem $subsystem; expected 2 (GUI) so no console window opens" }
-      - name: Hotkey pass-through selftest (Ctrl+Win untouched, Alt+Win+Shift toggles)
+      - name: Hotkey selftest (Ctrl+Win untouched, Ctrl+Win+Shift any order, Alt+Win+Shift dictation, +M mute)
         shell: pwsh
         run: |
           . ./ci/invoke-sa.ps1

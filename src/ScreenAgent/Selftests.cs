@@ -64,7 +64,7 @@ internal static class Selftests
         KeyboardHook.AcceptInjectedForTests=true;
         using var probe=new Probe();
         if(!probe.Installed){Console.WriteLine(JsonSerializer.Serialize(new{test="hotkeys",status="skipped",reason="WH_KEYBOARD_LL cannot be installed on this runner"}));return 2;}
-        using var hook=new KeyboardHook(new HotkeyBindings(AppConfig.DefaultHotkeys()));
+        using var hook=new KeyboardHook(new HotkeyBindings(AppConfig.DefaultHotkeys()));   // v0.1.4 defaults: Ctrl+Win+Shift session, Alt+Win dictation, Alt+Win+Shift toggle, +M mute
         var actions=new List<ActionKind>();hook.Action+=a=>{lock(actions)actions.Add(a);};
         for(int i=0;i<40&&!hook.Healthy;i++)Thread.Sleep(50);
         // Preflight: can injected keys reach a hook on this desktop at all?
@@ -74,29 +74,58 @@ internal static class Selftests
             Console.WriteLine(JsonSerializer.Serialize(new{test="hotkeys",status="skipped",reason="Injected keys do not reach low-level hooks on this runner (no input desktop); manual checklist required",healthy=hook.Healthy,seen=probe.Snapshot().Count}));return 2;
         }
         bool Same(List<Seen> got,params (ushort vk,bool down)[] want)=>got.Where(s=>!s.Ours).Select(s=>(s.Vk,s.Down)).SequenceEqual(want.Select(w=>((uint)w.vk,w.down)));
-        // MaskWin is a legacy state-machine marker with no effect; the real mask is the injected key counted below.
-        List<ActionKind> Taken(){lock(actions){var copy=actions.Where(a=>a!=ActionKind.MaskWin).ToList();actions.Clear();return copy;}}
+        List<ActionKind> Taken(){lock(actions){var copy=actions.ToList();actions.Clear();return copy;}}
+        const ushort M=0x4d;
+        // Start menu / search opening on Win-up would take the foreground; best effort, the runner may have no shell.
+        string Foreground(){try{Native.GetWindowThreadProcessId(Native.GetForegroundWindow(),out uint pid);using var p=System.Diagnostics.Process.GetProcessById((int)pid);return p.ProcessName;}catch{return "";}}
+        bool StartOpen(){string f=Foreground();return f.Contains("StartMenu",StringComparison.OrdinalIgnoreCase)||f.Contains("SearchHost",StringComparison.OrdinalIgnoreCase)||f.Contains("ShellExperience",StringComparison.OrdinalIgnoreCase);}
 
-        // 1. Wispr's chord Ctrl+Win must reach everybody untouched: nothing swallowed, nothing injected, no action here.
+        // 1. Wispr's chord Ctrl+Win must reach everybody byte-identical: nothing swallowed, nothing injected, no action here, for as long as it is held.
         Taken();
-        var seen=Chord(probe,[Ctrl,Win],[Win,Ctrl],400);var acts=Taken();
-        Case("ctrl-win-passes-through-untouched",Same(seen,(Ctrl,true),(Win,true),(Win,false),(Ctrl,false))&&!seen.Any(s=>s.Ours)&&acts.Count==0&&!hook.Session,new{seen=seen.Count,injected=seen.Count(s=>s.Ours),actions=acts});
-        // 2. The old v0.1.1 session chord Ctrl+Win+Shift no longer does anything in this app and is not masked.
-        seen=Chord(probe,[Ctrl,Win,Shift],[Shift,Win,Ctrl]);acts=Taken();
-        Case("old-ctrl-win-shift-is-ignored",Same(seen,(Ctrl,true),(Win,true),(Shift,true),(Shift,false),(Win,false),(Ctrl,false))&&!seen.Any(s=>s.Ours)&&!acts.Contains(ActionKind.SessionToggle)&&!hook.Session,new{seen=seen.Count,injected=seen.Count(s=>s.Ours),actions=acts});
-        // 3. Wispr's command chord Ctrl+Win+Alt is foreign too.
-        seen=Chord(probe,[Ctrl,Win,Alt],[Alt,Win,Ctrl],300);acts=Taken();
-        Case("ctrl-win-alt-passes-through",Same(seen,(Ctrl,true),(Win,true),(Alt,true),(Alt,false),(Win,false),(Ctrl,false))&&!seen.Any(s=>s.Ours)&&acts.Count==0&&!hook.Session,new{seen=seen.Count,injected=seen.Count(s=>s.Ours),actions=acts});
-        // 4. The configured chord Alt+Win+Shift toggles the session, forwards every key and masks Start/menu exactly once.
-        seen=Chord(probe,[Alt,Win,Shift],[Shift,Win,Alt]);acts=Taken();
-        int masks=seen.Count(s=>s.Ours&&s.Vk==Dummy&&s.Down);
-        Case("alt-win-shift-toggles-session",Same(seen,(Alt,true),(Win,true),(Shift,true),(Shift,false),(Win,false),(Alt,false))&&masks==1&&acts.Contains(ActionKind.SessionToggle)&&hook.Session,new{seen=seen.Count,masks,actions=acts,session=hook.Session});
-        // 5. A second press switches it off again.
-        Chord(probe,[Alt,Win,Shift],[Shift,Win,Alt]);acts=Taken();
-        Case("alt-win-shift-toggles-back",acts.Contains(ActionKind.SessionToggle)&&!hook.Session,new{actions=acts,session=hook.Session});
-        // 6. Tray path: same effect without keys.
-        hook.SetSession(true);Thread.Sleep(300);acts=Taken();
-        Case("tray-start-session",acts.Contains(ActionKind.SessionToggle)&&hook.Session,new{actions=acts});
+        foreach(var order in new[]{new[]{Ctrl,Win},new[]{Win,Ctrl}})
+        {
+            var seen=Chord(probe,order,order.Reverse().ToArray(),600);var acts=Taken();
+            Case("ctrl-win-alone-passes-through-untouched",Same(seen,(order[0],true),(order[1],true),(order[1],false),(order[0],false))&&!seen.Any(s=>s.Ours)&&acts.Count==0&&!hook.Session,new{order=string.Join(",",order),seen=seen.Count,injected=seen.Count(s=>s.Ours),actions=acts});
+        }
+        // 2. Wispr's command chord Ctrl+Win+Alt is not ours either.
+        var wispr=Chord(probe,[Ctrl,Win,Alt],[Alt,Win,Ctrl],300);var wisprActs=Taken();
+        Case("ctrl-win-alt-passes-through",Same(wispr,(Ctrl,true),(Win,true),(Alt,true),(Alt,false),(Win,false),(Ctrl,false))&&!wispr.Any(s=>s.Ours)&&wisprActs.Count==0&&!hook.Session,new{seen=wispr.Count,injected=wispr.Count(s=>s.Ours),actions=wisprActs});
+        // 3. Ctrl+Win+Shift in every order: fires exactly once, forwards every key unchanged, injects the Start-menu mask once and only when the chord completes
+        //    (after the second key at the earliest), and Win-up opens nothing. A second press ends the session.
+        ushort[][] orders=[[Ctrl,Win,Shift],[Ctrl,Shift,Win],[Win,Ctrl,Shift],[Win,Shift,Ctrl],[Shift,Ctrl,Win],[Shift,Win,Ctrl]];
+        bool expectOn=true;
+        foreach(var order in orders)
+        foreach(var _ in new[]{0,1})
+        {
+            var seen=Chord(probe,order,order.Reverse().ToArray());var acts=Taken();
+            var want=order.Select(k=>(k,true)).Concat(order.Reverse().Select(k=>(k,false))).ToArray();
+            int maskDown=seen.Count(s=>s.Ours&&s.Vk==Dummy&&s.Down),firstOurs=seen.FindIndex(s=>s.Ours);
+            bool ok=Same(seen,want)&&seen.Count(s=>s.Ours)==2&&maskDown==1&&firstOurs>=2&&acts.Count(a=>a==ActionKind.SessionToggle)==1&&hook.Session==expectOn&&!StartOpen();
+            Case((expectOn?"ctrl-win-shift-starts-":"ctrl-win-shift-ends-")+string.Join("",order.Select(k=>k==Ctrl?"C":k==Win?"W":"S")),ok,new{seen=seen.Count,masks=maskDown,firstInjectedAt=firstOurs,actions=acts,session=hook.Session,foreground=Foreground()});
+            expectOn=!expectOn;
+        }
+        // 4. Alt+Win+Shift (dictation toggle) in two orders: first press starts, second ends, session untouched, one mask each.
+        foreach(var order in new[]{new[]{Alt,Win,Shift},new[]{Shift,Alt,Win}})
+        {
+            var seen=Chord(probe,order,order.Reverse().ToArray());var on=Taken();
+            int masks=seen.Count(s=>s.Ours&&s.Vk==Dummy&&s.Down);
+            Case("alt-win-shift-starts-dictation",Same(seen,order.Select(k=>(k,true)).Concat(order.Reverse().Select(k=>(k,false))).ToArray())&&masks==1&&on.Contains(ActionKind.DictationStart)&&!on.Contains(ActionKind.SessionToggle)&&hook.Dictating&&!hook.Session,new{seen=seen.Count,masks,actions=on});
+            Chord(probe,order,order.Reverse().ToArray());var off=Taken();
+            Case("alt-win-shift-ends-dictation",off.Contains(ActionKind.DictationStop)&&!hook.Dictating&&!off.Contains(ActionKind.SessionToggle),new{actions=off});
+        }
+        // 5. Alt+Win held: unchanged hold-to-dictate.
+        var hold=Chord(probe,[Alt,Win],[Win,Alt],500);var holdActs=Taken();
+        Case("alt-win-hold-dictates",holdActs.Contains(ActionKind.DictationStart)&&holdActs.Contains(ActionKind.DictationStop)&&!hook.Dictating&&hold.Count(s=>s.Ours&&s.Vk==Dummy&&s.Down)==1&&Same(hold,(Alt,true),(Win,true),(Win,false),(Alt,false)),new{actions=holdActs,masks=hold.Count(s=>s.Ours&&s.Vk==Dummy&&s.Down)});
+        // 6. Mute chord: only inside a session; the M is eaten there and passes through outside; it never toggles the session.
+        hook.SetSession(true);Thread.Sleep(300);Taken();
+        var mute=Chord(probe,[Ctrl,Win,Shift,M],[M,Shift,Win,Ctrl]);var muteActs=Taken();
+        Case("ctrl-win-shift-m-mutes-in-session",muteActs.Count(a=>a==ActionKind.MuteToggle)==1&&!muteActs.Contains(ActionKind.SessionToggle)&&hook.Session&&!mute.Any(s=>s.Vk==M&&!s.Ours),new{actions=muteActs,mReachedApps=mute.Any(s=>s.Vk==M&&!s.Ours),session=hook.Session});
+        hook.SetSession(false);Thread.Sleep(300);Taken();
+        var idle=Chord(probe,[Ctrl,Win,Shift,M],[M,Shift,Win,Ctrl]);var idleActs=Taken();
+        Case("ctrl-win-shift-m-ignored-outside-session",!idleActs.Contains(ActionKind.MuteToggle)&&!idleActs.Contains(ActionKind.SessionToggle)&&!hook.Session&&idle.Any(s=>s.Vk==M&&!s.Ours),new{actions=idleActs,mReachedApps=idle.Any(s=>s.Vk==M&&!s.Ours)});
+        // 7. Tray path: same effect without keys.
+        hook.SetSession(true);Thread.Sleep(300);var tray=Taken();
+        Case("tray-start-session",tray.Contains(ActionKind.SessionToggle)&&hook.Session,new{actions=tray});
         hook.SetSession(false);Thread.Sleep(300);Taken();
         Console.WriteLine(JsonSerializer.Serialize(new{test="hotkeys",status=failed?"failed":"passed",results}));
         return failed?1:0;

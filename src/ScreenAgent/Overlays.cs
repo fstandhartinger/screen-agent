@@ -46,7 +46,7 @@ internal sealed class StatusToast : Window
     public static System.Windows.Media.Color Colour(Level level)=>level switch
     {
         Level.Active=>System.Windows.Media.Color.FromRgb(61,220,132),Level.Busy=>System.Windows.Media.Color.FromRgb(77,163,255),
-        Level.Paused=>System.Windows.Media.Color.FromRgb(240,200,60),Level.Warn=>System.Windows.Media.Color.FromRgb(255,150,60),
+        Level.Paused=>System.Windows.Media.Color.FromRgb(240,200,60),Level.Muted=>System.Windows.Media.Color.FromRgb(235,64,64),Level.Warn=>System.Windows.Media.Color.FromRgb(255,150,60),
         _=>System.Windows.Media.Color.FromRgb(150,150,160)
     };
     public string Text=>label.Text;

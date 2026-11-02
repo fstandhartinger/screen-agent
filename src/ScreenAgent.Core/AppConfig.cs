@@ -15,6 +15,11 @@ public sealed class AppConfig
     // "session": small click-through indicator while a session runs, plus short notices.
     // "notices": only short notices; the tray icon alone shows the state.
     public string Indicator {get;init;}="session";
+    // Screen vision (Florian's spec): while a voice session runs, a downscaled JPEG goes to the Desk every IntervalMs when the picture changed.
+    // Blocked windows are painted black first, the Earnings app is never sent as an image. Images stay in memory.
+    public bool SendFrames {get;init;}=true;
+    // Client events (hotkeys, frame decisions, ids, lifecycle; no images or text) go to the Desk session trace.
+    public bool TraceUpload {get;init;}=true;
     // Florian's spec: Ctrl+Win+Shift (any order) starts and ends the voice session; Ctrl+Win alone stays untouched for Wispr Flow.
     // Dictation: hold Alt+Win, or press Alt+Win+Shift once to start and once to end. Mic mute and pause extend the session chord.
     public static Dictionary<string,string> DefaultHotkeys()=>new(){["session"]="Ctrl+Win+Shift",["dictation"]="Alt+Win",["dictationToggle"]="Alt+Win+Shift",["mute"]="Ctrl+Win+Shift+M",["handsFree"]="Alt+Win+Y",["draw"]="Caps",["pause"]="Ctrl+Win+Shift+P"};
@@ -42,7 +47,7 @@ public sealed class AppConfig
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,IdsOnlyDomains=IdsOnlyDomains,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
-        Indicator=Indicator,Hotkeys=keys,HotkeysMigrated=migrated
+        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,Hotkeys=keys,HotkeysMigrated=migrated
     };
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,IdsOnlyDomains=IdsOnlyDomains,ExtraTitlePatterns=BlockTitlePatterns};
 }
