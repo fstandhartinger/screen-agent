@@ -29,7 +29,7 @@ internal static class LiveSelftests
         var config=new AppConfig{DeskUrl=desk,VoiceProvider="xai"};
         using var client=new DeviceClient(config,null,Path.Combine(Path.GetTempPath(),"sa-e2e-device.bin"));
         client.Pair(new(j.RootElement.GetProperty("token").GetString()!,j.RootElement.GetProperty("deviceId").GetString()!,DeviceProtocol.Expiry(j.RootElement.GetProperty("expiresAt"))));
-        AgentBridge.AllowMicForTests=true;KeyboardHook.AcceptInjectedForTests=true;
+        AgentBridge.TestBrowserArgs=" "+Environment.GetEnvironmentVariable("SA_E2E_ARGS");AgentBridge.AllowMicForTests=true;KeyboardHook.AcceptInjectedForTests=true;
         var bridge=new AgentBridge(config,client);app.MainWindow=bridge;var toast=new StatusToast();
         using var hook=new KeyboardHook(new HotkeyBindings(config.Hotkeys));using var controller=new AppController(config,client,bridge,hook,toast);
         app.Startup+=async (_,_)=>
@@ -47,6 +47,8 @@ internal static class LiveSelftests
                 hook.SetSession(true);
                 for(int i=0;i<300&&!bridge.VoiceOn;i++)await Task.Delay(100);
                 report["voice"]=bridge.VoiceOn;Step($"voice {bridge.VoiceOn}");Shot("2-first-page");
+                await bridge.Eval("window.__e2e='?';navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{window.__e2e='mic ok '+s.getAudioTracks().map(t=>t.label).join(',');s.getTracks().forEach(t=>t.stop())},e=>{window.__e2e=e.name+': '+e.message})");
+                await Task.Delay(1500);Step("mic "+await bridge.Eval("window.__e2e"));
                 await Task.Delay(30_000);
                 // The screen changes while the session runs: the agent must get the new page within one interval.
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("msedge",$"--new-window --start-fullscreen {secondPage}"){UseShellExecute=true});

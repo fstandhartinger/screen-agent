@@ -25,7 +25,7 @@ jobs:
           E2E_DESK_URL: ${{ secrets.E2E_DESK_URL }}
         run: |
           $wav = (Resolve-Path testdata/e2e-questions.wav).Path
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=$wav%noloop --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --autoplay-policy=no-user-gesture-required"
+          $env:SA_E2E_ARGS = "--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=$wav%noloop --autoplay-policy=no-user-gesture-required"
           $p = Start-Process -FilePath ./publish/ScreenAgent.exe -ArgumentList '--selftest-live',$env:E2E_DESK_URL,'https://explainers.app.mintapis.com/p/agent-artifact-ids-1wfd2l8boy/','https://github.com/fstandhartinger/screen-agent' -PassThru -RedirectStandardOutput e2e.txt -RedirectStandardError e2e.err
           if (-not $p.WaitForExit(330000)) { Stop-Process $p -Force; Write-Host 'timed out after 330 s' }
           Get-Content e2e.txt; Get-Content e2e.err -ErrorAction SilentlyContinue | Select-Object -Last 20

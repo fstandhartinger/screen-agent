@@ -20,6 +20,7 @@ internal sealed class AgentBridge : Window
     bool requestedVoice;
     public bool VoiceOn {get;private set;}
     public static volatile bool AllowMicForTests;
+    public static string TestBrowserArgs="";
     readonly SemaphoreSlim muteGate=new(1,1);
     public bool AllowClose {get;set;}
     public string? SessionId {get;private set;}
@@ -70,7 +71,7 @@ internal sealed class AgentBridge : Window
         {
             string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","WebView2");
             // The page keeps the voice session alive while this window is hidden: no background throttling.
-            var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows");
+            var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"+TestBrowserArgs);
             InitStage="environment";
             var env=await CoreWebView2Environment.CreateAsync(null,profile,options);
             if(lifetime.IsCancellationRequested)return;
