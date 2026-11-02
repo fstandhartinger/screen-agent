@@ -236,6 +236,17 @@ internal static class MainAgentSelftests
         async Task<PromptResult?> RunAndProve(Scn s,IntPtr w,string tag,string? expectRoute,string draft="")
         {
             uint clip=Native.GetClipboardSequenceNumber();Shot(tag+"-before-run");
+            try
+            {
+                var boxEl=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,3000);
+                if(boxEl is not null)
+                {
+                    File.WriteAllText(Path.Combine(outDir,"box-before-"+tag+".txt"),MainAgentPrompt.DescribeDeep(boxEl)+"focus="+boxEl.Current.HasKeyboardFocus+"\n");
+                    var send=AutomationElement.FromHandle(w).FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,"Send message"));
+                    s.Facts["sendButtonEnabledBeforeRun"]=send?.Current.IsEnabled;
+                }
+            }
+            catch(Exception ex){Step("box probe failed: "+ex.Message);}
             var r=await new MainAgentPrompt(Names,log).Run(Prompt,CancellationToken.None);
             s.Facts["code"]=r.Code;s.Facts["landed"]=r.Landed;s.Facts["route"]=r.Route;s.Facts["chars"]=r.Chars;s.Facts["ms"]=r.Ms;s.Facts["windowsSeen"]=r.Windows;s.Facts["wsl"]=r.Wsl;
             Shot(tag+"-after-run");
