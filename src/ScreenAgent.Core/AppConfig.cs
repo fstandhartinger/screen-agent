@@ -15,9 +15,12 @@ public sealed class AppConfig
     // "session": small click-through indicator while a session runs, plus short notices.
     // "notices": only short notices; the tray icon alone shows the state.
     public string Indicator {get;init;}="session";
-    // Alt+Win family: Ctrl+Win belongs to Wispr Flow (and Windows itself), so it must stay untouched.
-    public static Dictionary<string,string> DefaultHotkeys()=>new(){["session"]="Alt+Win+Shift",["dictation"]="Alt+Win",["handsFree"]="Alt+Win+Y",["draw"]="Caps",["pause"]="Alt+Win+Shift+P"};
-    // Defaults written by v0.1.0/v0.1.1 into config.json. They collided with Wispr's Ctrl+Win chord.
+    // Florian's spec: Ctrl+Win+Shift (any order) starts and ends the voice session; Ctrl+Win alone stays untouched for Wispr Flow.
+    // Dictation: hold Alt+Win, or press Alt+Win+Shift once to start and once to end. Mic mute and pause extend the session chord.
+    public static Dictionary<string,string> DefaultHotkeys()=>new(){["session"]="Ctrl+Win+Shift",["dictation"]="Alt+Win",["dictationToggle"]="Alt+Win+Shift",["mute"]="Ctrl+Win+Shift+M",["handsFree"]="Alt+Win+Y",["draw"]="Caps",["pause"]="Ctrl+Win+Shift+P"};
+    // Defaults written by v0.1.2/v0.1.3 into config.json (session on Alt+Win+Shift, no Ctrl+Win+Shift).
+    public static Dictionary<string,string> V012Hotkeys()=>new(){["session"]="Alt+Win+Shift",["dictation"]="Alt+Win",["handsFree"]="Alt+Win+Y",["draw"]="Caps",["pause"]="Alt+Win+Shift+P"};
+    // Defaults written by v0.1.0/v0.1.1. Dictation on Ctrl+Win collided with Wispr's chord.
     public static Dictionary<string,string> LegacyHotkeys()=>new(){["session"]="Ctrl+Win+Shift",["dictation"]="Ctrl+Win",["handsFree"]="Ctrl+Win+Space",["draw"]="Caps",["pause"]="Ctrl+Win+Shift+P"};
     public Dictionary<string,string> Hotkeys {get;init;}=DefaultHotkeys();
     // Set by Parse when an untouched legacy default was replaced; the caller then rewrites config.json.
@@ -30,7 +33,8 @@ public sealed class AppConfig
         if(c.IntervalMs<1000||c.IntervalMs>60000)throw new InvalidDataException("Interval must be 1000..60000 ms");
         if(!new[]{"default","xai","openai","gemini","gemini-fast"}.Contains(c.VoiceProvider))throw new InvalidDataException("Unbekannter Sprach-Anbieter");
         if(c.Indicator is not ("session" or "notices"))throw new InvalidDataException("Indicator must be session or notices");
-        if(SameHotkeys(c.Hotkeys,LegacyHotkeys()))c=c.WithHotkeys(DefaultHotkeys(),true);
+        if(SameHotkeys(c.Hotkeys,LegacyHotkeys())||SameHotkeys(c.Hotkeys,V012Hotkeys()))c=c.WithHotkeys(DefaultHotkeys(),true);
+        else if(HotkeyBindings.Required.Any(k=>!c.Hotkeys.ContainsKey(k)))c=c.WithHotkeys(DefaultHotkeys().Where(d=>!c.Hotkeys.ContainsKey(d.Key)).Concat(c.Hotkeys).ToDictionary(x=>x.Key,x=>x.Value),false);
         _=new HotkeyBindings(c.Hotkeys);
         return c;
     }

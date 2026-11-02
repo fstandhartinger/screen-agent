@@ -1,19 +1,25 @@
 namespace ScreenAgent.Core;
-// Foreign = a modifier that is not part of our chord (for example Ctrl when the chord is Alt+Win): somebody else's shortcut.
-public enum Key { Ctrl, Win, Shift, Caps, P, Space, Other, Foreign }
-public enum ActionKind { SessionToggle, PauseToggle, DictationStart, DictationStop, DictationDiscard, DrawStart, DrawStop, CapsTap, MaskWin, DictationBind, DrawBind }
+public enum Key { Ctrl, Alt, Win, Shift, Caps, P, Space, Mute, Other }
+public enum ActionKind { SessionToggle, PauseToggle, MuteToggle, DictationStart, DictationStop, DictationDiscard, DrawStart, DrawStop, CapsTap, DictationBind, DrawBind }
 public readonly record struct KeyEvent(Key Key, bool Down, long Ms);
+// Default layout: Ctrl+Win+Shift session (any order, +P pause, +M mute), Alt+Win hold = dictate, Alt+Win+Shift = dictation on/off, Alt+Win+Y hands-free.
 public sealed class Hotkeys
 {
     readonly HashSet<Key> down = [];
+    readonly HotkeyLayout layout;
+    readonly ChordTracker chords;
     long? dictSince, capsSince;
-    bool cleanChord, dirtyChord, dictating, drawing, capsOwned, handsFree;
+    Chord armed;
+    bool dictating, drawing, capsOwned, handsFree, bound;
+    public Hotkeys(HotkeyLayout? layout=null){this.layout=layout??Default;chords=new(this.layout);}
+    public static readonly HotkeyLayout Default=new([Key.Ctrl,Key.Win,Key.Shift],[Key.Alt,Key.Win],[Key.Alt,Key.Win,Key.Shift],[Key.Ctrl,Key.Win,Key.Shift],[Key.Alt,Key.Win],[Key.Ctrl,Key.Win,Key.Shift]);
     public bool Session { get; private set; }
     public bool Paused { get; private set; }
     public bool Dictating => dictating;
     public bool Drawing => drawing;
     public bool SwallowCaps => capsOwned || Session;
-    public bool Masking => down.Contains(Key.Win) && down.Contains(Key.Ctrl);
+    // The mute key is eaten (down and up) only while it would act: a session is running and its chord is held.
+    public bool MuteLive => Session && !Paused;
     // Tray menu and tests flip the session without a chord; same effects as the chord's SessionToggle.
     public IReadOnlyList<ActionKind> SetSession(bool on)
     {
@@ -26,7 +32,7 @@ public sealed class Hotkeys
     public IReadOnlyList<ActionKind> SetPaused(bool on)
     {
         if(Paused==on)return [];
-        List<ActionKind> result=[ActionKind.PauseToggle];Paused=on;cleanChord=false;
+        List<ActionKind> result=[ActionKind.PauseToggle];Paused=on;armed=Chord.None;
         if(on)
         {
             if(dictating){dictating=false;handsFree=false;result.Add(ActionKind.DictationDiscard);}
@@ -37,7 +43,7 @@ public sealed class Hotkeys
     public IReadOnlyList<ActionKind> Tick(long ms)
     {
         List<ActionKind> result = [];
-        if (dictSince is long d && ms-d >= 250 && !dictating && !down.Contains(Key.Shift) && !dirtyChord)
+        if (dictSince is long d && ms-d >= 250 && !dictating && chords.Is(layout.Dictation) && !chords.Tainted && !Paused)
         { dictating = true; result.Add(ActionKind.DictationStart); }
         if (capsSince is long c && ms-c >= 200 && !drawing && Session && !Paused)
         { drawing = true; result.Add(ActionKind.DrawStart); }
@@ -47,48 +53,50 @@ public sealed class Hotkeys
     {
         // Resolve thresholds before key-up so 200/250 ms boundaries are exact.
         List<ActionKind> result = [..Tick(e.Ms)];
-        if (e.Down && !down.Add(e.Key)) return result; // auto repeat
-        if (!e.Down) down.Remove(e.Key);
-        bool ctrlWin = down.Contains(Key.Ctrl) && down.Contains(Key.Win);
-        bool three = ctrlWin && down.Contains(Key.Shift);
-        if(e.Down && (e.Key is Key.Other or Key.P or Key.Space or Key.Caps or Key.Foreign)) dirtyChord = true;
-        if (e.Down && e.Key == Key.P && three)
+        if (e.Key != Key.Other) // typed keys are never collapsed: each one must taint a chord in progress
         {
-            Paused = !Paused; cleanChord = false; result.Add(ActionKind.PauseToggle);
+            if (e.Down && !down.Add(e.Key)) return result; // auto repeat
+            if (!e.Down) down.Remove(e.Key);
+        }
+        var completed = chords.Feed(e.Key, e.Down);
+        if (e.Down && e.Key == Key.P && chords.Is(layout.Pause))
+        {
+            Paused = !Paused; armed = Chord.None; result.Add(ActionKind.PauseToggle);
             if(dictating) { dictating=false;handsFree=false; result.Add(ActionKind.DictationDiscard); }
             if(drawing) { drawing=false; result.Add(ActionKind.DrawStop); }
         }
-        if (e.Down && ctrlWin && (e.Key is Key.Ctrl or Key.Win)) result.Add(ActionKind.MaskWin);
-        if(e.Down&&e.Key==Key.Space&&ctrlWin&&!down.Contains(Key.Shift)&&!Paused)
+        if (e.Down && e.Key == Key.Mute && chords.Is(layout.Mute) && MuteLive) result.Add(ActionKind.MuteToggle);
+        if(e.Down&&e.Key==Key.Space&&chords.Is(layout.HandsFree)&&!Paused)
         {
             dictSince=null;handsFree=!handsFree;
             if(handsFree&&!dictating){dictating=true;result.Add(ActionKind.DictationBind);result.Add(ActionKind.DictationStart);}
             else if(!handsFree&&dictating){dictating=false;result.Add(ActionKind.DictationStop);}
         }
-        if (three)
+        switch (completed)
         {
-            if (!dirtyChord) cleanChord = true;
-            dictSince = null;
-            if(dictating) { dictating=false;handsFree=false; result.Add(ActionKind.DictationDiscard); }
+            case Chord.Dictation when !Paused && !chords.Tainted: dictSince = e.Ms; bound = true; result.Add(ActionKind.DictationBind); break;
+            case Chord.Session: dictSince = null; armed = Chord.Session; break;
+            case Chord.Toggle:
+                dictSince = null;
+                // Shift added to a running hold-dictation latches it instead of stopping it; the next press ends it.
+                if (dictating && !handsFree) handsFree = true; else if (!Paused) armed = Chord.Toggle;
+                break;
         }
-        else if(ctrlWin && !down.Contains(Key.Shift) && dictSince is null && !cleanChord && !dirtyChord && !Paused)
-            {dictSince = e.Ms;result.Add(ActionKind.DictationBind);}
-        if(!ctrlWin)
+        if (!e.Down && HotkeyLayout.IsMod(e.Key))
         {
-            dictSince=null;
-            if(dictating&&!handsFree) { dictating=false; result.Add(ActionKind.DictationStop); }
+            // The chord fires on its first release, so a fourth key (P, M) pressed while it is held can claim it instead.
+            if (armed != Chord.None && !chords.Tainted) result.AddRange(Fire(armed));
+            armed = Chord.None;
         }
-        if (!down.Contains(Key.Ctrl) && !down.Contains(Key.Win) && !down.Contains(Key.Shift))
+        if (chords.Tainted) armed = Chord.None;
+        if (chords.Mods.Count == 0) bound = false;
+        if (!chords.Is(layout.Dictation)) dictSince = null;
+        if (dictating && !handsFree && !chords.Is(layout.Dictation))
         {
-            if(cleanChord && !dirtyChord)
-            {
-                Session=!Session; Paused=false; result.Add(ActionKind.SessionToggle);
-                if(drawing) { drawing=false; result.Add(ActionKind.DrawStop); }
-            }
-            cleanChord=false; dirtyChord=false;
+            // Released a dictation key: transcribe. Another modifier joined (not the latch chord): throw it away.
+            dictating = false;
+            result.Add(chords.Mods.Count > layout.Dictation.Length && layout.Dictation.All(chords.Mods.Contains) ? ActionKind.DictationDiscard : ActionKind.DictationStop);
         }
-        // Another tool's modifier (Ctrl while our chord is Alt+Win, e.g. Wispr's Ctrl+Win+Alt) held: the chord is not ours.
-        if(down.Contains(Key.Foreign)) { dirtyChord = true; dictSince = null; }
         if(e.Key==Key.Caps)
         {
             if(e.Down && Session) { capsSince=e.Ms; capsOwned=true;result.Add(ActionKind.DrawBind); }
@@ -100,5 +108,19 @@ public sealed class Hotkeys
             }
         }
         return result;
+    }
+    IEnumerable<ActionKind> Fire(Chord chord)
+    {
+        if (chord == Chord.Session)
+        {
+            Session=!Session; Paused=false; yield return ActionKind.SessionToggle;
+            if(drawing) { drawing=false; yield return ActionKind.DrawStop; }
+        }
+        else if (chord == Chord.Toggle && !Paused)
+        {
+            handsFree = !dictating;
+            if (!dictating) { dictating = true; if (!bound) yield return ActionKind.DictationBind; bound = true; yield return ActionKind.DictationStart; }
+            else { dictating = false; yield return ActionKind.DictationStop; }
+        }
     }
 }

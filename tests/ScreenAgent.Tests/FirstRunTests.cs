@@ -9,8 +9,8 @@ public class FirstRunTests
     // Runs raw key events through the same two layers as the hook: HotkeyBindings (roles, mask) then the Hotkeys state machine.
     sealed class Rig
     {
-        public readonly HotkeyBindings Bindings;public readonly Hotkeys State=new();public readonly List<ActionKind> Actions=[];public int Masks;long t;
-        public Rig(Dictionary<string,string>? keys=null)=>Bindings=new HotkeyBindings(keys??AppConfig.DefaultHotkeys());
+        public readonly HotkeyBindings Bindings;public readonly Hotkeys State;public readonly List<ActionKind> Actions=[];public int Masks;long t;
+        public Rig(Dictionary<string,string>? keys=null){Bindings=new HotkeyBindings(keys??AppConfig.DefaultHotkeys());State=new(Bindings.Layout);}
         public void Key(int vk,bool down)
         {
             bool transition=Bindings.Feed(vk,down,out var key);
@@ -21,67 +21,65 @@ public class FirstRunTests
         public void Up(params int[] vks){foreach(var vk in vks)Key(vk,false);}
     }
 
-    // 4 + 5: Ctrl+Win+Shift did nothing; the real clash was that Ctrl+Win belongs to Wispr.
-    [Fact]public void DefaultsDoNotUseCtrlWin()
+    // Florian 2 Nov: Ctrl+Win+Shift is the session chord again (v0.1.2 had moved it to Alt+Win+Shift); Ctrl+Win alone stays Wispr's.
+    [Fact]public void DefaultsAreFloriansSpec()
     {
         var keys=AppConfig.DefaultHotkeys();
-        Assert.All(keys.Where(k=>k.Key!="draw"),k=>Assert.False(k.Value.Contains("Ctrl"),k.Key+"="+k.Value));
-        Assert.False(new HotkeyBindings(keys).CollidesWithWispr);
-        Assert.True(AppConfig.Parse("{}").Hotkeys["session"]=="Alt+Win+Shift");
+        Assert.Equal("Ctrl+Win+Shift",keys["session"]);Assert.Equal("Alt+Win",keys["dictation"]);Assert.Equal("Alt+Win+Shift",keys["dictationToggle"]);
+        Assert.Equal("Ctrl+Win+Shift+M",keys["mute"]);Assert.False(new HotkeyBindings(keys).CollidesWithWispr);
+        Assert.Equal("Ctrl+Win+Shift",AppConfig.Parse("{}").Hotkeys["session"]);
     }
     [Fact]public void CtrlWinIsAlwaysUntouched()
     {
         var rig=new Rig();
-        rig.Down(Ctrl,Win);rig.Actions.AddRange(rig.State.Tick(5000));rig.Up(Win,Ctrl);
+        rig.Down(Ctrl,Win);rig.Actions.AddRange(rig.State.Tick(5000));Assert.Equal(0,rig.Masks);rig.Up(Win,Ctrl);
         Assert.Empty(rig.Actions);Assert.Equal(0,rig.Masks);Assert.False(rig.State.Session);Assert.False(rig.State.Dictating);
     }
-    [Fact]public void OldSessionChordDoesNothingAndIsNotMasked()
+    [Fact]public void CtrlWinThenShiftCompletesTheChordAndMasksOnlyThen()
     {
         var rig=new Rig();
-        rig.Down(Ctrl,Win,Shift);rig.Up(Shift,Win,Ctrl);
-        Assert.DoesNotContain(ActionKind.SessionToggle,rig.Actions);Assert.Equal(0,rig.Masks);Assert.False(rig.State.Session);
-    }
-    [Theory][InlineData(Ctrl,Win,Alt)][InlineData(Win,Ctrl,Alt)][InlineData(Alt,Ctrl,Win)]
-    public void WisprCommandChordIsForeign(int a,int b,int c)
-    {
-        var rig=new Rig();
-        rig.Down(a,b,c);rig.Actions.AddRange(rig.State.Tick(5000));rig.Up(c,b,a);
-        Assert.Equal(0,rig.Masks);Assert.False(rig.State.Session);Assert.DoesNotContain(ActionKind.DictationStart,rig.Actions);
-    }
-    [Fact]public void ConfiguredChordTogglesSessionAndMasksOnce()
-    {
-        var rig=new Rig();
-        rig.Down(Alt,Win,Shift);rig.Up(Shift,Win,Alt);
+        rig.Down(Ctrl);Assert.False(rig.Bindings.MaskNow);rig.Down(Win);Assert.False(rig.Bindings.MaskNow);
+        rig.Down(Shift);Assert.True(rig.Bindings.MaskNow);Assert.Equal(1,rig.Masks);
+        rig.Up(Shift,Win,Ctrl);
         Assert.Single(rig.Actions,a=>a==ActionKind.SessionToggle);Assert.True(rig.State.Session);Assert.Equal(1,rig.Masks);
-        rig.Down(Win,Shift,Alt);rig.Up(Alt,Shift,Win);
-        Assert.False(rig.State.Session);Assert.Equal(2,rig.Masks);
+    }
+    [Theory][InlineData(Ctrl,Win,Alt)][InlineData(Win,Ctrl,Alt)]
+    public void WisprCommandChordIsNotOurs(int a,int b,int c)
+    {
+        var rig=new Rig();
+        rig.Down(a,b);Assert.Equal(0,rig.Masks);rig.Down(c);rig.Actions.AddRange(rig.State.Tick(5000));rig.Up(c,b,a);
+        Assert.Equal(0,rig.Masks);Assert.False(rig.State.Session);Assert.DoesNotContain(ActionKind.DictationStart,rig.Actions);
     }
     [Fact]public void ChordWithAnotherKeyDoesNotToggle()
     {
         var rig=new Rig();
-        rig.Down(Alt,Win,Shift);rig.Key('R',true);rig.Key('R',false);rig.Up(Shift,Win,Alt);
+        rig.Down(Ctrl,Win,Shift);rig.Key('R',true);rig.Key('R',false);rig.Up(Shift,Win,Ctrl);
         Assert.False(rig.State.Session);
     }
     [Fact]public void OnlyAChordBelongingToUsIsMasked()
     {
         var rig=new Rig();
         rig.Down(Alt);Assert.False(rig.Bindings.MaskNow);
-        rig.Down(Win);Assert.True(rig.Bindings.MaskNow);
-        rig.Down(Shift);Assert.False(rig.Bindings.MaskNow);
-        rig.Key(Win,true);Assert.False(rig.Bindings.MaskNow);   // auto repeat
+        rig.Down(Win);Assert.True(rig.Bindings.MaskNow);          // Alt+Win hold
+        rig.Down(Shift);Assert.False(rig.Bindings.MaskNow);       // Alt+Win+Shift: already masked in this press
+        rig.Key(Win,true);Assert.False(rig.Bindings.MaskNow);     // auto repeat
     }
-    [Fact]public void ForeignModifierIsNotOurRole()
+    [Fact]public void ReleasedKeyCannotRecompleteAChord()
+    {
+        var rig=new Rig();
+        rig.Down(Ctrl,Win,Shift);rig.Up(Shift);rig.Down(Shift);
+        Assert.Equal(1,rig.Masks);rig.Up(Shift,Win,Ctrl);Assert.Single(rig.Actions,a=>a==ActionKind.SessionToggle);
+    }
+    [Fact]public void RolesAreOnePerPhysicalModifier()
     {
         var b=new HotkeyBindings(AppConfig.DefaultHotkeys());
-        Assert.Equal(Key.Foreign,b.Role(Ctrl));Assert.Equal(Key.Ctrl,b.Role(Alt));Assert.Equal(Key.Win,b.Role(Win));
-        b.Feed(Ctrl,true,out _);Assert.True(b.ForeignModifierHeld);
+        Assert.Equal(Key.Ctrl,b.Role(Ctrl));Assert.Equal(Key.Alt,b.Role(Alt));Assert.Equal(Key.Win,b.Role(Win));Assert.Equal(Key.Mute,b.Role('M'));Assert.Equal(Key.P,b.Role('P'));
     }
     [Fact]public void SettingsCanStillChooseCtrlWinButAreWarned()
     {
-        var keys=AppConfig.LegacyHotkeys();var b=new HotkeyBindings(keys);
-        Assert.True(b.CollidesWithWispr);
-        keys["dictation"]="Alt+Win";keys["session"]="Alt+Win+Shift";keys["handsFree"]="Alt+Win+F8";keys["pause"]="Alt+Win+Shift+Q";
-        Assert.False(new HotkeyBindings(keys).CollidesWithWispr);
+        var keys=AppConfig.DefaultHotkeys();keys["dictation"]="Ctrl+Win";keys["dictationToggle"]="Ctrl+Win+Alt";
+        Assert.True(new HotkeyBindings(keys).CollidesWithWispr);
+        Assert.False(new HotkeyBindings(AppConfig.DefaultHotkeys()).CollidesWithWispr);
     }
     [Fact]public void TrayCanStartAndStopSessionWithoutKeys()
     {
@@ -106,13 +104,13 @@ public class FirstRunTests
         var released=rig.Bindings.Resync(vk=>vk!=Win,Alt);                    // Windows says Win is no longer down
         foreach(var (_,role) in released)rig.Actions.AddRange(rig.State.Feed(new(role,false,50)));
         rig.Down(Alt);rig.Actions.AddRange(rig.State.Tick(5000));
-        Assert.Single(released);Assert.DoesNotContain(ActionKind.DictationStart,rig.Actions);Assert.False(rig.Bindings.CtrlWin);
+        Assert.Single(released);Assert.DoesNotContain(ActionKind.DictationStart,rig.Actions);Assert.False(rig.Bindings.Is(Hotkeys.Default.Dictation));
     }
     [Fact]public void ResyncKeepsKeysWindowsStillSeesDown()
     {
         var b=new HotkeyBindings(AppConfig.DefaultHotkeys());
         b.Feed(Alt,true,out _);b.Feed(Win,true,out _);
-        Assert.Empty(b.Resync(_=>true,Shift));Assert.True(b.CtrlWin);
+        Assert.Empty(b.Resync(_=>true,Shift));Assert.True(b.Is(Hotkeys.Default.Dictation));
     }
     [Fact]public void UnansweredStopIsNotRetriedForever()
     {
@@ -126,14 +124,20 @@ public class FirstRunTests
         }
         Assert.Equal(VoiceSync.MaxStopTries,stops);Assert.False(v.Failed);
     }
-    [Theory][InlineData(Ctrl,Win,Alt)][InlineData(Win,Ctrl,Alt)][InlineData(Ctrl,Alt,Win)][InlineData(Win,Alt,Ctrl)][InlineData(Alt,Ctrl,Win)]
-    public void CtrlChordsNeverGetTheMaskExceptWhenCtrlComesLast(int a,int b,int c)
+    // Wispr's chord starts with Ctrl+Win, and its command chord adds Alt: no mask while Ctrl+Win is the pair held.
+    [Theory][InlineData(Ctrl,Win,Alt)][InlineData(Win,Ctrl,Alt)][InlineData(Ctrl,Alt,Win)][InlineData(Alt,Ctrl,Win)]
+    public void CtrlChordsOtherThanOursNeverGetTheMask(int a,int b,int c)
     {
         var rig=new Rig();
         rig.Down(a,b,c);
-        // Wispr's chord starts with Ctrl+Win. Once Ctrl is down, our mask must not be injected. Only when Alt and Win are both
-        // down BEFORE Ctrl arrives does one mask go out (the chord looked like ours at that moment); documented in the README.
-        Assert.Equal(a==Alt&&b==Win||a==Win&&b==Alt?1:0,rig.Masks);
+        Assert.Equal(0,rig.Masks);
+    }
+    [Theory][InlineData(Win,Alt,Ctrl)][InlineData(Alt,Win,Ctrl)]
+    public void AltWinThenCtrlMaskedOnceAtAltWin(int a,int b,int c)
+    {
+        var rig=new Rig();
+        rig.Down(a,b,c);
+        Assert.Equal(1,rig.Masks);   // Alt+Win hold looked like ours when it completed; documented in the README
     }
 
     // Config written by v0.1.1 still holds the Ctrl+Win defaults: migrate them, keep real customisations.
@@ -141,16 +145,21 @@ public class FirstRunTests
     {
         string old=JsonSerializer.Serialize(new{DeskUrl="https://desk.app.mintapis.com",Hotkeys=AppConfig.LegacyHotkeys()});
         var c=AppConfig.Parse(old);
-        Assert.True(c.HotkeysMigrated);Assert.Equal("Alt+Win+Shift",c.Hotkeys["session"]);Assert.Equal("Alt+Win",c.Hotkeys["dictation"]);
+        Assert.True(c.HotkeysMigrated);Assert.Equal("Ctrl+Win+Shift",c.Hotkeys["session"]);Assert.Equal("Alt+Win",c.Hotkeys["dictation"]);Assert.Equal("Alt+Win+Shift",c.Hotkeys["dictationToggle"]);Assert.Equal("Ctrl+Win+Shift+M",c.Hotkeys["mute"]);
         Assert.Equal("https://desk.app.mintapis.com",c.DeskUrl);
         Assert.False(AppConfig.Parse(JsonSerializer.Serialize(c)).HotkeysMigrated);
         Assert.DoesNotContain("Migrated",JsonSerializer.Serialize(c));
     }
-    [Fact]public void CustomisedHotkeysAreKept()
+    [Fact]public void V012DefaultsAreMigratedToTheSpec()
     {
-        var keys=AppConfig.LegacyHotkeys();keys["draw"]="F9";
+        var c=AppConfig.Parse(JsonSerializer.Serialize(new{Hotkeys=AppConfig.V012Hotkeys()}));
+        Assert.True(c.HotkeysMigrated);Assert.Equal("Ctrl+Win+Shift",c.Hotkeys["session"]);Assert.Equal("Ctrl+Win+Shift+P",c.Hotkeys["pause"]);
+    }
+    [Fact]public void CustomisedHotkeysAreKeptAndMissingKeysFilled()
+    {
+        var keys=AppConfig.V012Hotkeys();keys["draw"]="F9";keys["session"]="Ctrl+Alt+Shift";
         var c=AppConfig.Parse(JsonSerializer.Serialize(new{Hotkeys=keys}));
-        Assert.False(c.HotkeysMigrated);Assert.Equal("Ctrl+Win+Shift",c.Hotkeys["session"]);Assert.Equal("F9",c.Hotkeys["draw"]);
+        Assert.False(c.HotkeysMigrated);Assert.Equal("Ctrl+Alt+Shift",c.Hotkeys["session"]);Assert.Equal("F9",c.Hotkeys["draw"]);Assert.Equal("Ctrl+Win+Shift+M",c.Hotkeys["mute"]);
     }
     [Fact]public void IndicatorOptionIsValidated()
     {
@@ -202,11 +211,11 @@ public class FirstRunTests
 
     // 2: the user always learns what is wrong and what to click; the hotkey answer is never hidden by a stale warning.
     static StatusInputs Inputs(bool paired=true,bool loggedIn=true,bool session=false,bool paused=false,bool voiceFailed=false,bool unmute=false,bool reachable=true,bool hook=true,bool privacy=false,bool dictating=false,bool drawing=false,int ids=0)
-        =>new(hook,paired,loggedIn,session,paused,voiceFailed,unmute,reachable,privacy,dictating,drawing,ids,"Alt+Win+Shift");
+        =>new(hook,paired,loggedIn,session,paused,voiceFailed,unmute,reachable,privacy,dictating,drawing,ids,"Ctrl+Win+Shift");
     [Fact]public void ReadyStatusNamesTheHotkeyAndStaysOffScreen()
     {
         var s=StatusLine.Compute(Inputs());
-        Assert.Equal(Level.Idle,s.Level);Assert.False(s.ShowToast);Assert.Contains("Alt+Win+Shift",s.Text);
+        Assert.Equal(Level.Idle,s.Level);Assert.False(s.ShowToast);Assert.Contains("Ctrl+Win+Shift",s.Text);
     }
     [Fact]public void NotPairedSaysWhatToDo()
     {

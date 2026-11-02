@@ -53,30 +53,32 @@ public class AppTests
         Assert.DoesNotContain("local-only",JsonSerializer.Serialize(DevicePayloads.Screen([],"notepad",1)));
     }
     [Theory][InlineData("{\"deskUrl\":\"http://example.test\"}")][InlineData("{\"deskUrl\":\"https://example.test/private\"}")]
-    [InlineData("{\"intervalMs\":10}")][InlineData("{\"hotkeys\":{}}")]public void BadConfigFailsClosed(string json)=>Assert.Throws<InvalidDataException>(()=>AppConfig.Parse(json));
+    [InlineData("{\"intervalMs\":10}")][InlineData("{\"hotkeys\":{\"session\":\"Ctrl+Win\"}}")]public void BadConfigFailsClosed(string json)=>Assert.Throws<InvalidDataException>(()=>AppConfig.Parse(json));
     [Fact]public void HandsFreeSurvivesModifierReleaseAndStopsAtSecondToggle()
     {
-        var h=new Hotkeys();h.Feed(new(Key.Ctrl,true,0));h.Feed(new(Key.Win,true,10));
+        var h=new Hotkeys();h.Feed(new(Key.Alt,true,0));h.Feed(new(Key.Win,true,10));
         Assert.Contains(ActionKind.DictationStart,h.Feed(new(Key.Space,true,20)));
-        h.Feed(new(Key.Space,false,30));h.Feed(new(Key.Win,false,40));h.Feed(new(Key.Ctrl,false,50));Assert.True(h.Dictating);
-        h.Feed(new(Key.Win,true,100));h.Feed(new(Key.Ctrl,true,110));
+        h.Feed(new(Key.Space,false,30));h.Feed(new(Key.Win,false,40));h.Feed(new(Key.Alt,false,50));Assert.True(h.Dictating);
+        h.Feed(new(Key.Win,true,100));h.Feed(new(Key.Alt,true,110));
         Assert.Contains(ActionKind.DictationStop,h.Feed(new(Key.Space,true,120)));Assert.False(h.Dictating);
     }
     [Fact]public void BindAtChordDownBeforeThreshold()
     {
-        var h=new Hotkeys();h.Feed(new(Key.Ctrl,true,0));var actions=h.Feed(new(Key.Win,true,10));
+        var h=new Hotkeys();h.Feed(new(Key.Alt,true,0));var actions=h.Feed(new(Key.Win,true,10));
         Assert.Contains(ActionKind.DictationBind,actions);Assert.DoesNotContain(ActionKind.DictationStart,actions);
     }
     [Fact]public void ConfigurableChordAndLeftRightModifiers()
     {
-        var keys=new AppConfig().Hotkeys;keys["dictation"]="Ctrl+Alt";keys["session"]="Ctrl+Alt+Shift";keys["handsFree"]="Ctrl+Alt+F8";keys["pause"]="Ctrl+Alt+Shift+Q";keys["draw"]="F9";
+        var keys=new AppConfig().Hotkeys;keys["dictation"]="Ctrl+Alt";keys["session"]="Ctrl+Alt+Shift";keys["dictationToggle"]="Ctrl+Alt+Win";keys["handsFree"]="Ctrl+Alt+F8";keys["pause"]="Ctrl+Alt+Shift+Q";keys["mute"]="Ctrl+Alt+Shift+F7";keys["draw"]="F9";
         var map=new HotkeyBindings(keys);
-        Assert.Equal(Key.Caps,map.Role(0x78));Assert.Equal(Key.Space,map.Role(0x77));Assert.Equal(Key.P,map.Role(0x51));
+        Assert.Equal(Key.Caps,map.Role(0x78));Assert.Equal(Key.Space,map.Role(0x77));Assert.Equal(Key.P,map.Role(0x51));Assert.Equal(Key.Mute,map.Role(0x76));
         Assert.True(map.Feed(0xa2,true,out var key));Assert.Equal(Key.Ctrl,key);
         Assert.False(map.Feed(0xa3,true,out _));Assert.False(map.Feed(0xa2,false,out _));
-        Assert.True(map.Feed(0xa4,true,out key));Assert.Equal(Key.Win,key);Assert.True(map.CtrlWin);Assert.True(map.MaskNow);
-        Assert.True(map.Feed(0xa3,false,out _));Assert.False(map.CtrlWin);
+        Assert.True(map.Feed(0xa4,true,out key));Assert.Equal(Key.Alt,key);Assert.True(map.Is([Key.Ctrl,Key.Alt]));Assert.True(map.MaskNow);
+        Assert.True(map.Feed(0xa3,false,out _));Assert.False(map.Is([Key.Ctrl,Key.Alt]));
     }
+    [Theory][InlineData("session","Ctrl+Win")][InlineData("session","Ctrl+Win+Shift+X")][InlineData("dictation","Alt+Shift")][InlineData("dictationToggle","Ctrl+Win+Shift")][InlineData("mute","Ctrl+Win+Shift+Caps+X")][InlineData("mute","Ctrl+Win+Shift+P")][InlineData("pause","Ctrl+Win+Shift")]
+    public void BadHotkeysFailClosed(string name,string value){var keys=AppConfig.DefaultHotkeys();keys[name]=value;Assert.Throws<InvalidDataException>(()=>new HotkeyBindings(keys));}
     [Fact]public void WireUsesBareHexAndShortBoundingKeys()
     {
         Assert.Equal(new[]{"123abc","abcdef"},DevicePayloads.Ids(["a#123abc","ABCDEF","abcdef","unknown"]));
