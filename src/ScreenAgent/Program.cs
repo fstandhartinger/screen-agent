@@ -38,6 +38,7 @@ internal static class Program
             if(args.FirstOrDefault()=="--selftest-canvas-panel")return PanelSelftests.Run();
             if(args.FirstOrDefault()=="--selftest-prompt-channel")return ChannelSelftest.Run();
             if(args.FirstOrDefault()=="--selftest-main-agent")return MainAgentSelftests.Run(args.Skip(1).ToArray());
+            if(args.FirstOrDefault()=="--selftest-live-actions")return LiveSelftests.Actions(args[1],args[2],args[3],args[4]);
             if(args.FirstOrDefault()=="--selftest-live")return LiveSelftests.Run(args[1],args[2],args[3]);
             string sid=System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value??"";
             using var instance=new Mutex(true,"Local\\ScreenAgent-"+sid,out bool first);

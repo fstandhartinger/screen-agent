@@ -51,6 +51,7 @@ internal sealed class AppController : IDisposable
     readonly MainAgentPrompt prompts;
     readonly PromptChannel promptChannel;
     CanvasPanel? canvas;
+    internal CanvasPanel? CanvasForTests=>canvas;
     bool canvasClosed,canvasNoted;
     bool micMuted,manualSession,prevVoice,prevActive;
     long frameBackoffUntil,mutePollAt;

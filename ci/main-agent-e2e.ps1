@@ -52,6 +52,7 @@ Write-Host 'Installing anthropic.claude-code from the marketplace'
 & $cli --version 2>&1 | Tee-Object (Join-Path $Out 'vscode-version.txt')
 & $cli --list-extensions --show-versions 2>&1 | Tee-Object (Join-Path $Out 'extensions.txt')
 if (-not (Select-String -Quiet -Path (Join-Path $Out 'extensions.txt') -Pattern 'anthropic.claude-code@')) { throw 'Claude Code extension is not installed' }
+if ($env:SA_E2E_PREPARE_ONLY) { exit 0 }
 $env:ANTHROPIC_API_KEY = 'not-a-real-key'
 if ($Only) { $env:SA_E2E_ONLY = $Only }
 . ./ci/invoke-sa.ps1
