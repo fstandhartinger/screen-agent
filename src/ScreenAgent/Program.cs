@@ -24,27 +24,45 @@ internal static class Program
             }
             if(args.FirstOrDefault()=="--selftest-inject")return InjectTest();
             if(args.FirstOrDefault()=="--selftest-ui")return UiTest();
-            using var instance=new Mutex(true,"Local\\ScreenAgent-"+System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value,out bool first);
-            if(!first)return 0;
+            if(args.FirstOrDefault()=="--selftest-hotkeys")return Selftests.Hotkeys();
+            if(args.FirstOrDefault()=="--selftest-windows")return Selftests.Windows();
+            string sid=System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value??"";
+            using var instance=new Mutex(true,"Local\\ScreenAgent-"+sid,out bool first);
+            string showName="Local\\ScreenAgent-Show-"+sid;
+            if(!first)
+            {
+                // A second start (double click on the exe) is a request to see the app: ask the running one to open the Desk.
+                Native.AllowSetForegroundWindow(-1); // let the running instance bring its window to the front for this click
+                try{using var running=EventWaitHandle.OpenExisting(showName);running.Set();}catch{ /* the first instance is still starting */ }
+                return 0;
+            }
+            using var showRequest=new EventWaitHandle(false,EventResetMode.AutoReset,showName);
             var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};
             var config=ScreenConfig.Load();using var client=new DeviceClient(config);
-            var bridge=new AgentBridge(config,client);app.MainWindow=bridge;var pill=new Pill();
-            hook=new KeyboardHook(new HotkeyBindings(config.Hotkeys));using var controller=new AppController(config,client,bridge,hook,pill);
-            var pause=new PauseControl(()=>controller.Pause());
+            var bridge=new AgentBridge(config,client);app.MainWindow=bridge;var toast=new StatusToast();
+            hook=new KeyboardHook(new HotkeyBindings(config.Hotkeys));using var controller=new AppController(config,client,bridge,hook,toast);
             app.DispatcherUnhandledException+=(_,e)=>{hook.Dispose();e.Handled=false;};
-            bridge.Closing+=(_,e)=>{if(!bridge.AllowClose){e.Cancel=true;bridge.Hide();}};
-            bridge.StateChanged+=(_,_)=>{if(bridge.WindowState==WindowState.Minimized){bridge.Hide();bridge.WindowState=WindowState.Normal;}};
-            app.Exit+=(_,_)=>{hook.Dispose();pill.Close();pause.Close();};
-            pill.Show();pause.Show();app.Run(bridge);return 0;
+            app.Exit+=(_,_)=>{hook.Dispose();toast.Close();};
+            new Thread(()=>{while(showRequest.WaitOne())bridge.Dispatcher.BeginInvoke(new System.Action(bridge.ShowDesk));}){IsBackground=true,Name="ScreenAgent show request"}.Start();
+            bridge.StartHidden();app.Run();return 0;
         }
-        catch(Exception ex){Console.WriteLine(JsonSerializer.Serialize(new{error=ex.ToString()}));return 1;}
+        catch(Exception ex)
+        {
+            if(args.FirstOrDefault()?.StartsWith("--selftest")==true){Console.WriteLine(JsonSerializer.Serialize(new{error=ex.ToString()}));return 1;}
+            // A GUI-subsystem exe has no console: say what is wrong where the user can see it, and keep a log.
+            string log=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","startup-error.log");
+            try{Directory.CreateDirectory(Path.GetDirectoryName(log)!);File.WriteAllText(log,DateTime.Now.ToString("s")+"\r\n"+ex);}catch{ /* the box below still tells */ }
+            string what=ex is InvalidDataException?"Die Einstellungen in config.json sind ungültig (%APPDATA%\\ScreenAgent\\config.json):\r\n\r\n"+ex.Message:ex.Message;
+            Native.MessageBox(IntPtr.Zero,"Screen Agent konnte nicht starten.\r\n\r\n"+what+"\r\n\r\nDetails: "+log,"Screen Agent",0x10|0x10000|0x40000);
+            return 1;
+        }
         finally{hook?.Dispose();}
     }
     static int UiTest()
     {
-        var app=new Application();var pill=new Pill();pill.Show();var h=new System.Windows.Interop.WindowInteropHelper(pill).Handle;
+        var app=new Application();var toast=new StatusToast();toast.Present("Selftest",Level.Active);var h=new System.Windows.Interop.WindowInteropHelper(toast).Handle;
         bool affinity=Native.SetWindowDisplayAffinity(h,0x11);
-        pill.Close();Console.WriteLine(JsonSerializer.Serialize(new{test="overlay",excludeFromCapture=affinity}));return affinity?0:1;
+        toast.Close();Console.WriteLine(JsonSerializer.Serialize(new{test="overlay",excludeFromCapture=affinity}));return affinity?0:1;
     }
     static int InjectTest()
     {

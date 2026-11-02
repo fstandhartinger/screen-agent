@@ -37,9 +37,24 @@ internal static class Native
     [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW")] internal static extern IntPtr SetWindowLongPtr(IntPtr h,int index,IntPtr val);
     [DllImport("user32.dll",SetLastError=true)] internal static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
     [DllImport("user32.dll")] internal static extern bool CloseDesktop(IntPtr h);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode,EntryPoint="MessageBoxW")] internal static extern int MessageBox(IntPtr owner,string text,string caption,uint type);
+    [DllImport("user32.dll")] internal static extern bool AllowSetForegroundWindow(int pid);
+    [DllImport("user32.dll")] internal static extern bool GetWindowDisplayAffinity(IntPtr h,out uint affinity);
+    [DllImport("user32.dll")] internal static extern IntPtr MonitorFromPoint(Point p,uint flags);
+    [DllImport("shcore.dll")] internal static extern int GetDpiForMonitor(IntPtr monitor,int type,out uint x,out uint y);
+    // Scale factor (1.0 = 96 dpi) of the monitor under a device-pixel point; 1.0 if Windows cannot say.
+    public static double ScaleAt(int x,int y)
+    {
+        try{var m=MonitorFromPoint(new Point{X=x,Y=y},2);return m!=IntPtr.Zero&&GetDpiForMonitor(m,0,out uint dx,out _)==0&&dx>0?dx/96.0:1.0;}
+        catch(Exception){return 1.0;}
+    }
     public static void Send(params Input[] inputs)
     { if(SendInput((uint)inputs.Length,inputs,Marshal.SizeOf<Input>())!=inputs.Length) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"SendInput refused"); }
-    public static Input Key(ushort key,bool up=false,ushort scan=0,bool unicode=false) => new(){type=1,u=new(){keyboard=new(){vk=key,scan=scan,flags=(up?2u:0u)|(unicode?4u:0u)}}};
+    // dwExtraInfo tag on every key we inject for ourselves, so the hook can tell them from other tools' keys.
+    public static readonly UIntPtr Marker=(UIntPtr)0x5341;
+    public static Input Key(ushort key,bool up=false,ushort scan=0,bool unicode=false,UIntPtr extra=default) => new(){type=1,u=new(){keyboard=new(){vk=key,scan=scan,flags=(up?2u:0u)|(unicode?4u:0u),extra=extra}}};
+    // Unassigned virtual key: cancels "Win alone opens Start" and "Alt alone focuses the menu bar" for the chord in progress.
+    public static void Mask()=>SendInput(2,new[]{Key(0xe8,false,0,false,Marker),Key(0xe8,true,0,false,Marker)},Marshal.SizeOf<Input>());
     public static void Tap(ushort vk)=>Send(Key(vk),Key(vk,true));
     public static bool Caps => (GetKeyState(0x14)&1)!=0;
     public static void RestoreCaps(bool baseline) { if(Caps!=baseline) Tap(0x14); }

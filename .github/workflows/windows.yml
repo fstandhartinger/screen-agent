@@ -1,7 +1,8 @@
 name: Windows spike
 on:
   push:
-    branches: [spike, app]
+    branches: [spike, app, main]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -68,6 +69,30 @@ jobs:
           . ./ci/invoke-sa.ps1
           Invoke-SA --selftest-ui | Tee-Object artifacts/overlay.json
           if ($LASTEXITCODE -ne 0) { throw 'Overlay selftest failed' }
+      - name: No console window (GUI subsystem)
+        shell: pwsh
+        run: |
+          $fs = [IO.File]::OpenRead((Resolve-Path publish/ScreenAgent.exe))
+          $buf = New-Object byte[] 4096; [void]$fs.Read($buf, 0, 4096); $fs.Dispose()
+          $pe = [BitConverter]::ToInt32($buf, 0x3c)
+          $subsystem = [BitConverter]::ToUInt16($buf, $pe + 24 + 68)
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          @{ subsystem = $subsystem; meaning = @{ 2 = 'WINDOWS_GUI (no console)'; 3 = 'WINDOWS_CUI (console window)' }[[int]$subsystem] } | ConvertTo-Json | Tee-Object artifacts/subsystem.json
+          if ($subsystem -ne 2) { throw "ScreenAgent.exe is subsystem $subsystem; expected 2 (GUI) so no console window opens" }
+      - name: Hotkey pass-through selftest (Ctrl+Win untouched, Alt+Win+Shift toggles)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-hotkeys | Tee-Object artifacts/hotkeys.json
+          $code = $LASTEXITCODE
+          if ($code -eq 2) { Write-Warning 'Hotkey selftest skipped; see hotkeys.json for the runner limitation. Manual checklist remains required.'; exit 0 }
+          elseif ($code -ne 0) { throw 'Hotkey selftest failed' }
+      - name: Desk window and status toast selftest
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-windows | Tee-Object artifacts/windows.json
+          if ($LASTEXITCODE -ne 0) { throw 'Desk window / toast selftest failed' }
       - name: Notepad injection and read-back
         shell: pwsh
         run: |
