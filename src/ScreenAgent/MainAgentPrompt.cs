@@ -74,12 +74,8 @@ internal sealed class MainAgentPrompt
             var box=Focus()!.Element;
             string existing="";bool readable=true;
             try{var now=ReadDraft(box);existing=now??"";readable=now is not null;Debug?.Invoke($"draft: readable={readable} length={existing.Length} parts={Describe(box)}");}catch(Exception ex){readable=false;Debug?.Invoke("draft unreadable: "+ex.GetType().Name);}
-            if(existing.Trim().Length>0||!readable)
-            {
-                Chord(Ctrl,KeyEnd);   // never clear a draft: continue after it
-                if(existing.Trim().Length>0)Type(" ",hwnd,pid,ct,false,ref typed,out _);
-                typed=0;
-            }
+            Chord(Ctrl,KeyEnd);   // the caret goes behind whatever is there: a draft is never overwritten or cut
+            if(existing.Trim().Length>0){Type(" ",hwnd,pid,ct,false,ref typed,out _);typed=0;}
             if(!Type(text,hwnd,pid,ct,true,ref typed,out string? failed))return Finish(failed!);
             // g. Read back. The accessibility tree of a window in the background can lag behind the typing by a moment: look again for up to 2 s.
             string? read=null;bool landed=false;
@@ -264,15 +260,25 @@ internal sealed class MainAgentPrompt
         catch{return null;}
     }
     // The user's own text in the box. An empty box reports its placeholder ("Ask Claude to edit…") as value AND as text, so the patterns alone cannot tell
-    // "empty" from "a draft". What the tree shows (measured on the real extension): the placeholder is the only child of the box, wrapped in a Group that is not
-    // a content element, while typed text is a direct Text child. Anything that does not look exactly like that placeholder counts as a draft.
+    // "empty" from "a draft". Measured on the real extension: its Send button is disabled exactly while nothing sendable is in the box, and the placeholder is
+    // the only child of the box inside a Group that is not a content element (typed text is a direct Text child; this structure was seen to be late right
+    // after the panel was created, hence the button first). Anything not recognised as empty counts as a draft.
     internal static string? ReadDraft(AutomationElement el)
     {
         string? raw=null;
         if(el.TryGetCurrentPattern(TextPattern.Pattern,out var t))raw=((TextPattern)t).DocumentRange.GetText(-1)??"";
         else if(el.TryGetCurrentPattern(ValuePattern.Pattern,out var v))raw=((ValuePattern)v).Current.Value??"";
         if(raw is null)return null;
-        return raw.Length>0&&PlaceholderOnly(el)?"":raw;
+        if(raw.Length==0)return raw;
+        try{if(SendButton(el) is {} send&&!send.Current.IsEnabled)return "";}catch{ /* fall through to the structure */ }
+        return PlaceholderOnly(el)?"":raw;
+    }
+    static AutomationElement? SendButton(AutomationElement box)
+    {
+        var cond=new PropertyCondition(AutomationElement.NameProperty,"Send message");
+        var walker=TreeWalker.RawViewWalker;var up=walker.GetParent(box);
+        for(int i=0;up is not null&&i<6;i++,up=walker.GetParent(up))if(up.FindFirst(TreeScope.Descendants,cond) is {} hit)return hit;
+        return null;
     }
     static bool PlaceholderOnly(AutomationElement el)
     {
