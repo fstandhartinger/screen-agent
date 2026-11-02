@@ -10,7 +10,7 @@ internal sealed class MainAgentPrompt
 {
     const ushort Ctrl=0x11,Shift=0x10,Alt=0x12,Return=0x0d,Esc=0x1b,KeyEnd=0x23,P=0x50,Neutral=0xe8;
     public const int SearchBudgetMs=2500,PaletteWaitMs=3000;
-    // Selftest hooks. Keys counts every key event this class sends (a failed prompt must leave it at the value it had).
+    // Selftest hooks. KeysSent counts every typing or command key event this class sends, not the Alt tap that brings the window forward (a prompt that fails closed must leave it unchanged).
     public static volatile bool PaletteDisabledForTests;
     public static long KeysSent;
     public static Action<string>? Debug;
@@ -80,14 +80,20 @@ internal sealed class MainAgentPrompt
                 typed=0;
             }
             if(!Type(text,hwnd,pid,ct,true,ref typed,out string? failed))return Finish(failed!);
-            // g. Read back.
-            Thread.Sleep(150);
-            string? read=null;try{read=ReadBox(box);}catch{ /* unreadable */ }
+            // g. Read back. The accessibility tree of a window in the background can lag behind the typing by a moment: look again for up to 2 s.
+            string? read=null;bool landed=false;
+            for(int i=0;i<20&&!landed;i++)
+            {
+                Thread.Sleep(100);
+                read=ReadNow(box,pid);
+                if(read is not null)landed=PromptText.Landed(read,text);
+            }
+            Debug?.Invoke($"read back: readable={read is not null} length={read?.Length} landed={landed}");
             if(read is null)return Finish(PromptCodes.TypedUnverified);
-            if(!PromptText.Landed(read,text))return Finish(PromptCodes.WrongFocus,false);
-            Thread.Sleep(500);
-            try{read=ReadBox(box);}catch{read=null;}
-            if(read is null||!PromptText.Landed(read,text)){Debug?.Invoke("text vanished after 500 ms");return Finish(PromptCodes.WrongFocus,false);}
+            if(!landed)return Finish(PromptCodes.WrongFocus,false);
+            Thread.Sleep(500);   // still there half a second later: nothing took it away (it was not sent)
+            read=ReadNow(box,pid);
+            if(read is null||!PromptText.Landed(read,text)){Debug?.Invoke("text gone after 500 ms");return Finish(PromptCodes.WrongFocus,false);}
             return Finish(PromptCodes.Typed,true);
         }
         catch(OperationCanceledException){return Finish(PromptCodes.Interrupted);}
@@ -148,9 +154,9 @@ internal sealed class MainAgentPrompt
         try{AutomationElement.FromHandle(h).SetFocus();}catch{ /* not every window takes it */ }
         if(Stable(h,900))return true;
         // Alt tap: Windows lets the process that just received input take the foreground. The neutral key between Alt down and up keeps the menu bar closed.
-        SendKeys(Key(Alt,false));
+        SendFrontKeys(Key(Alt,false));
         Native.SetForegroundWindow(h);
-        SendKeys(Key(Neutral,false),Key(Neutral,true),Key(Alt,true));
+        SendFrontKeys(Key(Neutral,false),Key(Neutral,true),Key(Alt,true));
         if(Stable(h,900))return true;
         uint self=Native.GetCurrentThreadId();
         uint fgThread=Native.GetWindowThreadProcessId(Native.GetForegroundWindow(),out _);
@@ -206,6 +212,7 @@ internal sealed class MainAgentPrompt
     // ---- keys
     static Native.Input Key(ushort vk,bool up)=>Native.Key(vk,up,0,false,Native.Marker);
     static void SendKeys(params Native.Input[] keys){Interlocked.Add(ref KeysSent,keys.Length);Native.Send(keys);}
+    static void SendFrontKeys(params Native.Input[] keys)=>Native.Send(keys);   // Alt tap for the foreground: not typing, not counted
     static void Tap(ushort vk)=>SendKeys(Key(vk,false),Key(vk,true));
     // One atomic batch: modifiers down in order, last key down and up, modifiers up in reverse.
     static void Chord(params ushort[] vks)
@@ -243,6 +250,17 @@ internal sealed class MainAgentPrompt
             Thread.Sleep(rnd.Next(6,11));
         }
         return true;
+    }
+    // The message box as it is now: the focused element when it is the box, else the one found before.
+    string? ReadNow(AutomationElement fallback,int pid)
+    {
+        try
+        {
+            var f=Focus();
+            if(f is not null&&f.Pid==pid&&FocusRules.MayType(f.Name,names,f.Classes)&&ReadBox(f.Element) is {} fresh)return fresh;
+            return ReadBox(fallback);
+        }
+        catch{return null;}
     }
     // What the box shows now: the longer of ValuePattern and TextPattern; null when the element offers neither.
     internal static string? ReadBox(AutomationElement el)

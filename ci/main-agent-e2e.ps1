@@ -42,7 +42,8 @@ New-Item -ItemType Directory -Force $user, (Join-Path $code 'data/extensions'), 
 [
   { "key": "ctrl+alt+shift+f9",  "command": "claude-vscode.focus" },
   { "key": "ctrl+alt+shift+f10", "command": "workbench.action.focusActiveEditorGroup" },
-  { "key": "ctrl+alt+shift+f11", "command": "workbench.action.terminal.focus" }
+  { "key": "ctrl+alt+shift+f11", "command": "workbench.action.terminal.focus" },
+  { "key": "ctrl+alt+shift+f12", "command": "workbench.action.closeAuxiliaryBar" }
 ]
 '@ | Set-Content (Join-Path $user 'keybindings.json') -Encoding UTF8
 $cli = Join-Path $code 'bin/code-insiders.cmd'

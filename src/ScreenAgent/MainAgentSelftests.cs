@@ -84,7 +84,14 @@ internal static class MainAgentSelftests
             await Task.Delay(400);
             hookCase.Facts["sessionAfterMarkerChord"]=hook.Session;
             lock(hookActions)hookCase.Facts["actionsAfterMarkerChord"]=hookActions.Select(a=>a.ToString()).ToArray();
-            bool pass=hook.Healthy&&!hook.Session&&hookActions.Count==0;
+            // Control: the same chord with the test tag instead of ours does reach the hook and starts the session, so the silence above is the marker's doing.
+            bool silent=!hook.Session&&hookActions.Count==0;
+            foreach(var vk in new ushort[]{0xa2,0x5b,0xa0})Native.SendInput(1,[Native.Key(vk,false,0,false,Test)],Marshal.SizeOf<Native.Input>());
+            foreach(var vk in new ushort[]{0xa0,0x5b,0xa2})Native.SendInput(1,[Native.Key(vk,true,0,false,Test)],Marshal.SizeOf<Native.Input>());
+            await Task.Delay(600);
+            hookCase.Facts["controlChordStartsSession"]=hook.Session;
+            bool pass=hook.Healthy&&silent&&hook.Session;
+            hook.SetSession(false);
             hookCase.Status=pass?"passed":(hook.Healthy?"failed":"precondition-failed");hookCase.Why=hook.Healthy?null:"keyboard hook not installed on this runner";
         }
         catch(Exception ex){hookCase.Why=ex.Message;}
@@ -116,9 +123,9 @@ internal static class MainAgentSelftests
         async Task C(Scn s)
         {
             var w=await Start(s,"ws-C",openClaude:false);if(w==IntPtr.Zero)return;
-            var already=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,2500);
-            s.Facts["claudePanelOpenBefore"]=already is not null;
-            if(already is not null){s.Status="precondition-failed";s.Why="the extension opened its panel on its own; the palette route cannot be shown";return;}
+            s.Facts["extensionOpenedPanelOnItsOwn"]=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,2500) is not null;
+            if(!await CloseClaude(w)){s.Status="precondition-failed";s.Why="could not close the Claude panel (secondary side bar)";return;}
+            s.Facts["claudePanelOpenBefore"]=false;TryDump("C-panel-closed");
             await NotepadInFront(s);
             await RunAndProve(s,w,"C",expectRoute:"palette");
         }
@@ -151,6 +158,8 @@ internal static class MainAgentSelftests
             var old=await Start(s,"ws-F1",openClaude:true);if(old==IntPtr.Zero)return;
             var neu=await Launch(s,"ws-F2");if(neu==IntPtr.Zero)return;
             await Task.Delay(3000);
+            s.Facts["newerWindowOpenedPanelOnItsOwn"]=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(neu,2500) is not null;
+            await CloseClaude(neu);
             var probe=new MainAgentPrompt(Names,(_,_)=>{});
             bool newHas=probe.FindInput(neu,2500) is not null,oldHas=probe.FindInput(old,2500) is not null;
             s.Facts["newerWindowHasClaude"]=newHas;s.Facts["olderWindowHasClaude"]=oldHas;
@@ -176,21 +185,21 @@ internal static class MainAgentSelftests
             finally{MainAgentPrompt.PaletteDisabledForTests=false;}
             long keys=Interlocked.Read(ref MainAgentPrompt.KeysSent)-keysBefore;
             s.Facts["code"]=r.Code;s.Facts["route"]=r.Route;s.Facts["keysSent"]=keys;s.Facts["chars"]=r.Chars;
-            PromptFallbackWindow? fallback=null;
-            await app.Dispatcher.InvokeAsync(()=>{fallback=PromptFallbackWindow.Show(r.Code,Prompt);});
+            PromptFallbackWindow? fallback=null;string heading="";bool visible=false,readOnly=false;IntPtr fh=IntPtr.Zero;
+            await app.Dispatcher.InvokeAsync(()=>{fallback=PromptFallbackWindow.Show(r.Code,Prompt);heading=fallback.Heading;visible=fallback.IsVisible;readOnly=fallback.ReadOnlyText;fh=new System.Windows.Interop.WindowInteropHelper(fallback).Handle;});
             await Task.Delay(700);Shot("G-fallback");
             bool clipUnchanged=Native.GetClipboardSequenceNumber()==clip;
-            s.Facts["fallbackHeading"]=fallback!.Heading;s.Facts["fallbackVisible"]=fallback.IsVisible;s.Facts["fallbackReadOnly"]=fallback.ReadOnlyText;
-            Native.GetWindowDisplayAffinity(new System.Windows.Interop.WindowInteropHelper(fallback).Handle,out uint aff);s.Facts["fallbackAffinity"]=aff;
+            s.Facts["fallbackHeading"]=heading;s.Facts["fallbackVisible"]=visible;s.Facts["fallbackReadOnly"]=readOnly;
+            Native.GetWindowDisplayAffinity(fh,out uint aff);s.Facts["fallbackAffinity"]=aff;
             s.Facts["clipboardUntouchedUntilCopyClicked"]=clipUnchanged;
             s.Facts["foregroundUnchangedByFallback"]=Native.GetForegroundWindow()==fgBefore;
             string? boxNow=null;try{var el=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,3000);boxNow=el is null?null:MainAgentPrompt.ReadBox(el);}catch{ }
             s.Facts["messageInputAfter"]=boxNow;s.Facts["titleDirty"]=TitleOf(w).Contains('●');
-            await app.Dispatcher.InvokeAsync(()=>fallback.ClickCopyForTests());await Task.Delay(300);
+            await app.Dispatcher.InvokeAsync(()=>fallback!.ClickCopyForTests());await Task.Delay(300);
             string? copied=null;await app.Dispatcher.InvokeAsync(()=>{try{copied=System.Windows.Clipboard.GetText();}catch{ }});
             s.Facts["copyButtonPutsTheTextOnTheClipboard"]=copied==PromptText.Normalize(Prompt);
-            await app.Dispatcher.InvokeAsync(()=>fallback.Close());
-            bool ok=r.Code is PromptCodes.NoField or PromptCodes.WrongFocus&&keys==0&&r.Chars==0&&clipUnchanged&&fallback.Heading.StartsWith("Nicht eingetippt: ")
+            await app.Dispatcher.InvokeAsync(()=>fallback!.Close());
+            bool ok=r.Code is PromptCodes.NoField or PromptCodes.WrongFocus&&keys==0&&r.Chars==0&&clipUnchanged&&visible&&readOnly&&heading.StartsWith("Nicht eingetippt: ")
                 &&aff==0x11&&(boxNow is null||boxNow.Trim().Length==0)&&!(bool)s.Facts["titleDirty"]!&&(bool)s.Facts["copyButtonPutsTheTextOnTheClipboard"]!;
             s.Status=ok?"passed":"failed";if(!ok)s.Why="see facts";
         }
@@ -255,6 +264,18 @@ internal static class MainAgentSelftests
                 }
             }
             return false;
+        }
+        // The extension opens its panel in every new window on its own; scenarios that need a window without it close the secondary side bar (setup key ctrl+alt+shift+f12).
+        async Task<bool> CloseClaude(IntPtr w)
+        {
+            var probe=new MainAgentPrompt(Names,(_,_)=>{});
+            for(int attempt=0;attempt<4;attempt++)
+            {
+                if(probe.FindInput(w,1500) is null)return true;
+                if(!MainAgentPrompt.Front(w))continue;
+                Press(0x11,0x12,0x10,0x7b);await Task.Delay(1500);
+            }
+            return probe.FindInput(w,2500) is null;
         }
         async Task<bool> FocusVia(IntPtr w,ushort fkey)
         {
