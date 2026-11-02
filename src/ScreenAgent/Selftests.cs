@@ -247,8 +247,16 @@ internal static class Selftests
                             double dpr=d.GetProperty("dpr").GetDouble(),vw=d.GetProperty("w").GetDouble(),vh=d.GetProperty("h").GetDouble();
                             Case($"webview-fills-client-{scale*100:0}-reopen-{reopen}",bb.X==0&&bb.Y==0&&bb.Width==cr.Right&&bb.Height==cr.Bottom&&Math.Abs(vw*dpr-cr.Right)<=2&&Math.Abs(vh*dpr-cr.Bottom)<=2&&Math.Abs(dpr-scale)<0.01,new{scale,dpr,vw,vh,client=new{w=cr.Right,h=cr.Bottom},browser=new{bb.X,bb.Y,bb.Width,bb.Height}});
                         }
-                        bool fixtureVisible=await bridge.Eval("(()=>{const m=document.getElementById('screen-agent-ci-fixture');if(!m||document.title!=='Screen Agent native DPI fixture v0.1.3'||m.dataset.fixture!=='native-dpi-v013')return false;const r=m.getBoundingClientRect(),s=getComputedStyle(m);return r.x===0&&r.y===0&&Math.abs(r.width-innerWidth)<=1&&Math.abs(r.height-innerHeight)<=1&&s.borderTopWidth==='6px'&&s.borderTopColor==='rgb(99, 210, 151)'})()") == "true";
-                        Case($"correct-desk-fixture-before-capture-{scale*100:0}",fixtureVisible);
+                        using var fixtureFacts=JsonDocument.Parse((await bridge.Eval("(()=>{const m=document.getElementById('screen-agent-ci-fixture'),r=m?.getBoundingClientRect(),s=m?getComputedStyle(m):null;return {identity:!!m&&document.title==='Screen Agent native DPI fixture v0.1.3'&&m.dataset.fixture==='native-dpi-v013',title:document.title,marker:m?.dataset.fixture??null,geometry:!!r&&r.x===0&&r.y===0&&Math.abs(r.width-innerWidth)<=1&&Math.abs(r.height-innerHeight)<=1,x:r?.x??null,y:r?.y??null,width:r?.width??null,height:r?.height??null,viewportWidth:innerWidth,viewportHeight:innerHeight,dpr:devicePixelRatio,borderWidth:s?.borderTopWidth??null,borderCssPixels:s?parseFloat(s.borderTopWidth):null,borderColor:s?.borderTopColor??null}})()"))!);
+                        var fixtureProperties=fixtureFacts.RootElement;
+                        double fixtureDpr=fixtureProperties.GetProperty("dpr").GetDouble();
+                        // Chromium snaps CSS borders to device pixels: at 125%, 6 CSS px can compute to 5.6 CSS px
+                        // (seven device pixels). Allow one physical pixel of quantization, preserving identity/color
+                        // and the independent four-edge screenshot pixel checks below.
+                        bool fixtureVisible=fixtureProperties.GetProperty("identity").GetBoolean()&&fixtureProperties.GetProperty("geometry").GetBoolean()&&fixtureDpr>0&&
+                            fixtureProperties.GetProperty("borderCssPixels").ValueKind==JsonValueKind.Number&&Math.Abs(fixtureProperties.GetProperty("borderCssPixels").GetDouble()-6)<=1/fixtureDpr+0.000001&&
+                            fixtureProperties.GetProperty("borderColor").GetString()=="rgb(99, 210, 151)";
+                        Case($"correct-desk-fixture-before-capture-{scale*100:0}",fixtureVisible,fixtureProperties.Clone());
                         if(!fixtureVisible)throw new InvalidOperationException("Screenshot fixture marker or full viewport border is missing");
                         string screenshot=$"artifacts/desk-controller-{scale*100:0}.png";
                         await bridge.CaptureBrowser(screenshot);
