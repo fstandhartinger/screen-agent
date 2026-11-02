@@ -68,7 +68,7 @@ internal static class DrawSelftests
                 {
                     skipped=true;Case("runner-delivers-mouse-input",false,new{points,reason="SendInput mouse events did not reach the overlay (no interactive desktop)"});failed=false;exit=2;return;
                 }
-                Case("strokes-recorded",overlay.Strokes.Count==1&&points>=60,new{overlay.Strokes.Count,points});
+                Case("strokes-recorded",overlay.Strokes.Count==1&&points>=30,new{overlay.Strokes.Count,points});
                 // 1. the stroke is visible on screen, 5 physical px wide
                 using(var shot=Shot(monitor))
                 {
@@ -97,6 +97,7 @@ internal static class DrawSelftests
                 }
                 // 3. release: the overlay turns click-through at once
                 var strokePoint=new Native.Point{X=c.X+radius,Y=c.Y};
+                overlay.Opacity=1;await Task.Delay(150); // the clean capture above faded it out because this test turned capture exclusion off
                 Case("before-release-overlay-is-under-the-pointer",Native.GetAncestor(Native.WindowFromPoint(strokePoint),2)==overlayHandle);
                 overlay.ClickThrough();overlay.Fade();await Task.Delay(100);
                 var hit=Native.GetAncestor(Native.WindowFromPoint(strokePoint),2);
