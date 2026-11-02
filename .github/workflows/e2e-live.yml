@@ -1,6 +1,8 @@
 name: End to end against a Desk
 on:
   workflow_dispatch:
+  push:
+    branches: ['e2e/**']
 permissions:
   contents: read
 jobs:
