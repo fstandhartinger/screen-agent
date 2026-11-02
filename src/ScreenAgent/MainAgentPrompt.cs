@@ -73,7 +73,7 @@ internal sealed class MainAgentPrompt
             // e/f. Verified. Type.
             var box=Focus()!.Element;
             string existing="";bool readable=true;
-            try{var now=ReadDraft(box);existing=now??"";readable=now is not null;Debug?.Invoke($"draft: readable={readable} length={existing.Length} parts={Describe(box)}");}catch{readable=false;}
+            try{var now=ReadDraft(box);existing=now??"";readable=now is not null;Debug?.Invoke($"draft: readable={readable} length={existing.Length} parts={Describe(box)}");}catch(Exception ex){readable=false;Debug?.Invoke("draft unreadable: "+ex.GetType().Name);}
             if(existing.Trim().Length>0||!readable)
             {
                 Chord(Ctrl,KeyEnd);   // never clear a draft: continue after it
@@ -263,12 +263,30 @@ internal sealed class MainAgentPrompt
         }
         catch{return null;}
     }
-    // The user's own text in the box. An empty box reports its placeholder ("Ask Claude to edit…") as ValuePattern value, so the text pattern (the real content) wins when there is one.
+    // The user's own text in the box. An empty box reports its placeholder ("Ask Claude to edit…") as value AND as text, so the patterns alone cannot tell
+    // "empty" from "a draft". What the tree shows (measured on the real extension): the placeholder is the only child of the box, wrapped in a Group that is not
+    // a content element, while typed text is a direct Text child. Anything that does not look exactly like that placeholder counts as a draft.
     internal static string? ReadDraft(AutomationElement el)
     {
-        if(el.TryGetCurrentPattern(TextPattern.Pattern,out var t))return ((TextPattern)t).DocumentRange.GetText(-1)??"";
-        if(el.TryGetCurrentPattern(ValuePattern.Pattern,out var v))return ((ValuePattern)v).Current.Value??"";
-        return null;
+        string? raw=null;
+        if(el.TryGetCurrentPattern(TextPattern.Pattern,out var t))raw=((TextPattern)t).DocumentRange.GetText(-1)??"";
+        else if(el.TryGetCurrentPattern(ValuePattern.Pattern,out var v))raw=((ValuePattern)v).Current.Value??"";
+        if(raw is null)return null;
+        return raw.Length>0&&PlaceholderOnly(el)?"":raw;
+    }
+    static bool PlaceholderOnly(AutomationElement el)
+    {
+        try
+        {
+            var walker=TreeWalker.RawViewWalker;
+            var only=walker.GetFirstChild(el);
+            if(only is null||walker.GetNextSibling(only) is not null)return false;
+            var c=only.Current;
+            if(c.ControlType!=ControlType.Group||c.IsContentElement)return false;
+            var inner=walker.GetFirstChild(only);
+            return inner is not null&&inner.Current.ControlType==ControlType.Text&&walker.GetNextSibling(inner) is null;
+        }
+        catch{return false;}
     }
     // Selftest diagnostics: what each pattern says (lengths and a short head, never used for decisions).
     internal static string Describe(AutomationElement el)

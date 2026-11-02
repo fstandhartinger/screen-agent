@@ -208,17 +208,21 @@ internal static class MainAgentSelftests
         async Task I(Scn s)
         {
             var w=await Start(s,"ws-I",openClaude:true);if(w==IntPtr.Zero)return;
-            const string draft="Alter Entwurf";
+            const string draft="Alter Entwurf\nZweite Zeile";
             var el=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,3000);
             if(el is not null){string deep=MainAgentPrompt.DescribeDeep(el);File.WriteAllText(Path.Combine(outDir,"box-empty.txt"),deep);}
             if(el is null||!MainAgentPrompt.Front(w)){s.Status="precondition-failed";s.Why="no message box to put a draft in";return;}
             try{el.SetFocus();}catch{ }
             await Task.Delay(600);
-            foreach(char c in draft)Native.Send(Native.Key(0,false,c,true,Test),Native.Key(0,true,c,true,Test));
+            foreach(char c in draft)
+            {
+                if(c=='\n')Native.Send(Native.Key(0x10,false,0,false,Test),Native.Key(0x0d,false,0,false,Test),Native.Key(0x0d,true,0,false,Test),Native.Key(0x10,true,0,false,Test));
+                else Native.Send(Native.Key(0,false,c,true,Test),Native.Key(0,true,c,true,Test));
+            }
             await Task.Delay(800);
             string? before=el is null?null:MainAgentPrompt.ReadDraft(el);s.Facts["draftBeforeRun"]=before;
             try{File.WriteAllText(Path.Combine(outDir,"box-with-draft.txt"),MainAgentPrompt.DescribeDeep(el!));}catch{ }
-            if(before is null||!before.Contains(draft)){s.Status="precondition-failed";s.Why="the draft did not land in the box";return;}
+            if(before is null||PromptText.Squash(before)!=PromptText.Squash(draft)){s.Status="precondition-failed";s.Why="the draft did not land in the box";return;}
             await NotepadInFront(s);
             await RunAndProve(s,w,"I",expectRoute:null,draft:draft);
         }
