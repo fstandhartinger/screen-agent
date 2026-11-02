@@ -45,7 +45,6 @@ internal sealed class AppController : IDisposable
     DictationCapture? audio;
     string? audioSession;
     Task audioQueue=Task.CompletedTask;
-    bool finishingDraw;
     readonly Telemetry telemetry;
     readonly FramePlanner planner;
     string? freshId,commandsSid;
@@ -362,7 +361,7 @@ internal sealed class AppController : IDisposable
             else
             {
                 Notice("Fenster ausgenommen (Liste)");ForgetLocal();
-                using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>(),ct);   // the agent must not keep describing the previous window
+                using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>{["why"]="excluded"},ct);   // the agent must not keep describing the previous window
             }
         }
         schedule.Success(now);
@@ -429,7 +428,7 @@ internal sealed class AppController : IDisposable
         if(reply.Ok)
         {
             planner.Sent(now,grid,(long)fg);   // "queued" counts as sent; only an accepted frame becomes the reference
-            visionIds=VisionIds(reply);
+            if(vision is "ok" or "unchanged")visionIds=VisionIds(reply); // a queued or capped frame says nothing about the ids
             telemetry.Event("screen.frame",new(){["decision"]="sent",["reason"]=decision.Reason.ToString().ToLowerInvariant(),["bytes"]=jpeg.Length,["w"]=width,["h"]=height,["masked"]=masked,["ids"]=ids.Length,["visionIds"]=visionIds.Length,["vision"]=vision,["process"]=window.Process});
             if(visionIds.Length>0||ids.Except(ocrIds).Any())SetIds(DevicePayloads.Merge(ocrIds,visionIds),window.Process,"vision");
             if(reply.Json is {} r2&&r2.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.Object&&f.TryGetProperty("id",out var fid)&&fid.ValueKind==System.Text.Json.JsonValueKind.String)freshId=fid.GetString();
@@ -447,7 +446,7 @@ internal sealed class AppController : IDisposable
     // must reach the window below) while the strokes fade; the picture is taken without the overlay (it is excluded from capture, or made invisible when it cannot be).
     async Task FinishDraw()
     {
-        if(finishingDraw||drawings.Count==0)return;finishingDraw=true;
+        if(drawings.Count==0)return;   // each drawing carries its own batch: a second circle while the first is still being sent gets its own overlay and closes it again
         var batch=drawings.ToArray();drawings.Clear();string? sid=bridge.SessionId;var ct=epoch.Token;
         long t0=Environment.TickCount64;
         foreach(var d in batch)d.ClickThrough();
@@ -498,7 +497,7 @@ internal sealed class AppController : IDisposable
         }
         catch(OperationCanceledException){}
         catch(Exception ex){Trace(false,"error:"+ex.GetType().Name);Notice("Markierung nicht gesendet · Verbindung prüfen",Level.Warn);}
-        finally{foreach(var d in batch)d.Close();finishingDraw=false;}
+        finally{foreach(var d in batch)d.Close();}
     }
     public void Dispose()
     {

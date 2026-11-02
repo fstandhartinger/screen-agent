@@ -218,6 +218,28 @@ public class OcrTileTests
     [Theory,InlineData("Das kostet 12345 Euro"),InlineData("a#12345"),InlineData("data#abcdef")] public void LooseStaysAnIdShape(string text)=>Assert.Empty(ScreenAgent.Core.ArtifactMatcher.FindLoose(text));
 }
 
+public class BusyScreenTests
+{
+    static byte[] Grid(byte v){var g=new byte[ChangeDetector.Width*ChangeDetector.Height];Array.Fill(g,v);return g;}
+    [Fact] public void AVideoSlowsTheFramesDownAndAQuietPictureBringsThemBack()
+    {
+        var p=new FramePlanner();long t=0;int sends=0;byte v=0;
+        p.Sent(t,Grid(v),1);
+        // A screen that is different at every capture, one capture every 2 s for 400 s.
+        for(int i=1;i<=200;i++)
+        {
+            t+=2000;byte next=(byte)((v+100)%250);var g=Grid(next);
+            if(p.Decide(t,g,1,false).Verdict==FrameVerdict.Send){p.Sent(t,g,1);sends++;v=next;}
+        }
+        Assert.InRange(sends,20,50);   // 200 without the backoff
+        Assert.Equal(FrameVerdict.Send,p.Decide(t,Grid((byte)(v+60)),1,true).Verdict);   // a direct question ignores it
+        Assert.Equal(FrameVerdict.Deduped,p.Decide(t,Grid(v),1,false).Verdict);   // one quiet picture...
+        Assert.Equal(FrameVerdict.Send,p.Decide(t+16000,Grid((byte)(v+100)),1,false).Verdict);
+        p.Sent(t+16000,Grid((byte)(v+100)),1);
+        Assert.Equal(FrameVerdict.Send,p.Decide(t+18000,Grid((byte)(v+50)),1,false).Verdict);   // ...and the short gap is back
+    }
+}
+
 public class ReportingTests
 {
     [Fact] public void DedupedIsLoggedOncePerRunAndThenEveryThirtySeconds()

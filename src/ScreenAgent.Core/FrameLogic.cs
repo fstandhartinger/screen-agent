@@ -13,24 +13,27 @@ public sealed class FramePlanner(int intervalMs=4000,int minGapMs=2000)
     byte[]? lastSent;
     public int IntervalMs=>intervalMs;
     public bool Started=>started;
-    public void Reset(){started=false;pending=false;lastCaptureAt=lastSentAt=lastSentForeground=0;lastSent=null;}
+    // A video or animation changes every picture: after 6 sends in a row without a quiet one the gap doubles, up to 16 s, so the hourly budget is not gone in minutes. A quiet frame resets it. A direct question ignores it.
+    int busyRun;
+    long Gap=>busyRun<6?minGapMs:Math.Min(16000,minGapMs*(1L<<Math.Min(3,busyRun/6)));
+    public void Reset(){started=false;pending=false;busyRun=0;lastCaptureAt=lastSentAt=lastSentForeground=0;lastSent=null;}
     // Is it time to look at the screen at all? Cheap: no capture needed to answer.
-    public bool CaptureDue(long now,long foreground,bool fresh)=>fresh||!started||foreground!=lastSentForeground&&now-lastCaptureAt>=minGapMs||pending&&now-lastSentAt>=minGapMs||now-lastCaptureAt>=intervalMs;
+    public bool CaptureDue(long now,long foreground,bool fresh)=>fresh||!started||foreground!=lastSentForeground&&now-lastCaptureAt>=minGapMs||pending&&now-lastSentAt>=Gap||now-lastCaptureAt>=intervalMs;
     public void Captured(long now,long foreground){lastCaptureAt=now;}
     public FrameDecision Decide(long now,byte[] grid,long foreground,bool fresh)
     {
         if(fresh)return new(FrameVerdict.Send,FrameReason.Fresh);
         if(!started||lastSent is null)return new(FrameVerdict.Send,FrameReason.Start);
-        bool gap=now-lastSentAt>=minGapMs;
+        bool gap=now-lastSentAt>=Gap;
         FrameReason reason;
         if(foreground!=lastSentForeground)reason=FrameReason.Foreground;
         else if(ChangeDetector.Changed(lastSent,grid))reason=FrameReason.Interval;
-        else{pending=false;return new(FrameVerdict.Deduped,FrameReason.Interval);}
+        else{pending=false;busyRun=0;return new(FrameVerdict.Deduped,FrameReason.Interval);}
         pending=!gap;
         return new(gap?FrameVerdict.Send:FrameVerdict.Wait,reason);
     }
     // Only a frame the gateway accepted is the new reference.
-    public void Sent(long now,byte[] grid,long foreground){started=true;pending=false;lastSentAt=now;lastSent=grid;lastSentForeground=foreground;}
+    public void Sent(long now,byte[] grid,long foreground){started=true;pending=false;busyRun++;lastSentAt=now;lastSent=grid;lastSentForeground=foreground;}
 }
 // JPEG sizing: at most 1600 px wide, then a quality ladder until the file fits the gateway's 300 KB limit (aim 150-300 KB).
 public static class FrameSizing
