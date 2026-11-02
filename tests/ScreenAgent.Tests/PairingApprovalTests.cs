@@ -7,11 +7,11 @@ namespace ScreenAgent.Tests;
 public class PairingApprovalTests
 {
     const string Proof="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    static async Task<string> Request(Uri callback,string target,string? host=null,CancellationToken ct=default)
+    static async Task<string> Request(Uri callback,string target,string? host=null,CancellationToken ct=default,string? mode=null)
     {
         using var client=new TcpClient();await client.ConnectAsync(IPAddress.Loopback,callback.Port,ct);
         using var stream=client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes($"GET {target} HTTP/1.1\r\nHost: {host??callback.Authority}\r\nConnection: close\r\n\r\n"),ct);
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"GET {target} HTTP/1.1\r\nHost: {host??callback.Authority}\r\n{(mode is null?"":"Sec-Fetch-Mode: "+mode+"\r\n")}Connection: close\r\n\r\n"),ct);
         using var text=new StreamReader(stream);return await text.ReadToEndAsync(ct);
     }
     [Fact]public async Task OnlyTheExactLocalAddressDeliversProofAndThePageDoesNotReflectIt()
@@ -23,7 +23,12 @@ public class PairingApprovalTests
             var invalid=await Request(uri,path,host,timeout.Token);
             Assert.StartsWith("HTTP/1.1 400",invalid);Assert.False(proof.IsCompleted);
         }
-        var result=await Request(uri,uri.AbsolutePath+"?proof="+Proof,ct:timeout.Token);
+        foreach(string mode in new[]{"no-cors","cors","same-origin","nested-navigate"})
+        {
+            Assert.StartsWith("HTTP/1.1 400",await Request(uri,uri.AbsolutePath+"?proof="+Proof,ct:timeout.Token,mode:mode));
+            Assert.False(proof.IsCompleted);
+        }
+        var result=await Request(uri,uri.AbsolutePath+"?proof="+Proof,ct:timeout.Token,mode:"navigate");
         Assert.Equal(Proof,await proof);Assert.StartsWith("HTTP/1.1 200",result);Assert.DoesNotContain(Proof,result);
         Assert.Contains("Cache-Control: no-store",result);Assert.Contains("Referrer-Policy: no-referrer",result);
         Assert.Contains("history.replaceState(null,'','/ScreenAgent/connected')",result);

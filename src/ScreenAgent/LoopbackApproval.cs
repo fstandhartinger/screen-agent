@@ -16,6 +16,7 @@ internal sealed class LoopbackApproval : IDisposable
     public LoopbackApproval()
     {
         path="/ScreenAgent/"+Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_')+"/";
+        listener.Server.ExclusiveAddressUse=true;
         listener.Start(4);
         int port=((IPEndPoint)listener.LocalEndpoint).Port;
         authority="127.0.0.1:"+port;
@@ -45,7 +46,9 @@ internal sealed class LoopbackApproval : IDisposable
                     var lines=Encoding.ASCII.GetString(buffer,0,end).Split("\r\n");
                     var request=lines[0].Split(' ');
                     var hosts=lines.Skip(1).Where(line=>line.StartsWith("Host:",StringComparison.OrdinalIgnoreCase)).ToArray();
-                    if(request.Length==3&&request[0]=="GET"&&request[2] is "HTTP/1.1" or "HTTP/1.0"&&hosts.Length==1&&hosts[0][5..].Trim().Equals(authority,StringComparison.OrdinalIgnoreCase))
+                    var modes=lines.Skip(1).Where(line=>line.StartsWith("Sec-Fetch-Mode:",StringComparison.OrdinalIgnoreCase)).ToArray();
+                    bool navigation=modes.Length==0||(modes.Length==1&&modes[0][(modes[0].IndexOf(':')+1)..].Trim()=="navigate");
+                    if(request.Length==3&&request[0]=="GET"&&request[2] is "HTTP/1.1" or "HTTP/1.0"&&navigation&&hosts.Length==1&&hosts[0][5..].Trim().Equals(authority,StringComparison.OrdinalIgnoreCase))
                     {
                         string prefix=path+"?proof=";
                         if(request[1].StartsWith(prefix,StringComparison.Ordinal))
