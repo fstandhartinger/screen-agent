@@ -1,4 +1,4 @@
-# Screen Agent v0.1.2 preview
+# Screen Agent v0.1.3 preview
 
 Unsigned .NET 8 WPF companion for Windows 10 2004+ / Windows 11 x64. This prerelease wires device pairing, confirmed screen IDs, draw highlights, dictation and correction learning to Agent Desk. Windows desktop behavior and the live Desk integration still require the manual checks below. Use a non-sensitive test desktop first.
 
@@ -10,8 +10,9 @@ Download `ScreenAgent.exe` and verify it against `SHA256SUMS`. Optional `tessdat
    (bottom right of the taskbar; on Windows 11 the round icon may be hidden under the `^` arrow, drag it out to keep it visible).
    A balloon says so at start until the device is connected. Starting the exe a second time simply opens the Desk window of the running app.
 2. **Connect the device.** Click the tray icon (or right-click, **Desk öffnen**). The Desk window opens as a normal window: it can be
-   minimised, resized and moved, it is not always on top, and it remembers its size and position. Sign in on the page and press
-   connect. After that the window opens on the companion page. Closing it only hides it; the app keeps running.
+   minimised, resized and moved, it is not always on top, and it remembers its size and position. Click **Im Browser verbinden**.
+   Your normal browser opens. If asked, request a Telegram login link, open it, and click **Dieses Gerät verbinden**.
+   The app takes over automatically and opens Desk signed in. Do not copy a code or device token. Closing Desk only hides it; the app keeps running.
 3. **Start a session.** Press **Alt+Win+Shift** (hold all three, release together, no other key) or use tray **Sitzung starten**.
    A small grey note in the bottom-right corner appears with the state ("Sitzung · 3 IDs"). It never takes focus, cannot be clicked,
    and fades when the mouse comes near. Press the keys again, or use the tray, to stop; the note disappears. The tray icon always shows
@@ -61,11 +62,29 @@ Live and file OCR prefer Windows.Media.Ocr and fall back to bundled Tesseract en
 
 ## Verification and manual checklist
 
-Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config, window placement at 100–200 % scaling, status texts, voice-start logic), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. Since 0.1.2 it also checks that the exe is a GUI-subsystem program (no console window), that Ctrl+Win and Ctrl+Win+Alt pass through a real low-level keyboard hook untouched while Alt+Win+Shift toggles the session (`--selftest-hotkeys`; GitHub's `windows-latest` has an input desktop and runs it, a runner without one skips with exit 2 and the manual checklist applies), and that the Desk window starts hidden, is not topmost, opens, minimises, remembers its size, and that the status note is small, bottom-right, click-through and hides again (`--selftest-windows`). `--selftest-ui` proves that the status note accepts the capture-affinity API, not pixel-level exclusion. `--selftest-inject` skips with documented exit 2 if the hosted runner cannot supply an interactive non-elevated editor. A skip does not prove insertion. Exact output and manifest accompany every CI artifact.
+Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config, window placement at 100–200 % scaling, status texts, voice-start logic), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. Since 0.1.2 it also checks that the exe is a GUI-subsystem program (no console window), that Ctrl+Win and Ctrl+Win+Alt pass through a real low-level keyboard hook untouched while Alt+Win+Shift toggles the session (`--selftest-hotkeys`; GitHub's `windows-latest` has an input desktop and runs it, a runner without one skips with exit 2 and the manual checklist applies), and that the Desk window starts hidden, is not topmost, opens, minimises, remembers its size, and that the status note is small, bottom-right, click-through and hides again (`--selftest-windows`). Since 0.1.3 the browser is hosted directly in the native client rectangle in device pixels, with bounds refreshed on open,
+resize, monitor DPI change and rasterization-scale change; there is no temporary 400×300 WPF WebView layout.
+Runtimes that cannot initialize an invisible parent get one bounded off-screen/no-activate tool-window show after six
+seconds, hidden again when initialization settles (at most fifteen seconds later). This never appears in the taskbar
+or on the monitor; opening Desk during startup cancels the off-screen state and keeps the user's ordinary window open.
+The default Desk size is 900×800 DIP, clamped to the monitor work area. Windows selftests capture the real native WebView
+at 100/125/150% rasterization (`artifacts/desk-controller-100.png`, `-125.png`, `-150.png`) and assert the DOM viewport in
+physical pixels equals the entire native client rectangle after resizing and reopening. They also exercise pending and
+completed pairing HTTP responses, DPAPI save/restore, a separate WebView cookie store, and credential-free request URLs.
+These use synthetic responses/content; the CI monitor's Windows scaling setting is unchanged. Laptop mixed-monitor/DPI
+movement and live microphone/provider tests remain required.
+
+`--selftest-ui` proves that the status note accepts the capture-affinity API, not pixel-level exclusion. `--selftest-inject` skips with documented exit 2 if the hosted runner cannot supply an interactive non-elevated editor. A skip does not prove insertion. Exact output and manifest accompany every CI artifact.
 
 Before daily use, manually check on Windows:
 
-- Pair at `/device`, reconnect after restart, revoke remotely, disconnect locally; reject foreign-origin messages/navigation.
+- Tray → Desk öffnen → Im Browser verbinden → confirm in the normal browser; return automatically signed in, restart without pairing again,
+  revoke remotely, disconnect locally; reject foreign-origin messages/navigation. The short-lived browser nonce alone cannot poll or receive credentials;
+  the private poll proof stays in request bodies. A second one-use browser approval must reach a randomly addressed
+  listener bound only to `127.0.0.1` on this machine before a credential can be delivered; this prevents a remote
+  requester from enrolling their machine by sending Florian a pairing link. The listener expires after five minutes,
+  closes on completion/disconnect, checks its exact random path and Host, bounds requests to 8 KB/3 seconds, and
+  strips the one-use approval from the browser address without reflecting it into the page. Device tokens are stored with current-user DPAPI, and Desk cookies are installed in the app's own store.
 - Toggle Alt+Win+Shift, exercise modifier orders, simultaneous left/right modifiers and Start-menu masking; pause and resume from keys and tray; restore Caps baseline on exit.
 - Dictate into non-elevated Notepad and Claude Code in Windows Terminal: correct target binding, no Enter, clipboard restore/interference/history exclusion, protected-target refusal, Shift discard, hands-free toggle, 60-second limit, Desk mute acknowledgement/timeouts and unmute.
 - Draw with several strokes and idle/release completion; verify crop/context, 1.5-second fade, negative-origin mixed-DPI monitors, overlay exclusion, and changed/private window refusal.
@@ -90,6 +109,8 @@ Record the observed result, evidence and latency for each row. A blank result is
 | Registry outage, then recovery | Old IDs/chips clear immediately; unknown IDs never forward; current confirmed IDs return | |
 | Wispr still works while Screen Agent runs | Hold Ctrl+Win: Wispr dictates as without the app; Alt+Win+Shift toggles the session |
 | Console, Desk window, note | No console window; Desk hidden at start, opens from tray, not always on top, fits without scrolling the frame; note only while session runs |
+| Browser pairing + restart | One browser confirmation, no copy/paste; app opens signed in, restart restores connection | |
+| DPI and resize | Web content fills the native window at 100/125/150% Windows display scaling; resize and move between monitors without white regions | |
 | Pause and session stop | Companion chips and server context clear; no new captures while paused/stopped | |
 | Voice start/stop and ack failure | Toggle starts/stops Desk microphone forwarding; missing ack appears as orange note and tray text | |
 | Lost unmute acknowledgement | Note keeps Desk-Mikro stumm until an acknowledged retry succeeds | |

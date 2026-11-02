@@ -87,12 +87,23 @@ jobs:
           $code = $LASTEXITCODE
           if ($code -eq 2) { Write-Warning 'Hotkey selftest skipped; see hotkeys.json for the runner limitation. Manual checklist remains required.'; exit 0 }
           elseif ($code -ne 0) { throw 'Hotkey selftest failed' }
-      - name: Desk window and status toast selftest
+      - name: Desk pairing, native DPI bounds, window and status toast selftest
         shell: pwsh
         run: |
           . ./ci/invoke-sa.ps1
           Invoke-SA --selftest-windows | Tee-Object artifacts/windows.json
-          if ($LASTEXITCODE -ne 0) { throw 'Desk window / toast selftest failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Desk pairing / native bounds / toast selftest failed' }
+          # A missing WebView runtime/partial skip cannot stand in for the screenshots required by this release.
+          Add-Type -AssemblyName System.Drawing
+          foreach ($scale in @(100,125,150)) {
+            $path = Join-Path $PWD "artifacts/desk-controller-$scale.png"
+            if (-not (Test-Path $path)) { throw "Missing actual WebView screenshot at $scale percent rasterization" }
+            $image = [System.Drawing.Image]::FromFile($path)
+            try {
+              if ($image.Width -lt 500 -or $image.Height -lt 300) { throw "Unexpected WebView screenshot size at $scale percent" }
+              Write-Host "Controller $scale percent: $($image.Width)x$($image.Height) pixels"
+            } finally { $image.Dispose() }
+          }
       - name: Notepad injection and read-back
         shell: pwsh
         run: |

@@ -5,27 +5,68 @@ using System.Security.Cryptography;
 using System.Text.Json;
 namespace ScreenAgent;
 internal sealed record DeviceToken(string token,string deviceId,DateTimeOffset expiresAt,string? origin=null);
+internal sealed record PairingStart(string pairId,string pollToken,string browserUrl,long expiresAt);
+internal sealed record WebSession(string cookie,long expiresAt);
 internal sealed class DeviceClient : IDisposable
 {
     readonly HttpClient http;
     readonly string origin;
     DeviceToken? device;
-    static string TokenPath=>Path.Combine(ScreenConfig.Folder,"device.bin");
+    readonly string tokenPath;
     public bool Paired=>device is not null&&device.expiresAt>DateTimeOffset.UtcNow;
-    public DeviceClient(AppConfig config)
+    public DeviceClient(AppConfig config,HttpMessageHandler? handler=null,string? tokenPath=null)
     {
         origin=new Uri(config.DeskUrl).GetLeftPart(UriPartial.Authority);
-        http=new(new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(30)};
-        try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(TokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}catch{device=null;}
+        this.tokenPath=tokenPath??Path.Combine(ScreenConfig.Folder,"device.bin");
+        http=new(handler??new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(30)};
+        try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(this.tokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}catch{device=null;}
+    }
+    async Task<T> Read<T>(HttpResponseMessage response,CancellationToken ct)
+    {
+        // Responses contain credentials: neither content nor request URLs ever enter an exception or a log.
+        if(response.Content.Headers.ContentLength>65536)throw new InvalidDataException("Invalid Desk response");
+        using var stream=await response.Content.ReadAsStreamAsync(ct);
+        using var bytes=new MemoryStream();var chunk=new byte[4096];int n;
+        while((n=await stream.ReadAsync(chunk,ct))>0){if(bytes.Length+n>65536)throw new InvalidDataException("Invalid Desk response");bytes.Write(chunk,0,n);}
+        return JsonSerializer.Deserialize<T>(bytes.ToArray())??throw new InvalidDataException("Invalid Desk response");
+    }
+    static void Success(HttpResponseMessage response)
+    {
+        if(!response.IsSuccessStatusCode)throw new HttpRequestException("Desk-Anfrage abgelehnt",null,response.StatusCode);
+    }
+    public async Task<PairingStart> StartPairing(string callbackUrl,CancellationToken ct)
+    {
+        using var r=await http.PostAsJsonAsync("api/device/pairing/start",new{callbackUrl},ct);Success(r);
+        var result=await Read<PairingStart>(r,ct);
+        if(!System.Text.RegularExpressions.Regex.IsMatch(result.pairId??"","^[A-Za-z0-9_-]{43}$")||
+           !System.Text.RegularExpressions.Regex.IsMatch(result.pollToken??"","^[A-Za-z0-9_-]{43}$")||
+           result.expiresAt<=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()||result.expiresAt>DateTimeOffset.UtcNow.AddMinutes(11).ToUnixTimeMilliseconds())
+            throw new InvalidDataException("Invalid pairing response");
+        return result;
+    }
+    public async Task<DeviceToken?> PollPairing(string pairId,string pollToken,string approvalProof,CancellationToken ct)
+    {
+        using var r=await http.PostAsJsonAsync("api/device/pairing/poll",new{pairId,pollToken,approvalProof},ct);
+        if(r.StatusCode==System.Net.HttpStatusCode.Accepted)return null;
+        Success(r);using var json=await Read<JsonDocument>(r,ct);var m=json.RootElement;
+        return new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,DeviceProtocol.Expiry(m.GetProperty("expiresAt")));
+    }
+    public async Task<WebSession> WebSession(CancellationToken ct)
+    {
+        using var r=await Send(HttpMethod.Post,"api/device/web-session",JsonContent.Create(new{}),ct);
+        var result=await Read<WebSession>(r,ct);
+        if(string.IsNullOrWhiteSpace(result.cookie)||result.cookie.Length>4096||result.cookie.Any(c=>c<'!'||c>'~'||c==';')||
+           result.expiresAt<=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())throw new InvalidDataException("Invalid Desk session");
+        return result;
     }
     public void Pair(DeviceToken value)
     {
-        if(string.IsNullOrWhiteSpace(value.token)||string.IsNullOrWhiteSpace(value.deviceId)||value.expiresAt<=DateTimeOffset.UtcNow)throw new InvalidDataException("Invalid device token");
+        if(!System.Text.RegularExpressions.Regex.IsMatch(value.token??"","^[A-Za-z0-9_-]{43}$")||!Guid.TryParse(value.deviceId,out _)||value.expiresAt<=DateTimeOffset.UtcNow)throw new InvalidDataException("Invalid device token");
         value=value with{origin=origin};
         var bytes=ProtectedData.Protect(JsonSerializer.SerializeToUtf8Bytes(value),null,DataProtectionScope.CurrentUser);
-        Directory.CreateDirectory(ScreenConfig.Folder);File.WriteAllBytes(TokenPath+".tmp",bytes);File.Move(TokenPath+".tmp",TokenPath,true);device=value;
+        Directory.CreateDirectory(Path.GetDirectoryName(tokenPath)!);File.WriteAllBytes(tokenPath+".tmp",bytes);File.Move(tokenPath+".tmp",tokenPath,true);device=value;
     }
-    public void Disconnect(){device=null;File.Delete(TokenPath);}
+    public void Disconnect(){device=null;File.Delete(tokenPath);}
     async Task<HttpResponseMessage> Send(HttpMethod method,string path,HttpContent? body,CancellationToken ct)
     {
         if(!Paired)throw new InvalidOperationException("Pair this device first");

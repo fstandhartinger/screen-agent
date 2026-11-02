@@ -14,7 +14,7 @@ public readonly record struct PxRect(int X,int Y,int W,int H)
 // target monitor (the process is per-monitor DPI aware), so the result is right at 100 %, 150 % and 200 %.
 public static class WindowPlacement
 {
-    public const int DeskDefaultWidthDip=520,DeskDefaultHeightDip=780,DeskMinWidthDip=360,DeskMinHeightDip=440;
+    public const int DeskDefaultWidthDip=900,DeskDefaultHeightDip=800,DeskMinWidthDip=360,DeskMinHeightDip=440;
     // Small, out of the way: bottom-right corner of the work area (above the taskbar), never off-screen.
     public static PxRect BottomRight(PxRect work,int width,int height,int marginPx)
     {
