@@ -32,10 +32,10 @@ public sealed class HotkeyBindings
         }
         var session=Mods("Session",keys["session"],3);var dictation=Mods("Dictation",keys["dictation"],2,false);var toggle=Mods("Dictation toggle",keys["dictationToggle"],3);
         if(HotkeyLayout.Same(session,toggle))throw new InvalidDataException("Session and dictation toggle need different modifiers");
-        var pause=WithKey("Pause",keys["pause"]);var hands=WithKey("Hands-free",keys["handsFree"]);var mute=WithKey("Mute",keys["mute"]);var canvas=WithKey("Canvas",keys["canvas"]);
-        pauseVk=VirtualKey(pause.Key);spaceVk=VirtualKey(hands.Key);MuteVk=VirtualKey(mute.Key);DrawVk=VirtualKey(keys["draw"]);CanvasVk=VirtualKey(canvas.Key);
-        if(new[]{pauseVk,spaceVk,MuteVk,DrawVk,CanvasVk}.Distinct().Count()!=5)throw new InvalidDataException("Draw, pause, hands-free, mute and canvas keys must differ");
-        Layout=new(session,dictation,toggle,pause.Mods,hands.Mods,mute.Mods,canvas.Mods);tracker=new(Layout);
+        var pause=WithKey("Pause",keys["pause"]);var hands=WithKey("Hands-free",keys["handsFree"]);var mute=WithKey("Mute",keys["mute"]);var canvas=keys["canvas"].Length==0?((Key[] Mods,string Key)?)null:WithKey("Canvas",keys["canvas"]);
+        pauseVk=VirtualKey(pause.Key);spaceVk=VirtualKey(hands.Key);MuteVk=VirtualKey(mute.Key);DrawVk=VirtualKey(keys["draw"]);CanvasVk=canvas is {} cv?VirtualKey(cv.Key):-1;   // no canvas chord: -1 matches no key
+        if(new[]{pauseVk,spaceVk,MuteVk,DrawVk,CanvasVk}.Where(v=>v>=0).Distinct().Count()!=(canvas is null?4:5))throw new InvalidDataException("Draw, pause, hands-free, mute and canvas keys must differ");
+        Layout=new(session,dictation,toggle,pause.Mods,hands.Mods,mute.Mods,canvas?.Mods??[Key.Other]);tracker=new(Layout);   // [Other] is never held as a modifier: no canvas chord matches nothing
     }
     static int VirtualKey(string key)=>key switch
     {

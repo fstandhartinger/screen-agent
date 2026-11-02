@@ -7,16 +7,19 @@ namespace ScreenAgent;
 // clipboard when the user clicks "Kopieren".
 internal sealed class PromptFallbackWindow : Window
 {
-    readonly string body;
+    string body="";
+    static PromptFallbackWindow? current;
     readonly TextBlock heading=new(){FontWeight=FontWeights.SemiBold,FontSize=13,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,6)};
     readonly TextBox box=new(){IsReadOnly=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,FontSize=12};
     readonly Button copy=new(){Content="Kopieren",Padding=new Thickness(12,3,12,3),Margin=new Thickness(0,0,8,0)};
     readonly Button close=new(){Content="Schließen",Padding=new Thickness(12,3,12,3)};
     public string Heading=>heading.Text;
     public bool ReadOnlyText=>box.IsReadOnly;
-    public PromptFallbackWindow(string code,string text)
+    // True when Windows confirmed WDA_EXCLUDEFROMCAPTURE (read back). If not, the window still shows: he must get his text.
+    public bool AffinityOk {get;private set;}
+    public PromptFallbackWindow(string code,string text,int charsAlreadyInBox=0)
     {
-        body=text;heading.Text="Nicht eingetippt: "+PromptCodes.Reason(code);box.Text=text;
+        Fill(code,text,charsAlreadyInBox);
         Title="Screen Agent · Prompt";Topmost=true;ShowActivated=false;ShowInTaskbar=false;ResizeMode=ResizeMode.CanResize;WindowStyle=WindowStyle.ToolWindow;
         Width=420;Height=260;MinWidth=300;MinHeight=180;WindowStartupLocation=WindowStartupLocation.Manual;
         var buttons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,8,0,0)};buttons.Children.Add(copy);buttons.Children.Add(close);
@@ -25,8 +28,14 @@ internal sealed class PromptFallbackWindow : Window
         Content=grid;
         copy.Click+=(_,_)=>{try{Clipboard.SetText(body);copy.Content="Kopiert";}catch{copy.Content="Kopieren nicht möglich";}};
         close.Click+=(_,_)=>Close();
-        SourceInitialized+=(_,_)=>Native.SetWindowDisplayAffinity(new WindowInteropHelper(this).Handle,0x11);
+        SourceInitialized+=(_,_)=>
+        {
+            var h=new WindowInteropHelper(this).Handle;
+            AffinityOk=Native.SetWindowDisplayAffinity(h,0x11)&&Native.GetWindowDisplayAffinity(h,out uint now)&&now==0x11;
+        };
+        Closed+=(_,_)=>{if(ReferenceEquals(current,this))current=null;};
     }
+    void Fill(string code,string text,int charsAlreadyInBox){body=text;heading.Text=PromptCodes.Heading(code,charsAlreadyInBox);box.Text=text;copy.Content="Kopieren";}
     public void Present()
     {
         var h=new WindowInteropHelper(this).EnsureHandle();
@@ -37,6 +46,12 @@ internal sealed class PromptFallbackWindow : Window
         Show();
     }
     // The one way the app shows it: the text as the user would have seen it typed, no focus change.
-    internal static PromptFallbackWindow Show(string code,string text){var w=new PromptFallbackWindow(code,PromptText.Normalize(text));w.Present();return w;}
+    // A second failure while the window is still up reuses it with the newest text instead of stacking another one on top.
+    internal static PromptFallbackWindow Show(string code,string text,int charsAlreadyInBox=0)
+    {
+        string shown=PromptText.Normalize(text);
+        if(current is {IsVisible:true} w){w.Fill(code,shown,charsAlreadyInBox);w.Present();return w;}
+        var fresh=new PromptFallbackWindow(code,shown,charsAlreadyInBox);current=fresh;fresh.Present();return fresh;
+    }
     internal void ClickCopyForTests()=>copy.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 }

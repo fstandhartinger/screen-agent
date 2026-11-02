@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: 'Scenario prefixes, comma separated (A,B,C,D,E,F,G); empty = all'
+        description: 'Scenario prefixes, comma separated (A,B,C,D,E,F,G,I,J); empty = all'
         required: false
         default: ''
 permissions:

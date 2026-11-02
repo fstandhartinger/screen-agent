@@ -54,7 +54,7 @@ internal static class MainAgentSelftests
         var log=new Action<string,Dictionary<string,object?>>((t,d)=>{string e=t+" "+JsonSerializer.Serialize(TraceSanitizer.Clean(d));events.Add(e);Step("  telemetry "+e);});
         var scenariosToRun=new (string Name,Func<Scn,Task> Body)[]
         {
-            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G),("I-existing-draft-is-kept",I)
+            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G),("I-existing-draft-is-kept",I),("J-palette-entry-not-proven",J)
         };
         string only=Environment.GetEnvironmentVariable("SA_E2E_ONLY")??"";
         foreach(var (name,body) in scenariosToRun)
@@ -127,7 +127,10 @@ internal static class MainAgentSelftests
             if(!await CloseClaude(w)){s.Status="precondition-failed";s.Why="could not close the Claude panel (secondary side bar)";return;}
             s.Facts["claudePanelOpenBefore"]=false;TryDump("C-panel-closed");
             await NotepadInFront(s);
+            long entersBefore=Interlocked.Read(ref MainAgentPrompt.PaletteEnters);
             await RunAndProve(s,w,"C",expectRoute:"palette");
+            long enters=Interlocked.Read(ref MainAgentPrompt.PaletteEnters)-entersBefore;s.Facts["paletteEnters"]=enters;
+            if(s.Status=="passed"&&enters!=1){s.Status="failed";s.Why="the palette Enter was sent "+enters+" times (expected once, after the highlighted entry was proven)";}
         }
         async Task D(Scn s)
         {
@@ -225,6 +228,33 @@ internal static class MainAgentSelftests
             if(before is null||PromptText.Squash(before)!=PromptText.Squash(draft)){s.Status="precondition-failed";s.Why="the draft did not land in the box";return;}
             await NotepadInFront(s);
             await RunAndProve(s,w,"I",expectRoute:null,draft:draft);
+        }
+        // The palette shows something else than "Claude Code: Focus input" (the label is set to nonsense through a test hook, which is what a disabled extension looks like: "No matching commands"
+        // or an unrelated fuzzy match). The proof against the highlighted entry must fail: no Enter, nothing typed, nothing run, palette closed.
+        async Task J(Scn s)
+        {
+            var w=await Start(s,"ws-J",openClaude:false);if(w==IntPtr.Zero)return;
+            if(!await CloseClaude(w)){s.Status="precondition-failed";s.Why="could not close the Claude panel (secondary side bar)";return;}
+            await NotepadInFront(s);
+            string titleBefore=TitleOf(w);uint clip=Native.GetClipboardSequenceNumber();
+            long entersBefore=Interlocked.Read(ref MainAgentPrompt.PaletteEnters);
+            PromptResult r;
+            MainAgentPrompt.PaletteLabelForTests="Zq nonsense label";
+            try{r=await new MainAgentPrompt(Names,log).Run(Prompt,CancellationToken.None);}
+            finally{MainAgentPrompt.PaletteLabelForTests=null;}
+            long enters=Interlocked.Read(ref MainAgentPrompt.PaletteEnters)-entersBefore;
+            await Task.Delay(1200);Shot("J-after-run");
+            var f=MainAgentPrompt.Focus();
+            bool paletteOpen=f is not null&&FocusRules.InQuickInput(f.Classes);
+            string? editor=EditorText(w);string title=TitleOf(w);
+            var probe=new MainAgentPrompt(Names,(_,_)=>{});
+            string? boxNow=ReadInput(probe,w);
+            s.Facts["code"]=r.Code;s.Facts["route"]=r.Route;s.Facts["chars"]=r.Chars;s.Facts["paletteEnters"]=enters;s.Facts["paletteOpenAfter"]=paletteOpen;
+            s.Facts["focusAfterName"]=f?.Name;s.Facts["titleBefore"]=titleBefore;s.Facts["titleAfter"]=title;s.Facts["editorRead"]=editor;s.Facts["boxAfter"]=boxNow;
+            bool clipOk=Native.GetClipboardSequenceNumber()==clip;s.Facts["clipboardUntouched"]=clipOk;
+            bool ok=r.Code==PromptCodes.NoField&&r.Chars==0&&enters==0&&!paletteOpen&&title==titleBefore&&!title.Contains('●')
+                &&(editor is null||(!editor.Contains(Marker)&&!editor.Contains("nonsense")))&&(boxNow is null||!boxNow.Contains(Marker))&&clipOk;
+            s.Status=ok?"passed":"failed";if(!ok)s.Why="see facts";
         }
         // ---- helpers
         async Task<IntPtr> Start(Scn s,string ws,bool openClaude)
