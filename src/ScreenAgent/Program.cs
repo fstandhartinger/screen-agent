@@ -35,7 +35,7 @@ internal static class Program
             if(args.FirstOrDefault()=="--selftest-frame")return DrawSelftests.Frame(args[1]);
             if(args.FirstOrDefault()=="--selftest-hotkeys")return Selftests.Hotkeys();
             if(args.FirstOrDefault()=="--selftest-windows")return Selftests.Windows();
-            if(args.FirstOrDefault()=="--selftest-live")return LiveSelftests.Run(args[1],args[2]);
+            if(args.FirstOrDefault()=="--selftest-live")return LiveSelftests.Run(args[1],args[2],args[3]);
             string sid=System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value??"";
             using var instance=new Mutex(true,"Local\\ScreenAgent-"+sid,out bool first);
             string showName="Local\\ScreenAgent-Show-"+sid;

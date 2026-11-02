@@ -5,7 +5,7 @@ namespace ScreenAgent.Tests;
 public class FrameTests
 {
     const int W=ChangeDetector.Width,H=ChangeDetector.Height;
-    // A quiet page: light grey with a faint texture, 640x360 like the real downsample.
+    // A quiet page: light grey with a faint texture, 960x540 like the real downsample.
     static byte[] Page(){var g=new byte[W*H];for(int i=0;i<g.Length;i++)g[i]=(byte)(200+(i*7)%5);return g;}
     static byte[] With(byte[] g,int x0,int y0,int w,int h,int delta){var c=(byte[])g.Clone();for(int y=y0;y<y0+h;y++)for(int x=x0;x<x0+w;x++)c[y*W+x]=(byte)Math.Clamp(c[y*W+x]+delta,0,255);return c;}
     // A 1920x1080 screenshot as BGRA, white, to run the real downsample on.
@@ -48,17 +48,17 @@ public class FrameTests
     }
     [Fact] public void SparseSingleDotsDoNotCount()
     {
-        var a=Page();var b=(byte[])a.Clone();for(int y=0;y<H;y+=40)for(int x=0;x<W;x+=40)b[y*W+x]=0;   // one dot per tile
+        var a=Page();var b=(byte[])a.Clone();for(int y=0;y<H;y+=60)for(int x=0;x<W;x+=60)b[y*W+x]=0;   // one dot per tile
         Assert.False(ChangeDetector.Changed(a,b));
     }
     [Fact] public void TheGridMustBeTheRightSize()=>Assert.Throws<ArgumentException>(()=>ChangeDetector.Changed(new byte[10],new byte[10]));
     [Fact] public void DownsampleAveragesTheArea()
     {
-        var p=Screen(1280,720);var g=ChangeDetector.FromBgra(p,1280,720,1280*4);
+        var p=Screen(1920,1080);var g=ChangeDetector.FromBgra(p,1920,1080,1920*4);
         Assert.Equal(W*H,g.Length);Assert.All(g,v=>Assert.Equal(255,(int)v));   // white: the three weights add up to 256
-        for(int y=0;y<720;y++)for(int x=0;x<2;x++){int i=(y*1280+x)*4;p[i]=p[i+1]=p[i+2]=0;}   // a 2 px wide black bar on the left = the first grid column
-        g=ChangeDetector.FromBgra(p,1280,720,1280*4);Assert.Equal(0,g[0]);Assert.True(g[1]>250);
-        Assert.Throws<ArgumentException>(()=>ChangeDetector.FromBgra(new byte[10],1280,720,1280*4));
+        for(int y=0;y<1080;y++)for(int x=0;x<2;x++){int i=(y*1920+x)*4;p[i]=p[i+1]=p[i+2]=0;}   // a 2 px wide black bar on the left = the first grid column
+        g=ChangeDetector.FromBgra(p,1920,1080,1920*4);Assert.Equal(0,g[0]);Assert.True(g[1]>250);
+        Assert.Throws<ArgumentException>(()=>ChangeDetector.FromBgra(new byte[10],1920,1080,1920*4));
     }
     [Fact] public void RealResolutionFiveDigitNumberCountsAndCaretDoesNot()
     {

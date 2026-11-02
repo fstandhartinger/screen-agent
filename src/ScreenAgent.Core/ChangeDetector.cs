@@ -1,11 +1,10 @@
 namespace ScreenAgent.Core;
-// Did the screen change enough for the agent to need a new picture? The frame is reduced to a 640x360 grey grid (area average, so thin text keeps some weight);
+// Did the screen change enough for the agent to need a new picture? The frame is reduced to a 960x540 grey grid (area average, so thin text keeps some weight);
 // a pixel counts as changed when it moved by more than Level; the grid is cut into 16x9 tiles overlapping by half, and a tile counts when it has MinPixels changed
-// pixels spread over at least MinWidth columns. On a real page (measured, 1920x1080): one digit of a 14 px number changes 8 pixels, a whole number 37, and a caret 7 in
-// a line one or two columns wide: the shape tells them apart, so a number counts and a caret does not. A clock digit counts too, which costs one frame a minute.
+// pixels spread over at least MinWidth columns. On a real page at 1920x1080 a whole 14 px number changes dozens of pixels, one digit of it more than a handful, and a caret is a line one or two columns wide: the shape tells them apart, so a number counts and a caret does not. A clock digit counts too, which costs one frame a minute.
 public static class ChangeDetector
 {
-    public const int Width=640,Height=360,TilesX=16,TilesY=9,Level=12,MinPixels=4,MinWidth=3;
+    public const int Width=960,Height=540,TilesX=16,TilesY=9,Level=12,MinPixels=6,MinWidth=3;
     // Straight BGRA/BGRX pixels (System.Drawing Format32bppArgb), rows `stride` bytes apart.
     public static byte[] FromBgra(ReadOnlySpan<byte> pixels,int width,int height,int stride)
     {
@@ -27,7 +26,7 @@ public static class ChangeDetector
     public static bool Changed(byte[] before,byte[] after,int level=Level,int minPixels=MinPixels)=>ChangedTiles(before,after,level,minPixels)>0;
     public static int ChangedTiles(byte[] before,byte[] after,int level=Level,int minPixels=MinPixels)
     {
-        if(before.Length!=Width*Height||after.Length!=Width*Height)throw new ArgumentException("640x360 grid expected");
+        if(before.Length!=Width*Height||after.Length!=Width*Height)throw new ArgumentException("960x540 grid expected");
         int tw=Width/TilesX,th=Height/TilesY,tiles=0;
         for(int top=0;top+th<=Height;top+=th/2)for(int left=0;left+tw<=Width;left+=tw/2)
         {

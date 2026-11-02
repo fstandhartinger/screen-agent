@@ -9,7 +9,7 @@ internal static class LiveSelftests
     [DllImport("user32.dll")]static extern bool SetCursorPos(int x,int y);
     [DllImport("user32.dll")]static extern void mouse_event(uint flags,uint dx,uint dy,uint data,UIntPtr extra);
     static void Key(ushort vk,bool up=false)=>Native.SendInput(1,[Native.Key(vk,up,0,false,(UIntPtr)0x5442)],Marshal.SizeOf<Native.Input>());
-    public static int Run(string desk,string secondPage)
+    public static int Run(string desk,string firstPage,string secondPage)
     {
         var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};int exit=1;var report=new Dictionary<string,object?>();
         using var j=JsonDocument.Parse(Environment.GetEnvironmentVariable("SA_E2E_TOKEN")??throw new InvalidOperationException("SA_E2E_TOKEN missing"));
@@ -23,8 +23,12 @@ internal static class LiveSelftests
         {
             try
             {
-                bridge.StartHidden();
-                for(int i=0;i<300&&bridge.SessionId is null;i++)await Task.Delay(100);
+                // A runner's WebView2 only initialises behind a shown window; on the laptop the hidden start works (a#7f54a5). The page then goes behind the real page, as in normal use.
+                bridge.StartHidden();bridge.ShowDesk();
+                for(int i=0;i<600&&bridge.SessionId is null;i++)await Task.Delay(100);
+                bridge.Hide();
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("msedge",$"--no-first-run --start-fullscreen {firstPage}"){UseShellExecute=true});
+                await Task.Delay(6000);
                 report["sid"]=bridge.SessionId is not null;report["stage"]=bridge.InitStage;report["browser"]=bridge.BrowserReady;report["paired"]=client.Paired;report["fallback"]=bridge.FallbackUsed;report["initError"]=bridge.InitErrorType;
                 report["page"]=await bridge.Eval("location.pathname+location.search+' | '+document.readyState+' | '+(document.body?document.body.innerText.slice(0,160):'')");
                 hook.SetSession(true);

@@ -25,9 +25,7 @@ jobs:
           . ./ci/invoke-sa.ps1
           $wav = (Resolve-Path testdata/e2e-questions.wav).Path
           $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=$wav%noloop --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --autoplay-policy=no-user-gesture-required"
-          Start-Process msedge -ArgumentList '--no-first-run','--start-fullscreen','https://explainers.app.mintapis.com/p/agent-artifact-ids-1wfd2l8boy/'
-          Start-Sleep 10
-          Invoke-SA --selftest-live $env:E2E_DESK_URL 'https://explainers.app.mintapis.com/p/agent-artifact-ids-1wfd2l8boy/?e2e=second' | Tee-Object e2e.json
+          Invoke-SA --selftest-live $env:E2E_DESK_URL 'https://explainers.app.mintapis.com/p/agent-artifact-ids-1wfd2l8boy/' 'https://github.com/fstandhartinger/screen-agent' | Tee-Object e2e.json
           Write-Host "exit $LASTEXITCODE"
           Get-Content "$env:LOCALAPPDATA/ScreenAgent/logs/screenagent.log" -ErrorAction SilentlyContinue | Select-Object -Last 150
           if ($LASTEXITCODE -ne 0) { throw 'live selftest failed' }

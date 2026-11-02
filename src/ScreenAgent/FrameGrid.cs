@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace ScreenAgent;
 internal static class FrameGrid
 {
-    // 640x360 grey grid for the change test (ChangeDetector).
+    // 960x540 grey grid for the change test (ChangeDetector).
     public static byte[] Of(Bitmap image)
     {
         var data=image.LockBits(new Rectangle(0,0,image.Width,image.Height),ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
