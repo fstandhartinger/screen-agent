@@ -49,7 +49,7 @@ internal sealed class AppController : IDisposable
     readonly FramePlanner planner;
     string? freshId,commandsSid;
     readonly MainAgentPrompt prompts;
-    readonly PromptGate promptGate=new();
+    readonly PromptChannel promptChannel;
     CanvasPanel? canvas;
     bool canvasClosed,canvasNoted;
     bool micMuted,manualSession,prevVoice,prevActive;
@@ -60,6 +60,9 @@ internal sealed class AppController : IDisposable
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
         telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);
         prompts=new(config.MainAgentInputNames,(type,data)=>telemetry.Event(type,data));
+        promptChannel=new(client,prompts.Run,(type,data)=>telemetry.Event(type,data),
+            (code,text)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,text);}catch{ /* the result still tells */ }})),
+            sid=>bridge.SessionId==sid&&bridge.VoiceOn);
         bridge.CanvasPending+=OnCanvasPending;bridge.CanvasToggle+=ToggleCanvas;
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
         bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();};
@@ -316,56 +319,13 @@ internal sealed class AppController : IDisposable
                 using var reply=await client.Raw(HttpMethod.Get,"api/device/session/"+Uri.EscapeDataString(sid)+"/commands",null,ct);
                 // The page says voice is on before the gateway has its session (connecting), and a dialog can end: wait, the loop ends with VoiceOn.
                 if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="commands"});await Task.Delay(3000,ct);continue;}
-                if(reply.Ok&&reply.Json is {} pj&&PromptCommand.Parse(pj.RootElement) is {} request)_=RunPrompt(sid,request,ct);   // typing runs on its own; the long poll is parked again at once
+                if(reply.Ok&&reply.Json is {} pj&&PromptCommand.Parse(pj.RootElement) is {} request)_=promptChannel.Handle(sid,request,ct);   // typing runs on its own; the long poll is parked again at once
                 else if(reply.Ok&&reply.Json is {} j&&j.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.True&&j.RootElement.TryGetProperty("id",out var id)&&id.ValueKind==System.Text.Json.JsonValueKind.String)
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
                 else if(!reply.Ok)await Task.Delay(3000,ct);
             }
             catch(OperationCanceledException){return;}
             catch{try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}}
-        }
-    }
-    // Main Agent prompt (command channel): acknowledge at once, type, report the outcome. The text itself never goes back.
-    async Task RunPrompt(string sid,PromptRequest request,CancellationToken ct)
-    {
-        var start=promptGate.Begin(request.Id);
-        if(start==PromptStart.Repeat)return;
-        string url="api/device/session/"+Uri.EscapeDataString(sid)+"/commands/"+Uri.EscapeDataString(request.Id)+"/result";
-        await ReportPrompt(url,new{state="received"});
-        telemetry.Event("main.prompt.received",new(){["chars"]=request.Text.Length});
-        void Fallback(string code)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,request.Text);}catch{ /* the result below still tells */ }}));
-        if(start==PromptStart.Busy)
-        {
-            telemetry.Event("main.prompt.done",new(){["code"]=PromptCodes.Busy,["chars"]=0});Fallback(PromptCodes.Busy);
-            await ReportPrompt(url,new{state="failed",code=PromptCodes.Busy,landed=(bool?)null,chars=0});return;
-        }
-        try
-        {
-            if(bridge.SessionId!=sid||!bridge.VoiceOn||ct.IsCancellationRequested)
-            {
-                telemetry.Event("main.prompt.done",new(){["code"]=PromptCodes.NoSession,["chars"]=0});Fallback(PromptCodes.NoSession);
-                await ReportPrompt(url,new{state="failed",code=PromptCodes.NoSession,landed=(bool?)null,chars=0});return;
-            }
-            var result=await prompts.Run(request.Text,ct);
-            bool ok=PromptCodes.Ok(result.Code);
-            if(!ok)Fallback(result.Code);
-            await ReportPrompt(url,new{state=ok?"done":"failed",code=result.Code,landed=result.Landed,chars=result.Chars});
-        }
-        catch{await ReportPrompt(url,new{state="failed",code=PromptCodes.Interrupted,landed=(bool?)null,chars=0});}
-        finally{promptGate.End();}
-    }
-    async Task ReportPrompt(string url,object body)
-    {
-        for(int attempt=0;attempt<2;attempt++)
-        {
-            try
-            {
-                using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);
-                if(reply.Ok||reply.Status is 404 or 409)return;
-            }
-            catch{ /* one retry */ }
-            await Task.Delay(500);
         }
     }
     // Drawing panel. Auto-open only when allowed (config, not closed by him this session) and only with the capture exclusion confirmed.

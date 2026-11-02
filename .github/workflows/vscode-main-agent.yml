@@ -33,10 +33,16 @@ jobs:
           New-Item -ItemType Directory -Force artifacts | Out-Null
           Invoke-SA --selftest-canvas-panel | Tee-Object artifacts/canvas-panel.json
           if ($LASTEXITCODE -ne 0) { throw 'Drawing panel selftest failed' }
+      - name: Command channel selftest (fake Desk: received first, one result, repeats ignored, busy, no text back)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-prompt-channel | Tee-Object artifacts/prompt-channel.json
+          if ($LASTEXITCODE -ne 0) { throw 'Command channel selftest failed' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: canvas-panel
+          name: panel-and-channel
           path: artifacts/
           retention-days: 14
           if-no-files-found: warn
