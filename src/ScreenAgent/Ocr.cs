@@ -71,7 +71,7 @@ internal static class Ocr
         var hash=new HashCode();hash.AddBytes(raw);long key=hash.ToHashCode();
         lock(TileCache)if(TileCache.TryGetValue(key,out var known))return known;
         var ids=new List<string>();
-        foreach(var pass in (Environment.GetEnvironmentVariable("SCREENAGENT_OCR_PASSES")??"3:48,3:110").Split(',').Select(x=>x.Split(':')).Select(x=>OcrTiles.Flatten(raw,stride,tile.Width,tile.Height,int.Parse(x[0]),int.Parse(x[1]))))
+        foreach(var pass in (Environment.GetEnvironmentVariable("SCREENAGENT_OCR_PASSES")??"3:110").Split(',').Select(x=>x.Split(':')).Select(x=>OcrTiles.Flatten(raw,stride,tile.Width,tile.Height,int.Parse(x[0]),int.Parse(x[1]))))
         {
             using var bitmap=Windows.Graphics.Imaging.SoftwareBitmap.CreateCopyFromBuffer(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(pass.Bgra),BitmapPixelFormat.Bgra8,pass.W,pass.H,BitmapAlphaMode.Premultiplied);
             var result=await engine.RecognizeAsync(bitmap);
