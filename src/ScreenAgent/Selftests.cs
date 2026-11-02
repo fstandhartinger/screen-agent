@@ -191,7 +191,7 @@ internal static class Selftests
                 else
                 {
                     for(int i=0;i<400&&!bridge.BrowserReady;i++)await Task.Delay(100);
-                    Case("page-starts-while-hidden",bridge.BrowserReady,new{runtime,readyMs=bridge.ReadyMs});
+                    Case("page-starts-while-hidden",bridge.BrowserReady,new{runtime,readyMs=bridge.ReadyMs,fallbackUsed=bridge.FallbackUsed,stage=bridge.InitStage,errorType=bridge.InitErrorType,hresult=bridge.InitErrorHResult});
                     // The window must settle hidden on its own, and must never have been on screen on the way.
                     for(int i=0;i<250&&bridge.IsVisible;i++)await Task.Delay(100);
                     Case("desk-settles-hidden-never-seen",!bridge.IsVisible&&!shownOnScreen,new{visibleNow=bridge.IsVisible,shownOnScreen});

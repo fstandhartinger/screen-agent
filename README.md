@@ -63,7 +63,10 @@ Live and file OCR prefer Windows.Media.Ocr and fall back to bundled Tesseract en
 ## Verification and manual checklist
 
 Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config, window placement at 100–200 % scaling, status texts, voice-start logic), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. Since 0.1.2 it also checks that the exe is a GUI-subsystem program (no console window), that Ctrl+Win and Ctrl+Win+Alt pass through a real low-level keyboard hook untouched while Alt+Win+Shift toggles the session (`--selftest-hotkeys`; GitHub's `windows-latest` has an input desktop and runs it, a runner without one skips with exit 2 and the manual checklist applies), and that the Desk window starts hidden, is not topmost, opens, minimises, remembers its size, and that the status note is small, bottom-right, click-through and hides again (`--selftest-windows`). Since 0.1.3 the browser is hosted directly in the native client rectangle in device pixels, with bounds refreshed on open,
-resize, monitor DPI change and rasterization-scale change; there is no temporary off-screen 400×300 WPF WebView layout.
+resize, monitor DPI change and rasterization-scale change; there is no temporary 400×300 WPF WebView layout.
+Runtimes that cannot initialize an invisible parent get one bounded off-screen/no-activate tool-window show after six
+seconds, hidden again when initialization settles (at most fifteen seconds later). This never appears in the taskbar
+or on the monitor; opening Desk during startup cancels the off-screen state and keeps the user's ordinary window open.
 The default Desk size is 900×800 DIP, clamped to the monitor work area. Windows selftests capture the real native WebView
 at 100/125/150% rasterization (`artifacts/desk-controller-100.png`, `-125.png`, `-150.png`) and assert the DOM viewport in
 physical pixels equals the entire native client rectangle after resizing and reopening. They also exercise pending and

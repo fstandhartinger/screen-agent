@@ -26,10 +26,16 @@ internal sealed class AgentBridge : Window
     bool Trusted(string url)=>Uri.TryCreate(url,UriKind.Absolute,out var u)&&u.GetLeftPart(UriPartial.Authority)==origin.GetLeftPart(UriPartial.Authority);
     readonly AppConfig config;
     readonly System.Windows.Threading.DispatcherTimer saveTimer=new(){Interval=TimeSpan.FromMilliseconds(600)};
-    bool initStarted,testPage;
+    bool initStarted,testPage,offscreen;
+    Task initTask=Task.CompletedTask;
+    DispatcherTimer? startupFallback;
     (string state,string text)? pairStatus;
     readonly System.Diagnostics.Stopwatch startup=new();
     public long ReadyMs {get;private set;}
+    public bool FallbackUsed {get;private set;}
+    public string InitStage {get;private set;}="not-started";
+    public string? InitErrorType {get;private set;}
+    public int? InitErrorHResult {get;private set;}
     public bool BrowserReady=>browser is not null;
     public static string StateFile=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","desk-window.json");
     public AgentBridge(AppConfig config,DeviceClient client)
@@ -47,14 +53,14 @@ internal sealed class AgentBridge : Window
             HwndSource.FromHwnd(h)?.AddHook(WindowMessage);
         };
         IsVisibleChanged+=(_,_)=>ResizeBrowser();
-        Closed+=(_,_)=>{lifetime.Cancel();pairing?.Cancel();controller?.Close();lifetime.Dispose();};
+        Closed+=(_,_)=>{startupFallback?.Stop();lifetime.Cancel();pairing?.Cancel();controller?.Close();lifetime.Dispose();};
         Closing+=(_,e)=>{if(!AllowClose){e.Cancel=true;SaveBounds();Hide();}};
         saveTimer.Tick+=(_,_)=>{saveTimer.Stop();SaveBounds();};
         SizeChanged+=(_,_)=>{ResizeBrowser();if(IsVisible){saveTimer.Stop();saveTimer.Start();}};
         LocationChanged+=(_,_)=>{controller?.NotifyParentWindowPositionChanged();if(IsVisible){saveTimer.Stop();saveTimer.Start();}};
         Loaded+=(_,_)=>Begin();
     }
-    void Begin(){if(initStarted)return;initStarted=true;_=InitBrowser();}
+    void Begin(){if(initStarted)return;initStarted=true;initTask=InitBrowser();}
     async Task InitBrowser()
     {
         try
@@ -62,17 +68,21 @@ internal sealed class AgentBridge : Window
             string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","WebView2");
             // The page keeps the voice session alive while this window is hidden: no background throttling.
             var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows");
+            InitStage="environment";
             var env=await CoreWebView2Environment.CreateAsync(null,profile,options);
+            if(lifetime.IsCancellationRequested)return;
+            InitStage="controller";
             // Direct HWND hosting deliberately uses device pixels. WPF's old WebView2 control retained its
             // off-screen 400x300 layout after a native resize, leaving a large white region at scaled DPI.
             controller=await env.CreateCoreWebView2ControllerAsync(new WindowInteropHelper(this).EnsureHandle());
+            if(lifetime.IsCancellationRequested){controller.Close();return;}
             controller.BoundsMode=CoreWebView2BoundsMode.UseRawPixels;
             controller.ShouldDetectMonitorScaleChanges=true;
             controller.DefaultBackgroundColor=System.Drawing.Color.FromArgb(255,15,19,23);
             controller.RasterizationScaleChanged+=(_,_)=>ResizeBrowser();
             browser=controller.CoreWebView2;
             ResizeBrowser();
-            ReadyMs=startup.ElapsedMilliseconds;
+            ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";
             browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri)&&!(testPage&&e.Uri=="about:blank"))e.Cancel=true;else{SessionId=null;SessionChanged?.Invoke();}};
             browser.WebMessageReceived+=(_,e)=>
             {
@@ -116,17 +126,42 @@ internal sealed class AgentBridge : Window
             }
             else OpenPairing();
         }
-        catch(Exception)
+        catch(Exception ex)
         {
+            InitErrorType=ex.GetType().Name;InitErrorHResult=ex.HResult;InitStage="failed";
+            if(lifetime.IsCancellationRequested)return;
             Content=new System.Windows.Controls.TextBlock{Text="Desk konnte nicht geöffnet werden. Bitte prüfe deine Internetverbindung und die WebView2-Laufzeit.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(12)};
             ShowDesk(); // the user must see why nothing works
         }
     }
-    // An HWND controller can start against a hidden window. No temporary off-screen resize or WPF layout is needed.
+    // Some WebView runtimes initialize against an invisible parent; others (observed with runtime 156) wait until
+    // the parent has been shown. Briefly show only off-screen, as a no-activate tool window. The direct controller
+    // always re-reads its native client rectangle, so this cannot leave the old WPF control's stale 400x300 layout.
     public void StartHidden()
     {
         startup.Restart();new WindowInteropHelper(this).EnsureHandle();Begin();
+        startupFallback=new DispatcherTimer{Interval=TimeSpan.FromSeconds(6)};
+        startupFallback.Tick+=async (_,_)=>
+        {
+            startupFallback.Stop();
+            if(BrowserReady||IsVisible||lifetime.IsCancellationRequested)return;
+            FallbackUsed=true;offscreen=true;
+            var h=new WindowInteropHelper(this).Handle;
+            Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()|0x80L));
+            // Set WPF's remembered position as well as the HWND before the first Show, preventing a visible flash.
+            Left=-32000;Top=-32000;ShowActivated=false;
+            Native.SetWindowPos(h,IntPtr.Zero,-32000,-32000,900,800,0x14);
+            Show();ResizeBrowser();
+            await Task.WhenAny(initTask,Task.Delay(15000,lifetime.Token));
+            if(lifetime.IsCancellationRequested)return;
+            if(offscreen)
+            {
+                Hide();offscreen=false;RestoreOrdinaryStyle(h);
+            }
+        };
+        startupFallback.Start();
     }
+    static void RestoreOrdinaryStyle(IntPtr h)=>Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()&~0x80L));
     IntPtr WindowMessage(IntPtr hwnd,int msg,IntPtr wParam,IntPtr lParam,ref bool handled)
     {
         if(msg is 0x0005 or 0x02e0) // WM_SIZE / WM_DPICHANGED: let WPF finish the native size change first.
@@ -203,8 +238,9 @@ internal sealed class AgentBridge : Window
     public void ShowDesk()
     {
         var h=new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
-        if(!IsVisible)
+        if(!IsVisible||offscreen)
         {
+            if(offscreen){offscreen=false;RestoreOrdinaryStyle(h);}
             ApplyPlacement(h);ShowActivated=true;
             if(!IsVisible)Show();
             ApplyPlacement(h); // WPF applies its own first-show position; set ours again
@@ -232,7 +268,7 @@ internal sealed class AgentBridge : Window
     {
         try
         {
-            if(!IsVisible||WindowState!=WindowState.Normal)return;   // never remember the hidden start-up position
+            if(!IsVisible||offscreen||WindowState!=WindowState.Normal)return;   // never remember the hidden start-up position
             var b=Bounds(new System.Windows.Interop.WindowInteropHelper(this).Handle);if(b.W<=0||b.H<=0||b.X<-10000)return;
             Directory.CreateDirectory(Path.GetDirectoryName(StateFile)!);File.WriteAllText(StateFile,System.Text.Json.JsonSerializer.Serialize(new[]{b.X,b.Y,b.W,b.H}));
         }
