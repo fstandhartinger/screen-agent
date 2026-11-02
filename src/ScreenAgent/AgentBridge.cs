@@ -227,7 +227,8 @@ internal sealed class AgentBridge : Window
         cookie.IsHttpOnly=true;cookie.IsSecure=true;cookie.SameSite=CoreWebView2CookieSameSiteKind.Strict;
         cookie.Expires=DateTimeOffset.FromUnixTimeMilliseconds(session.expiresAt).UtcDateTime;
         browser.CookieManager.AddOrUpdateCookie(cookie);
-        browser.Navigate(new Uri(origin,"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider)).AbsoluteUri);
+        // client/cv/cc: the web client maps these into the voice start message (client:{app,version,commit,device}, entry:{path:"screen-agent"}).
+        browser.Navigate(new Uri(origin,"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider)+"&client=screen-agent&cv="+Uri.EscapeDataString(AppInfo.Version)+"&cc="+Uri.EscapeDataString(AppInfo.Commit)+"&device=windows").AbsoluteUri);
         SessionChanged?.Invoke();
     }
     async Task StartPairing()
@@ -339,6 +340,10 @@ internal sealed class AgentBridge : Window
         catch{return false;}
         finally{if(muteAck==ack)muteAck=null;}
     }
+    // Global mic mute (Ctrl+Win+Shift+M): the Desk page owns the state (window.__deskVoice, see web voiceController). null = no running voice session or no such API.
+    public async Task<bool?> ToggleMicMute()=>ParseBool(await Eval("(()=>{const v=window.__deskVoice;if(!v||!v.toggleMuted)return null;return v.toggleMuted()===false?null:Boolean(v.muted());})()"));
+    public async Task<bool?> MicMuted()=>ParseBool(await Eval("(()=>{const v=window.__deskVoice;return v&&v.muted?Boolean(v.muted()):null;})()"));
+    static bool? ParseBool(string? json)=>json switch{"true"=>true,"false"=>false,_=>null};
     public void Screen(string[] ids)=>browser?.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="screen",ids}));
     public void Disconnect()
     {

@@ -13,12 +13,13 @@ public static class Corrections
         string from=string.Join(' ',a[start..endA]),to=string.Join(' ',b[start..endB]);
         return Regex.IsMatch(from,@"^\p{L}+( \p{L}+){0,2}$")&&Regex.IsMatch(to,@"^\p{L}+( \p{L}+){0,2}$")?new(from,to):null;
     }
-    public static bool Observe(List<PendingCorrection> pending,Correction pair)
+    // Florian's spec: "fügt diese Wörter automatisch ins Dictionary hinzu" at the first correction; threshold 2 is the older cautious setting (config LearnThreshold).
+    public static bool Observe(List<PendingCorrection> pending,Correction pair,int threshold=1)
     {
         if(Diff(pair.From,pair.To)!=pair)return false;
-        int i=pending.FindIndex(p=>p.From==pair.From&&p.To==pair.To);
-        if(i<0){pending.Add(new(pair.From,pair.To,1));return false;}
-        pending[i]=pending[i] with{Count=Math.Min(2,pending[i].Count+1)};return pending[i].Count>=2;
+        int need=Math.Max(1,threshold),i=pending.FindIndex(p=>p.From==pair.From&&p.To==pair.To);
+        if(i<0){pending.Add(new(pair.From,pair.To,1));return need<=1;}
+        pending[i]=pending[i] with{Count=Math.Min(need,pending[i].Count+1)};return pending[i].Count>=need;
     }
     public static bool InsertedSpan(string before,string after,string inserted,out int start)
     {

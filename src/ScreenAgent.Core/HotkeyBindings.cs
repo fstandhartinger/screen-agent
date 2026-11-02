@@ -1,28 +1,40 @@
 namespace ScreenAgent.Core;
-// The state machine uses logical roles. Configuration maps two physical modifiers,
-// Shift and three distinct non-modifier keys to those roles.
+// Maps physical keys to roles for the state machine. Configuration names modifiers (Ctrl, Alt, Win, Shift) and
+// four distinct action keys (draw, pause, hands-free, mute).
 public sealed class HotkeyBindings
 {
-    public string Primary {get;}
-    public string Secondary {get;}
     public int DrawVk {get;}
+    public int MuteVk {get;}
+    public HotkeyLayout Layout {get;}
     readonly int pauseVk,spaceVk;
     readonly HashSet<int> held=[];
+    readonly ChordTracker tracker;
+    public static readonly string[] Required=["session","dictation","dictationToggle","mute","pause","handsFree","draw"];
     public HotkeyBindings(Dictionary<string,string> keys)
     {
         static string[] Parts(string value)=>value.Split('+',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries);
-        if(keys.Count!=5||new[]{"dictation","session","pause","handsFree","draw"}.Any(k=>!keys.ContainsKey(k)))throw new InvalidDataException("Five hotkeys required");
-        var dictate=Parts(keys["dictation"]);
-        if(dictate.Length!=2||dictate.Distinct().Count()!=2||dictate.Any(k=>k is not ("Ctrl" or "Alt" or "Win")))throw new InvalidDataException("Dictation needs two distinct modifiers: Ctrl, Alt, Win");
-        Primary=dictate[0];Secondary=dictate[1];
-        bool Chord(string[] actual,params string[] extra)=>actual.Order().SequenceEqual(dictate.Concat(extra).Order());
-        if(!Chord(Parts(keys["session"]),"Shift"))throw new InvalidDataException("Session must add Shift to dictation");
-        var pause=Parts(keys["pause"]);var hands=Parts(keys["handsFree"]);
-        string? pauseKey=pause.SingleOrDefault(k=>k!="Shift"&&!dictate.Contains(k));
-        string? handsKey=hands.SingleOrDefault(k=>!dictate.Contains(k));
-        if(pauseKey is null||handsKey is null||!Chord(pause,"Shift",pauseKey)||!Chord(hands,handsKey))throw new InvalidDataException("Pause/hands-free must extend dictation chord");
-        pauseVk=VirtualKey(pauseKey);spaceVk=VirtualKey(handsKey);DrawVk=VirtualKey(keys["draw"]);
-        if(new[]{pauseVk,spaceVk,DrawVk}.Distinct().Count()!=3)throw new InvalidDataException("Draw, pause and hands-free keys must differ");
+        foreach(var k in Required)if(!keys.ContainsKey(k))throw new InvalidDataException("Hotkey missing: "+k);
+        static Key Mod(string s)=>s switch{"Ctrl"=>Key.Ctrl,"Alt"=>Key.Alt,"Win"=>Key.Win,"Shift"=>Key.Shift,_=>throw new InvalidDataException("Unknown modifier: "+s)};
+        static Key[] Mods(string name,string value,int count,bool shift=true)
+        {
+            var parts=Parts(value);
+            if(parts.Length!=count||parts.Distinct().Count()!=count||parts.Any(p=>p is not ("Ctrl" or "Alt" or "Win" or "Shift")))throw new InvalidDataException($"{name} needs {count} distinct modifiers from Ctrl, Alt, Win, Shift");
+            if(!shift&&parts.Contains("Shift"))throw new InvalidDataException($"{name} cannot use Shift");
+            return parts.Select(Mod).ToArray();
+        }
+        // Action chords: two to four modifiers plus one action key.
+        static (Key[] Mods,string Key) WithKey(string name,string value)
+        {
+            var parts=Parts(value);
+            if(parts.Length<3||parts.Length>5||parts[..^1].Any(p=>p is not ("Ctrl" or "Alt" or "Win" or "Shift"))||parts[..^1].Distinct().Count()!=parts.Length-1)throw new InvalidDataException($"{name} needs two to four modifiers plus one key");
+            return (parts[..^1].Select(Mod).ToArray(),parts[^1]);
+        }
+        var session=Mods("Session",keys["session"],3);var dictation=Mods("Dictation",keys["dictation"],2,false);var toggle=Mods("Dictation toggle",keys["dictationToggle"],3);
+        if(HotkeyLayout.Same(session,toggle))throw new InvalidDataException("Session and dictation toggle need different modifiers");
+        var pause=WithKey("Pause",keys["pause"]);var hands=WithKey("Hands-free",keys["handsFree"]);var mute=WithKey("Mute",keys["mute"]);
+        pauseVk=VirtualKey(pause.Key);spaceVk=VirtualKey(hands.Key);MuteVk=VirtualKey(mute.Key);DrawVk=VirtualKey(keys["draw"]);
+        if(new[]{pauseVk,spaceVk,MuteVk,DrawVk}.Distinct().Count()!=4)throw new InvalidDataException("Draw, pause, hands-free and mute keys must differ");
+        Layout=new(session,dictation,toggle,pause.Mods,hands.Mods,mute.Mods);tracker=new(Layout);
     }
     static int VirtualKey(string key)=>key switch
     {
@@ -31,22 +43,16 @@ public sealed class HotkeyBindings
         _ when key.StartsWith('F')&&int.TryParse(key[1..],out int n)&&n is >=1 and <=12=>0x6f+n,
         _=>throw new InvalidDataException("Use Caps, Space, A-Z or F1-F12 for action keys")
     };
-    static string? Modifier(int vk)=>vk switch{0x11 or 0xa2 or 0xa3=>"Ctrl",0x12 or 0xa4 or 0xa5=>"Alt",0x5b or 0x5c=>"Win",0x10 or 0xa0 or 0xa1=>"Shift",_=>null};
-    public Key Role(int vk)
-    {
-        string? mod=Modifier(vk);
-        return mod==Primary?Key.Ctrl:mod==Secondary?Key.Win:mod=="Shift"?Key.Shift:mod is not null?Key.Foreign:vk==DrawVk?Key.Caps:vk==pauseVk?Key.P:vk==spaceVk?Key.Space:Key.Other;
-    }
-    public bool CtrlWin=>held.Any(k=>Role(k)==Key.Ctrl)&&held.Any(k=>Role(k)==Key.Win);
-    // Ctrl+Win is Wispr Flow's dictation chord; binding it here makes both tools fight over the same keys.
-    public bool CollidesWithWispr=>(Primary,Secondary) is ("Ctrl","Win") or ("Win","Ctrl");
-    // A modifier that is not part of our chord (for example Ctrl while the chord is Alt+Win) means the user is
-    // typing somebody else's shortcut: never react to it and never inject into it.
-    public bool ForeignModifierHeld=>held.Any(k=>Modifier(k) is {} m&&m!=Primary&&m!=Secondary&&m!="Shift");
-    bool armed;
-    // True for exactly one Feed call per chord: the moment both chord modifiers are held. The caller injects the
-    // unassigned-key mask then, while the modifiers are still down, so Win-up does not open Start and Alt-up does
-    // not focus the menu bar. Never true when a foreign modifier is held, so other tools' chords stay untouched.
+    static Key? Modifier(int vk)=>vk switch{0x11 or 0xa2 or 0xa3=>Key.Ctrl,0x12 or 0xa4 or 0xa5=>Key.Alt,0x5b or 0x5c=>Key.Win,0x10 or 0xa0 or 0xa1=>Key.Shift,_=>null};
+    public Key Role(int vk)=>Modifier(vk) ?? (vk==DrawVk?Key.Caps:vk==pauseVk?Key.P:vk==spaceVk?Key.Space:vk==MuteVk?Key.Mute:Key.Other);
+    // Ctrl+Win is Wispr Flow's dictation chord; binding it as a hold chord here makes both tools fight over the same keys.
+    public bool CollidesWithWispr=>HotkeyLayout.Same(Layout.Dictation,[Key.Ctrl,Key.Win]);
+    // The mute key is swallowed only while its chord is held, so Ctrl+Shift+M still works for everybody else.
+    public bool MuteChordHeld=>tracker.Is(Layout.Mute)&&!tracker.Tainted;
+    public bool Is(Key[] set)=>tracker.Is(set);
+    // True for exactly one Feed call per press: the moment a chord of ours completes while Win or Alt is held.
+    // The caller injects the unassigned-key mask then, so releasing Win does not open Start and releasing Alt does not
+    // focus the menu bar. Never before the chord is complete: Ctrl+Win alone (Wispr) reaches everybody byte-identical.
     public bool MaskNow {get;private set;}
     // Releases we never saw (Win+L, Ctrl+Alt+Del, a secure desktop swallowing the key-up) must not leave a key "held":
     // the next Alt would then look like a chord. Called on every key-down with the physical state from Windows.
@@ -61,9 +67,9 @@ public sealed class HotkeyBindings
     {
         key=Role(vk);var role=key;bool was=held.Any(k=>Role(k)==role);MaskNow=false;
         if(down)held.Add(vk);else held.Remove(vk);
-        if(!CtrlWin)armed=false;
-        else if(down&&!armed&&role is Key.Ctrl or Key.Win&&!ForeignModifierHeld){armed=true;MaskNow=true;}
-        if(key is not (Key.Ctrl or Key.Win or Key.Shift))return true;
-        return was!=held.Any(k=>Role(k)==role); // left+right copies remain logically held
+        if(!HotkeyLayout.IsMod(key)){tracker.Feed(key,down);return true;}
+        bool changed=was!=held.Any(k=>Role(k)==role); // left+right copies remain logically held
+        if(changed){tracker.Feed(key,down);MaskNow=tracker.MaskNow;}
+        return changed;
     }
 }

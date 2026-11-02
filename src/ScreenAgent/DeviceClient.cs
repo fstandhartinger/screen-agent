@@ -7,6 +7,13 @@ namespace ScreenAgent;
 internal sealed record DeviceToken(string token,string deviceId,DateTimeOffset expiresAt,string? origin=null);
 internal sealed record PairingStart(string pairId,string pollToken,string browserUrl,long expiresAt);
 internal sealed record WebSession(string cookie,long expiresAt);
+internal sealed record RawReply(int Status,JsonDocument? Json,int RetryAfter) : IDisposable
+{
+    public bool Ok=>Status is >=200 and <300;
+    public string? Code=>Json is {} j&&j.RootElement.ValueKind==JsonValueKind.Object&&j.RootElement.TryGetProperty("code",out var c)&&c.ValueKind==JsonValueKind.String?c.GetString():null;
+    public bool Stop=>Json is {} j&&j.RootElement.ValueKind==JsonValueKind.Object&&j.RootElement.TryGetProperty("stop",out var s)&&s.ValueKind==JsonValueKind.True;
+    public void Dispose()=>Json?.Dispose();
+}
 internal sealed class DeviceClient : IDisposable
 {
     readonly HttpClient http;
@@ -14,11 +21,12 @@ internal sealed class DeviceClient : IDisposable
     DeviceToken? device;
     readonly string tokenPath;
     public bool Paired=>device is not null&&device.expiresAt>DateTimeOffset.UtcNow;
+    public string? DeviceId=>device?.deviceId;
     public DeviceClient(AppConfig config,HttpMessageHandler? handler=null,string? tokenPath=null)
     {
         origin=new Uri(config.DeskUrl).GetLeftPart(UriPartial.Authority);
         this.tokenPath=tokenPath??Path.Combine(ScreenConfig.Folder,"device.bin");
-        http=new(handler??new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(30)};
+        http=new(handler??new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(40)};
         try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(this.tokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}catch{device=null;}
     }
     async Task<T> Read<T>(HttpResponseMessage response,CancellationToken ct)
@@ -81,6 +89,23 @@ internal sealed class DeviceClient : IDisposable
         return DeviceProtocol.Known(await r.Content.ReadAsStringAsync(ct),ids);
     }
     public async Task Post(string path,object body,CancellationToken ct){using var r=await Send(HttpMethod.Post,path,JsonContent.Create(body),ct);}
+    // Like Post/Get but hands back status and a (small) JSON body instead of throwing: the frame and commands routes answer 409 with a code that decides what to do next.
+    public async Task<RawReply> Raw(HttpMethod method,string path,object? body,CancellationToken ct)
+    {
+        if(!Paired)throw new InvalidOperationException("Pair this device first");
+        using var request=new HttpRequestMessage(method,path){Content=body is null?null:JsonContent.Create(body)};request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",device!.token);
+        using var response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
+        JsonDocument? json=null;
+        try
+        {
+            using var stream=await response.Content.ReadAsStreamAsync(ct);using var bytes=new MemoryStream();var chunk=new byte[4096];int n;
+            while((n=await stream.ReadAsync(chunk,ct))>0){if(bytes.Length+n>65536)break;bytes.Write(chunk,0,n);}
+            if(bytes.Length>0&&bytes.Length<=65536)json=JsonDocument.Parse(bytes.ToArray());
+        }
+        catch(JsonException){}
+        int retry=response.Headers.RetryAfter?.Delta is {} d?(int)d.TotalSeconds:0;
+        return new((int)response.StatusCode,json,retry);
+    }
     public async Task<string[]> Dictionary(CancellationToken ct)
     {
         using var r=await Send(HttpMethod.Get,"api/device/dictionary",null,ct);

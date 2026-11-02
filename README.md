@@ -1,4 +1,4 @@
-# Screen Agent v0.1.3 preview
+# Screen Agent v0.1.4 preview
 
 Unsigned .NET 8 WPF companion for Windows 10 2004+ / Windows 11 x64. This prerelease wires device pairing, confirmed screen IDs, draw highlights, dictation and correction learning to Agent Desk. Windows desktop behavior and the live Desk integration still require the manual checks below. Use a non-sensitive test desktop first.
 
@@ -13,7 +13,7 @@ Download `ScreenAgent.exe` and verify it against `SHA256SUMS`. Optional `tessdat
    minimised, resized and moved, it is not always on top, and it remembers its size and position. Click **Im Browser verbinden**.
    Your normal browser opens. If asked, request a Telegram login link, open it, and click **Dieses Gerät verbinden**.
    The app takes over automatically and opens Desk signed in. Do not copy a code or device token. Closing Desk only hides it; the app keeps running.
-3. **Start a session.** Press **Alt+Win+Shift** (hold all three, release together, no other key) or use tray **Sitzung starten**.
+3. **Start a session.** Press **Ctrl+Win+Shift** (Strg+Win+Shift; any key order, press and release once) or use tray **Sitzung starten**. A dialog started with the purple button in the Desk window also counts as a session.
    A small grey note in the bottom-right corner appears with the state ("Sitzung · 3 IDs"). It never takes focus, cannot be clicked,
    and fades when the mouse comes near. Press the keys again, or use the tray, to stop; the note disappears. The tray icon always shows
    the state: grey ready, green session, blue dictating or drawing, yellow paused, orange needs attention. Hover it for the exact text.
@@ -22,25 +22,53 @@ Download `ScreenAgent.exe` and verify it against `SHA256SUMS`. Optional `tessdat
    tray, check that you are signed in and allow the microphone when asked.
 5. **Quit** from the tray menu (**Beenden**). Voice stops and the screen context is cleared first.
 
-**Wispr keeps working.** The default keys are built on Alt+Win, never Ctrl+Win. Ctrl+Win, Ctrl+Win+Alt and every other chord that
-starts with a Ctrl key pass through untouched: the app neither swallows them nor adds keys to them. (One corner: if you press Alt and
-Win first and Ctrl only afterwards, the app has already added its single invisible mask key, because at that moment the chord looked
-like its own. Press Ctrl first, as Wispr's chord does.) Use the LEFT Alt key: on German keyboards the right Alt is AltGr, which
-Windows reports as Ctrl+Alt, so the app treats it as somebody else's chord and ignores it. It swallows exactly one key, Caps
-Lock, and only while a session is on (so a Caps tap or hold can mean "draw"). Everything else is passed on to Windows and to the
-other tools. Version 0.1.1 used Ctrl+Win+Shift and injected extra keys into Ctrl+Win, which very likely is why Wispr stopped reacting (this cannot be proven without the laptop; the CI selftest now proves the new build leaves these keys alone).
-If your `config.json` still holds the old defaults the app replaces them with the new ones at start (the old file is kept as
+**Wispr keeps working.** Ctrl+Win alone is Wispr's chord and the app does not touch it: it does not swallow it, does not inject a key
+and does not react until a third key makes the chord. Only when Shift (or, for dictation, Alt+Win) completes one of our chords does the app send
+one invisible neutral key (VK 0xE8) while Win is still held, so that releasing Win does not open the Start menu. Ctrl+Win+Alt (Wispr's command
+chord) and every other chord that is not exactly one of ours pass through untouched. (One corner: if you press Alt and Win first and Ctrl only
+afterwards, the app has already added its single mask key, because at that moment the chord looked like its own Alt+Win. Press Ctrl first.)
+Use the LEFT Alt key: on German keyboards the right Alt is AltGr, which Windows reports as Ctrl+Alt. The app swallows only Caps Lock (while a
+session is on, so a Caps tap or hold can mean "draw") and the M of Ctrl+Win+Shift+M (only while a session runs).
+**What may still happen with Wispr:** Wispr starts listening on Ctrl+Win, before our Shift arrives. If you press the three keys within about
+a tenth of a second Wispr is likely to discard such a short recording; if you hold Ctrl+Win and add Shift late, Wispr may have started and may type
+a few words. This cannot be checked without the laptop; see the acceptance table.
+If your `config.json` still holds defaults from v0.1.0 to v0.1.3 the app replaces them with the new ones at start (the old file is kept as
 `config.json.v0.1.1.bak`) and says so in a balloon.
+
+## Keys (defaults)
+
+| Keys | What it does |
+| --- | --- |
+| Ctrl+Win+Shift (any order, press once) | Start the voice session (dialog, screen context, frames); press again to end it |
+| Ctrl+Win+Shift+M | Mute / unmute the microphone, only while a session runs. The status note turns red ("Mikro stumm"), same state as the Desk dock button |
+| Ctrl+Win+Shift+P | Pause / resume capture |
+| Alt+Win (hold 250 ms) | Dictate; release to transcribe and insert |
+| Alt+Win+Shift (any order, press once) | Dictation on; press again to end it and insert the text |
+| Alt+Win+Y | Hands-free dictation toggle (second way to the same) |
+| Caps Lock (hold 200 ms, only in a session) | Draw magenta, 5 px strokes; tap = normal Caps Lock |
+| Ctrl+Win alone | Not ours: Wispr Flow |
+
+The tray menu lists every key, and each chord can be changed under `Hotkeys` in `config.json`.
 
 ## Controls
 
-- Alt+Win+Shift, then release all three without another key: toggle the screen and Desk voice session together (or tray **Sitzung starten/beenden**). Missing voice acknowledgement after two seconds shows an orange note and tray text with the next step. Press order does not matter. If you have a second keyboard layout with the Alt+Shift switch, Windows may also switch layout; move the chord in `config.json` (below) if that bothers you.
-- Alt+Win held at least 250 ms without Shift: dictate; release to transcribe and insert. Adding Shift discards. This is separate from Wispr, which keeps Ctrl+Win.
-- Alt+Win+Y: hands-free dictation toggle. Each recording is limited to 60 seconds; longer recordings are refused rather than silently truncated.
+- Ctrl+Win+Shift, then release without another key: toggle the screen and Desk voice session together (or tray **Sitzung starten/beenden**). The action happens when the first of the three keys is released. Missing voice acknowledgement after two seconds shows an orange note and tray text with the next step.
+- Ctrl+Win+Shift+M while a session runs: mute or unmute the microphone through the Desk page (`window.__deskVoice.toggleMuted()`); no audio leaves the device while muted, the session continues. The small note turns red.
+- Alt+Win held at least 250 ms: dictate; release to transcribe and insert. Adding Ctrl discards. Adding Shift latches it (same as Alt+Win+Shift).
+- Alt+Win+Shift: dictation toggle. First press starts recording, the second ends it, transcribes and inserts. Each recording is limited to 60 seconds; longer recordings are refused rather than silently truncated.
+- Alt+Win+Y: hands-free dictation toggle, as before.
 - Caps Lock outside a session works normally. In a session, tap under 200 ms toggles normally; hold at least 200 ms draws magenta strokes. Finish after 700 ms idle following a stroke or on Caps release. The app composites strokes onto a privacy-masked capture in memory, sends the bounding crop with 15% margin and a downscaled masked context JPEG, then fades strokes over 1.5 seconds.
-- Alt+Win+Shift+P or tray **Pause**: pause capture. The tray menu also has **Desk öffnen**, **Gerät trennen**, **Beenden** and shows the current status and the session key. Closing the Desk hides it; minimising puts it on the taskbar like any window. The Desk window opens only on your request (tray click, tray menu, starting the exe again) and never takes focus by itself.
+- Ctrl+Win+Shift+P or tray **Pause**: pause capture. The tray menu also has **Desk öffnen**, **Gerät trennen**, **Beenden** and shows the current status and the session key. Closing the Desk hides it; minimising puts it on the taskbar like any window. The Desk window opens only on your request (tray click, tray menu, starting the exe again) and never takes focus by itself.
 
-During a session the small note (and the tray tooltip) indicates session, dictation, drawing, privacy refusal and confirmed ID count. Screen capture runs on session start, foreground changes and every four seconds, with perceptual hash deduplication. OCR is local; only registry-confirmed IDs, process class, blocked flag and frame version reach the native screen endpoint. Failed/unknown candidates are never forwarded. Unchanged frames renew the same confirmed IDs every 30 seconds. Frame versions use monotonic Unix milliseconds. Pause, stop and privacy refusal clear Desk context and companion chips. Failed validation clears IDs immediately; network/409 failures retry with exponential backoff capped at 30 seconds and a warning note.
+During a session the small note (and the tray tooltip) indicates session, dictation, drawing, privacy refusal and confirmed ID count. OCR is local; registry-confirmed IDs, process class, blocked flag and frame version reach the native screen endpoint as before (a# recognition stays on top).
+
+## Screen vision (v0.1.4)
+
+While a voice session runs the app sends the Desk one frame at session start, then every `IntervalMs` (4 s) and at once when the foreground window changes, but only when the picture changed (64-bit difference hash, Hamming distance above 4) or when the voice agent asks for a fresh look (long poll `…/commands`). A frame is a JPEG of at most 1600 px width and 300 KB, kept in memory only, never written or logged. Blocked windows (banks, password managers, exchanges, …) are painted black before anything is sent; if the foreground window is blocked, nothing is captured; secure desktop, lock screen and pause send nothing. **The Earnings app (`IdsOnlyDomains`) is never sent as an image**: its ids still go out, its frame is skipped. A 409 from the Desk ends the frame loop until the next dialog. The Desk does the vision processing (see the gateway).
+
+## Logs
+
+Hotkey events, frame decisions (sent, deduped, masked, skipped and why), ids seen, app version and session lifecycle go to a small rolling file `%LOCALAPPDATA%\ScreenAgent\logs\screenagent.log` (two files, 2 MB each) and in batches every five seconds to the Desk session trace (`POST /api/device/session/<sid>/trace`, best effort; set `TraceUpload` to false to stop). Neither contains images, OCR text, window titles or transcripts. Failed/unknown candidates are never forwarded. Unchanged frames renew the same confirmed IDs every 30 seconds. Frame versions use monotonic Unix milliseconds. Pause, stop and privacy refusal clear Desk context and companion chips. Failed validation clears IDs immediately; network/409 failures retry with exponential backoff capped at 30 seconds and a warning note.
 
 ## Dictation and learning
 
@@ -56,13 +84,13 @@ The privacy filter enumerates visible uncloaked windows and black-fills blocked 
 
 Defaults cover common German banks, neobanks, brokers, exchanges, password managers, Google account/password pages and the Mint Earnings password route. The default **ids-only** domain `bittensor-earnings.lovable.app` permits local OCR and confirmed IDs only. Highlights there send `{ids,bbox,noImage:true}` using OCR boxes intersecting the drawing bounds, with no crop or context image. Its pixels are black-filled in image uploads from other foreground windows. Existing process/title/domain blocks retain full blocking, even on an ids-only domain. This is best effort: unknown institutions, custom browser controls, notifications within other windows and rapid transitions remain manual review gates. Do not treat it as a complete privacy boundary.
 
-`%APPDATA%\ScreenAgent\config.json` is created on first run. Fields: `DeskUrl` (HTTPS origin), `IntervalMs` (1000–60000), `BlockProcesses`, `BlockDomains`, `BlockTitlePatterns`, `IdsOnlyDomains` (additive; includes the Earnings domain), `VoiceProvider`, `Hotkeys`, `Indicator`, `RetainScreenshots` (false), `UserEmail` (optional local only). Defaults cannot be removed. `Indicator` is `"session"` (default: the small note while a session runs, plus short notices) or `"notices"` (only short notices; rely on the tray icon). Invalid configuration stops startup. The default chords are Alt+Win based (`session` Alt+Win+Shift, `dictation` Alt+Win, `handsFree` Alt+Win+Y, `pause` Alt+Win+Shift+P, `draw` Caps). The dictation chord can use any two distinct Ctrl/Alt/Win modifiers (the app warns at start if you pick Ctrl+Win, which belongs to Wispr); session adds Shift, hands-free adds one action key, and pause adds Shift plus one action key. Draw, pause and hands-free action keys must differ and may be Caps, Space, A–Z or F1–F12. Invalid maps fail closed. `VoiceProvider` is passed to the companion page as its voice preference. Screenshot retention is disabled even if requested in config; the preview never writes captures to disk. UserEmail never enters API payloads.
+`%APPDATA%\ScreenAgent\config.json` is created on first run. Fields: `DeskUrl` (HTTPS origin), `IntervalMs` (1000–60000), `BlockProcesses`, `BlockDomains`, `BlockTitlePatterns`, `IdsOnlyDomains` (additive; includes the Earnings domain), `VoiceProvider`, `Hotkeys`, `Indicator`, `SendFrames` (true; false = ids only, no images), `TraceUpload` (true), `RetainScreenshots` (false), `UserEmail` (optional local only). Defaults cannot be removed. `Indicator` is `"session"` (default: the small note while a session runs, plus short notices) or `"notices"` (only short notices; rely on the tray icon). Invalid configuration stops startup. The default chords are `session` Ctrl+Win+Shift, `mute` Ctrl+Win+Shift+M, `pause` Ctrl+Win+Shift+P, `dictation` Alt+Win (hold), `dictationToggle` Alt+Win+Shift, `handsFree` Alt+Win+Y, `draw` Caps. `session` and `dictationToggle` are three distinct modifiers (Ctrl, Alt, Win, Shift) and must differ; `dictation` is two of Ctrl/Alt/Win (the app warns at start if you pick Ctrl+Win, which belongs to Wispr); `mute`, `pause` and `handsFree` are two to four modifiers plus one action key. Missing keys take their defaults. Draw, mute, pause and hands-free action keys must differ and may be Caps, Space, A–Z or F1–F12. Invalid maps fail closed. `VoiceProvider` is passed to the companion page as its voice preference. Screenshot retention is disabled even if requested in config; the preview never writes captures to disk. UserEmail never enters API payloads.
 
 Live and file OCR prefer Windows.Media.Ocr and fall back to bundled Tesseract eng+deu. The memory path never writes a temporary screenshot. Native OCR DLLs are embedded, extracted with SHA256 verification into local AppData, and loaded through an explicit search path. Tesseract 5.2.0 and pinned tessdata_fast 4.1.0 are Apache-2.0; NAudio 2.2.1 is MIT; WebView2 1.0.2903.40 uses Microsoft's license.
 
 ## Verification and manual checklist
 
-Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config, window placement at 100–200 % scaling, status texts, voice-start logic), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. Since 0.1.2 it also checks that the exe is a GUI-subsystem program (no console window), that Ctrl+Win and Ctrl+Win+Alt pass through a real low-level keyboard hook untouched while Alt+Win+Shift toggles the session (`--selftest-hotkeys`; GitHub's `windows-latest` has an input desktop and runs it, a runner without one skips with exit 2 and the manual checklist applies), and that the Desk window starts hidden, is not topmost, opens, minimises, remembers its size, and that the status note is small, bottom-right, click-through and hides again (`--selftest-windows`). Since 0.1.3 the browser is hosted directly in the native client rectangle in device pixels, with bounds refreshed on open,
+Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config, window placement at 100–200 % scaling, status texts, voice-start logic), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. Since 0.1.2 it also checks that the exe is a GUI-subsystem program (no console window), that Ctrl+Win and Ctrl+Win+Alt pass through a real low-level keyboard hook untouched, that Ctrl+Win+Shift starts and ends the session exactly once in all six key orders with one mask key and no Start menu, that Alt+Win+Shift toggles dictation, Alt+Win hold still dictates and Ctrl+Win+Shift+M mutes only inside a session (`--selftest-hotkeys`; GitHub's `windows-latest` has an input desktop and runs it, a runner without one skips with exit 2 and the manual checklist applies), and that the Desk window starts hidden, is not topmost, opens, minimises, remembers its size, and that the status note is small, bottom-right, click-through and hides again (`--selftest-windows`). Since 0.1.3 the browser is hosted directly in the native client rectangle in device pixels, with bounds refreshed on open,
 resize, monitor DPI change and rasterization-scale change; there is no temporary 400×300 WPF WebView layout.
 Runtimes that cannot initialize an invisible parent get one bounded off-screen/no-activate tool-window show after six
 seconds, hidden again when initialization settles (at most fifteen seconds later). This never appears in the taskbar
@@ -85,12 +113,12 @@ Before daily use, manually check on Windows:
   requester from enrolling their machine by sending Florian a pairing link. The listener expires after five minutes,
   closes on completion/disconnect, checks its exact random path and Host, bounds requests to 8 KB/3 seconds, and
   strips the one-use approval from the browser address without reflecting it into the page. Device tokens are stored with current-user DPAPI, and Desk cookies are installed in the app's own store.
-- Toggle Alt+Win+Shift, exercise modifier orders, simultaneous left/right modifiers and Start-menu masking; pause and resume from keys and tray; restore Caps baseline on exit.
+- Toggle Ctrl+Win+Shift, exercise modifier orders, simultaneous left/right modifiers and Start-menu masking; check Wispr on Ctrl+Win with and without the app (does it type stray text when Shift follows late?); pause and resume from keys and tray; restore Caps baseline on exit.
 - Dictate into non-elevated Notepad and Claude Code in Windows Terminal: correct target binding, no Enter, clipboard restore/interference/history exclusion, protected-target refusal, Shift discard, hands-free toggle, 60-second limit, Desk mute acknowledgement/timeouts and unmute.
 - Draw with several strokes and idle/release completion; verify crop/context, 1.5-second fade, negative-origin mixed-DPI monitors, overlay exclusion, and changed/private window refusal.
 - Recognize IDs at https://bittensor-earnings.lovable.app/reax and confirm they appear in the current Desk session. OCR text must stay local.
 - Test privacy blocklist foreground and background masking, browser address changes/unreadable address bars, lock/UAC/Alt-Tab/toasts, and pause/session changes during OCR or upload.
-- Correct the same term in two independent readable editor insertions; verify one learned entry. Check ambiguous spans, terminals, digits/email-like corrections and focus changes never learn.
+- Correct a term once in a readable editor insertion; verify one learned entry (config `LearnThreshold`, default 1 as in Florian's spec; 2 = older cautious mode). Check ambiguous spans, terminals, digits/email-like corrections and focus changes never learn.
 - Validate OCR on the actual screen with local language availability and the optional model folder removed/present. CI exercises synthetic file/memory WinRT and forced Tesseract paths. Force-kill/power-loss cannot run Caps/mic cleanup handlers.
 
 No manual gate is claimed passed by a green workflow. This is an unsigned review prerelease.
@@ -107,7 +135,10 @@ Record the observed result, evidence and latency for each row. A blank result is
 | Static screen for over 30 minutes | Same confirmed IDs remain in Desk screen context; renewal requests every 30 seconds | |
 | Desk outage, then recovery | Note reports connection failure; retries cap at 30 seconds; current IDs return after recovery | |
 | Registry outage, then recovery | Old IDs/chips clear immediately; unknown IDs never forward; current confirmed IDs return | |
-| Wispr still works while Screen Agent runs | Hold Ctrl+Win: Wispr dictates as without the app; Alt+Win+Shift toggles the session |
+| Wispr still works while Screen Agent runs | Hold Ctrl+Win: Wispr dictates as without the app; Ctrl+Win+Shift toggles the session and Wispr leaves no stray text | |
+| Session chord, any order | Ctrl+Win+Shift in all six orders starts, the second press ends; no Start menu opens | |
+| Mic mute | Ctrl+Win+Shift+M mutes (note turns red, dock shows Stumm), again unmutes; session and context continue | |
+| Screen vision | Ask "was siehst du?": the answer names what is really on screen; a bank window is black; the Earnings app never appears as image | |
 | Console, Desk window, note | No console window; Desk hidden at start, opens from tray, not always on top, fits without scrolling the frame; note only while session runs |
 | Browser pairing + restart | One browser confirmation, no copy/paste; app opens signed in, restart restores connection | |
 | DPI and resize | Web content fills the native window at 100/125/150% Windows display scaling; resize and move between monitors without white regions | |

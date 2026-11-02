@@ -12,8 +12,8 @@ internal sealed class KeyboardHook : IDisposable
     readonly Thread thread;
     IntPtr hook;
     uint threadId;
-    volatile bool swallowCaps,baseline,disposed,healthy;
-    bool capsOwned;
+    volatile bool swallowCaps,muteLive,baseline,disposed,healthy;
+    bool capsOwned,muteOwned;
     readonly System.Threading.Timer watchdog;
     readonly ConcurrentQueue<Func<IReadOnlyList<ActionKind>>> commands=new();
     // Selftests drive the hook with SendInput, which Windows flags as injected. Production ignores injected keys
@@ -71,6 +71,14 @@ internal sealed class KeyboardHook : IDisposable
         // No UI/OCR/network in this callback.
         if(bindings.MaskNow)Native.Mask();
         if(transition)queue.Enqueue((new(key,down,Environment.TickCount64),Native.GetForegroundWindow()));
+        if(key==Core.Key.Mute)
+        {
+            // Eat the M of Ctrl+Win+Shift+M only while it mutes (session running): Ctrl+Shift+M still reaches other apps otherwise.
+            if(down)muteOwned=muteLive&&bindings.Is(bindings.Layout.Mute);
+            bool eat=muteOwned;
+            if(!down)muteOwned=false;
+            if(eat)return (IntPtr)1;
+        }
         if(key==Core.Key.Caps)
         {
             if(down)capsOwned=swallowCaps;
@@ -85,7 +93,7 @@ internal sealed class KeyboardHook : IDisposable
     {
         while(commands.TryDequeue(out var c))Apply(c());
         while(queue.TryDequeue(out var e))Apply(state.Feed(e.Event),e.Window);
-        Apply(state.Tick(Environment.TickCount64));swallowCaps=state.SwallowCaps;
+        Apply(state.Tick(Environment.TickCount64));swallowCaps=state.SwallowCaps;muteLive=state.MuteLive;
     }
     void Apply(IReadOnlyList<ActionKind> actions,IntPtr window=default)
     {
@@ -97,7 +105,7 @@ internal sealed class KeyboardHook : IDisposable
             else if(a==ActionKind.DictationBind)BindTarget?.Invoke(window);
             else Action?.Invoke(a);
         }
-        swallowCaps=state.SwallowCaps;
+        swallowCaps=state.SwallowCaps;muteLive=state.MuteLive;
     }
     public void Dispose()
     {
