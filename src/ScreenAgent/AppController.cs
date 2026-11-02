@@ -51,6 +51,8 @@ internal sealed class AppController : IDisposable
     readonly MainAgentPrompt prompts;
     readonly PromptChannel promptChannel;
     CanvasPanel? canvas;
+    readonly InputGate inputGate=new();
+    (bool ByUser,string Why)? panelQueued;
     internal CanvasPanel? CanvasForTests=>canvas;
     bool canvasClosed,canvasNoted;
     bool micMuted,manualSession,prevVoice,prevActive;
@@ -60,11 +62,14 @@ internal sealed class AppController : IDisposable
         this.config=config;this.client=client;this.bridge=bridge;this.hook=hook;this.toast=toast;
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
         telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);
-        prompts=new(config.MainAgentInputNames,(type,data)=>telemetry.Event(type,data));
+        prompts=new(config.MainAgentInputNames,(type,data)=>telemetry.Event(type,data),config.MainAgentAllowStableCode);
         promptChannel=new(client,prompts.Run,(type,data)=>telemetry.Event(type,data),
-            (code,text)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,text);}catch{ /* the result still tells */ }})),
-            sid=>bridge.SessionId==sid&&bridge.VoiceOn);
+            (code,text,chars)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,text,chars);}catch{ /* the result still tells */ }})),
+            sid=>bridge.SessionId==sid&&bridge.VoiceOn,inputGate);
+        // The drawing panel waits while a prompt is typed (it could take the focus back), and opens when the prompt is over.
+        inputGate.PromptEnded+=()=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{if(panelQueued is {} q){panelQueued=null;_=ShowCanvas(q.ByUser,q.Why);}}));
         bridge.CanvasPending+=OnCanvasPending;bridge.CanvasToggle+=ToggleCanvas;
+        if(config.HotkeyNote is {} hotkeyNote)telemetry.Event("config.note",new(){["why"]=hotkeyNote});
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
         bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();};
         hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
@@ -121,7 +126,7 @@ internal sealed class AppController : IDisposable
         $"{KeyNames.Display(k["session"])}: Gespräch an/aus (Reihenfolge egal)",
         $"{KeyNames.Display(k["mute"])}: Mikro stumm/an",
         $"{KeyNames.Display(k["pause"])}: Pause",
-        $"{KeyNames.Display(k["canvas"])}: Zeichnung zeigen/verbergen",
+        k["canvas"].Length==0?"Zeichnung: über das Tray-Menü":$"{KeyNames.Display(k["canvas"])}: Zeichnung zeigen/verbergen",
         $"{KeyNames.Display(k["dictation"])} halten: Diktat",
         $"{KeyNames.Display(k["dictationToggle"])}: Diktat an/aus",
         $"{(k["draw"]=="Caps"?"Feststelltaste":k["draw"])} halten: zeichnen",
@@ -264,7 +269,7 @@ internal sealed class AppController : IDisposable
                     try
                     {
                         string text=await client.Dictate(wav,context,ct);ct.ThrowIfCancellationRequested();
-                        bool injected=await TextInjector.Inject(bound,text,text.Length>=60&&!TextInjector.Terminal(bound.Window),config.Policy());
+                        bool injected=await TextInjector.Inject(bound,text,text.Length>=60&&!TextInjector.Terminal(bound.Window),config.Policy(),inputGate);
                         Notice(injected?"Diktat eingefügt":"Ziel geändert · Text kopiert");
                         if(injected)_=learner.Watch(bound,prior,TextInjector.Sanitize(text),ct);
                     }
@@ -335,6 +340,7 @@ internal sealed class AppController : IDisposable
     {
         try
         {
+            if(inputGate.PromptActive){panelQueued=(byUser,why);return;}   // not while a prompt is typed; PromptEnded opens it
             var panel=Panel();
             if(!panel.Prepare())
             {

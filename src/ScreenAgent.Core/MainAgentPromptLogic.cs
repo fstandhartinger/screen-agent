@@ -19,6 +19,55 @@ public static class PromptCodes
         NoSession=>"keine laufende Sitzung",
         _=>"unbekannter Grund"
     };
+    // "Nicht eingetippt: <reason>"; after an interruption the characters already typed are still in the box, and the text shown here would repeat them.
+    public static string Heading(string code,int charsAlreadyInBox=0)=>
+        "Nicht eingetippt: "+Reason(code)+(code==Interrupted&&charsAlreadyInBox>0?$" · {charsAlreadyInBox} Zeichen stehen schon im Feld":"");
+}
+// One hard deadline for a whole prompt run, counted from the moment the command was received (the Desk gives up after 40 s).
+public readonly record struct PromptDeadline(long StartTick,long TotalMs=PromptDeadline.DefaultMs)
+{
+    public const long DefaultMs=30000,MinTypingMs=8000;
+    public long Left(long now)=>StartTick+TotalMs-now;
+    public bool Expired(long now)=>Left(now)<=0;
+    // Typing (up to 8000 characters plus the read-back) never starts with less than this left.
+    public bool MayStartTyping(long now)=>Left(now)>=MinTypingMs;
+    public static PromptDeadline FromNow()=>new(Environment.TickCount64);
+}
+// One gate for everything that puts keys into another app: a prompt being typed and a dictation being injected exclude each other; the drawing panel waits for the prompt.
+public sealed class InputGate
+{
+    readonly SemaphoreSlim one=new(1,1);
+    volatile bool prompt;
+    public bool PromptActive=>prompt;
+    // Raised (on the thread that ended the prompt) after a prompt is over.
+    public event System.Action? PromptEnded;
+    public async Task<bool> BeginPrompt(TimeSpan wait)
+    {
+        if(!await one.WaitAsync(wait).ConfigureAwait(false))return false;
+        prompt=true;return true;
+    }
+    public void EndPrompt()
+    {
+        prompt=false;one.Release();
+        try{PromptEnded?.Invoke();}catch{ /* a listener must not keep the gate shut */ }
+    }
+    // Disposable slot for a dictation injection; null when the prompt did not finish within `wait`.
+    public async Task<IDisposable?> BeginInject(TimeSpan wait)
+    {
+        if(!await one.WaitAsync(wait).ConfigureAwait(false))return null;
+        return new Slot(one);
+    }
+    sealed class Slot(SemaphoreSlim sem):IDisposable
+    {
+        int released;
+        public void Dispose(){if(Interlocked.Exchange(ref released,1)==0)sem.Release();}
+    }
+}
+// The palette entry that may be run with Enter.
+public static class PaletteRules
+{
+    public const string Label="Claude Code: Focus input";
+    public static bool IsFocusInput(string? highlightedName)=>highlightedName is not null&&highlightedName.Contains(Label,StringComparison.OrdinalIgnoreCase);
 }
 public sealed record PromptRequest(string Id,string Text);
 public static class PromptCommand
@@ -73,8 +122,9 @@ public static class PromptText
             else sb.Append(c);
         }
         string s=Regex.Replace(sb.ToString(),"\n{3,}","\n\n").Trim();
+        // "/" or "@" first on any line opens a menu of the extension (after Shift+Enter too): a space goes in front. A mid-line "@" stays as it is.
+        s=Regex.Replace(s,"(^|\n)(?=[/@])","$1 ");
         if(s.Length>MaxChars){s=s[..MaxChars];if(char.IsHighSurrogate(s[^1]))s=s[..^1];s=s.TrimEnd();}
-        if(s.StartsWith('/')||s.StartsWith('@'))s=" "+s;
         return s;
     }
     public static string Squash(string s)=>Regex.Replace(s,@"\s+"," ").Trim();
@@ -109,16 +159,19 @@ public static class PromptText
         Flush();return steps;
     }
 }
-public readonly record struct CodeWindow(long Handle,string Process,string Class,string Title,bool Minimized);
+public readonly record struct CodeWindow(long Handle,string Process,string Class,string Title,bool Minimized,bool Cloaked=false);
 public static class CandidateOrder
 {
     public const string InsidersProcess="Code - Insiders",StableProcess="Code",WindowClass="Chrome_WidgetWin_1";
-    // windows: top-level visible-or-minimized windows in EnumWindows order (most recently used first). Insiders only; plain "Code" only when there is no Insiders window.
-    public static List<CodeWindow> Pick(IEnumerable<CodeWindow> windows)
+    static readonly string[] AuxiliaryTitles=["Developer Tools","Issue Reporter","Process Explorer"];
+    public static bool Auxiliary(CodeWindow w)=>AuxiliaryTitles.Any(t=>w.Title.StartsWith(t,StringComparison.Ordinal));
+    // windows: top-level visible-or-minimized windows in EnumWindows order (most recently used first). Insiders only; plain "Code" only with allowStable (config), and then only when there is no Insiders window.
+    // Windows on another virtual desktop (cloaked) and the auxiliary windows of the same process (Developer Tools, Issue Reporter, Process Explorer) never qualify.
+    public static List<CodeWindow> Pick(IEnumerable<CodeWindow> windows,bool allowStable=false)
     {
-        var all=windows.Where(w=>w.Class==WindowClass&&w.Title.Length>0).ToList();
+        var all=windows.Where(w=>w.Class==WindowClass&&w.Title.Length>0&&!w.Cloaked&&!Auxiliary(w)).ToList();
         var chosen=all.Where(w=>w.Process==InsidersProcess).ToList();
-        if(chosen.Count==0)chosen=all.Where(w=>w.Process==StableProcess).ToList();
+        if(chosen.Count==0&&allowStable)chosen=all.Where(w=>w.Process==StableProcess).ToList();
         return chosen.Where(Wsl).Concat(chosen.Where(w=>!Wsl(w))).ToList();
     }
     public static bool Wsl(CodeWindow w)=>w.Title.Contains("[WSL",StringComparison.Ordinal);

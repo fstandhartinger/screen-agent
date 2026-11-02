@@ -13,7 +13,7 @@ internal sealed class CanvasPanel : Window
     CoreWebView2? browser;
     readonly DispatcherTimer saveTimer=new(){Interval=TimeSpan.FromMilliseconds(600)};
     long ignoreMovesUntil;
-    bool initStarted,hiding,allowClose;
+    bool initStarted,hiding,allowClose,navigating;
     public static string StateFile=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","canvas-panel.json");
     // True once Windows has confirmed WDA_EXCLUDEFROMCAPTURE (read back, not just accepted).
     public bool AffinityOk {get;private set;}
@@ -66,6 +66,7 @@ internal sealed class CanvasPanel : Window
         if(WindowState==WindowState.Minimized)WindowState=WindowState.Normal;
         ResizeBrowser();
         if(!initStarted){initStarted=true;await InitBrowser();}
+        else if(browser is not null&&!PageLoaded&&!navigating)Navigate();   // the page did not load (Desk down, offline): try again. A signed-out Desk page is no failure; it says so itself.
         // A browser that took the focus on creation gives it back.
         var now=Native.GetForegroundWindow();
         if(before!=IntPtr.Zero&&now!=before&&now==Handle){Native.SetForegroundWindow(before);ForegroundRestores++;}
@@ -93,16 +94,17 @@ internal sealed class CanvasPanel : Window
             browser=controller.CoreWebView2;
             bridge.InstallTestResponses(browser);
             browser.NavigationStarting+=(_,e)=>{if(!bridge.IsTrusted(e.Uri))e.Cancel=true;};
-            browser.NavigationCompleted+=(_,e)=>{PageLoaded=e.IsSuccess;ResizeBrowser();};
+            browser.NavigationCompleted+=(_,e)=>{PageLoaded=e.IsSuccess;navigating=false;ResizeBrowser();};
             browser.NewWindowRequested+=(_,e)=>{e.Handled=true;};
             browser.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;};
             ResizeBrowser();
             InitStage="navigating";
-            browser.Navigate(new Uri(bridge.DeskOrigin,"/?panel=canvas").AbsoluteUri);
+            Navigate();
             InitStage="ready";
         }
         catch(Exception ex){InitStage="failed:"+ex.GetType().Name;initStarted=false;controller?.Close();controller=null;browser=null;}
     }
+    void Navigate(){navigating=true;browser!.Navigate(new Uri(bridge.DeskOrigin,"/?panel=canvas").AbsoluteUri);}
     void ResizeBrowser()
     {
         if(controller is null)return;

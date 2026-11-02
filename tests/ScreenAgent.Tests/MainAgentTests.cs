@@ -68,10 +68,24 @@ public class MainAgentTests
         var list=CandidateOrder.Pick([W(1,"Code - Insiders","a - x - Visual Studio Code - Insiders"),W(2,"Code","stable"),W(3,"Code - Insiders","b [WSL: Ubuntu] - Visual Studio Code - Insiders"),W(4,"Code - Insiders","c"),W(5,"Code - Insiders","",min:true),W(6,"Code - Insiders","tip","Other"),W(7,"msedge","edge")]);
         Assert.Equal([3L,1L,4L],list.Select(w=>w.Handle));
     }
-    [Fact] public void StableCodeOnlyWhenNoInsiders()
+    [Fact] public void StableCodeOnlyWhenAllowedAndNoInsiders()
     {
-        Assert.Equal([2L],CandidateOrder.Pick([W(2,"Code","stable"),W(7,"msedge","edge")]).Select(w=>w.Handle));
-        Assert.Empty(CandidateOrder.Pick([W(7,"msedge","edge")]));
+        Assert.Empty(CandidateOrder.Pick([W(2,"Code","stable"),W(7,"msedge","edge")]));   // default: Insiders only
+        Assert.Equal([2L],CandidateOrder.Pick([W(2,"Code","stable"),W(7,"msedge","edge")],allowStable:true).Select(w=>w.Handle));
+        Assert.Equal([1L],CandidateOrder.Pick([W(2,"Code","stable"),W(1,"Code - Insiders","insiders")],allowStable:true).Select(w=>w.Handle));
+        Assert.Empty(CandidateOrder.Pick([W(7,"msedge","edge")],allowStable:true));
+    }
+    [Fact] public void CloakedAndAuxiliaryWindowsNeverQualify()
+    {
+        var list=CandidateOrder.Pick([new(1,"Code - Insiders","Chrome_WidgetWin_1","other desktop",false,true),W(2,"Code - Insiders","Developer Tools - x"),W(3,"Code - Insiders","Issue Reporter"),W(4,"Code - Insiders","Process Explorer"),W(5,"Code - Insiders","proj - Visual Studio Code - Insiders"),W(6,"Code - Insiders","My Developer Tools notes")]);
+        Assert.Equal([5L,6L],list.Select(w=>w.Handle));
+    }
+    [Fact] public void AMenuTriggerFirstOnAnyLineGetsASpace()
+    {
+        Assert.Equal("eins\n /clear\nzwei\n @datei x",PromptText.Normalize("eins\n/clear\nzwei\n@datei x"));
+        Assert.Equal("Schau mal @datei und /clear",PromptText.Normalize("Schau mal @datei und /clear"));   // mid-line stays
+        Assert.Equal(" /a\n\n @b",PromptText.Normalize("/a\n\n\n@b"));
+        Assert.Equal(PromptText.Normalize(PromptText.Normalize("/a\n/b")),PromptText.Normalize("/a\n/b"));
     }
     [Fact] public void FocusRules()
     {
@@ -85,6 +99,45 @@ public class MainAgentTests
         Assert.False(Core.FocusRules.MayType("message input",names,[]));
         Assert.True(Core.FocusRules.InQuickInput(["x","quick-input-widget show-file-icons"]));
         Assert.False(Core.FocusRules.InQuickInput(["monaco-editor"]));
+    }
+    [Fact] public void PaletteLabelIsProvenByTheHighlightedEntryAndStaysOneBatch()
+    {
+        Assert.True(PaletteRules.IsFocusInput("Claude Code: Focus input"));
+        Assert.True(PaletteRules.IsFocusInput("claude code: focus INPUT, recently used"));
+        Assert.False(PaletteRules.IsFocusInput("Claude Code: Focus Input Elsewhere".Replace("Focus Input","Open")));
+        Assert.False(PaletteRules.IsFocusInput("Claude Code: Open in New Tab"));
+        Assert.False(PaletteRules.IsFocusInput("")); Assert.False(PaletteRules.IsFocusInput(null));
+        // typed as one SendInput batch; a longer label would silently become two batches
+        Assert.Single(PromptText.Steps(PaletteRules.Label));
+    }
+    [Fact] public void DeadlineCountsFromReceiptAndKeepsEightSecondsForTyping()
+    {
+        var d=new PromptDeadline(1000);
+        Assert.Equal(30000,d.Left(1000));Assert.True(d.MayStartTyping(1000+22000));Assert.False(d.MayStartTyping(1000+22001));
+        Assert.False(d.Expired(1000+29999));Assert.True(d.Expired(1000+30000));
+    }
+    [Fact] public async Task InputGatePromptAndInjectionExcludeEachOther()
+    {
+        var g=new InputGate();int ended=0;g.PromptEnded+=()=>ended++;
+        Assert.True(await g.BeginPrompt(TimeSpan.Zero));Assert.True(g.PromptActive);
+        Assert.Null(await g.BeginInject(TimeSpan.FromMilliseconds(50)));   // the injection waits, then gives up
+        var waiting=g.BeginInject(TimeSpan.FromSeconds(5));Assert.False(waiting.IsCompleted);
+        g.EndPrompt();Assert.False(g.PromptActive);Assert.Equal(1,ended);
+        using(var slot=await waiting){Assert.NotNull(slot);
+            Assert.False(await g.BeginPrompt(TimeSpan.FromMilliseconds(50)));}   // a prompt during an injection: busy
+        Assert.True(await g.BeginPrompt(TimeSpan.Zero));g.EndPrompt();
+    }
+    [Fact] public async Task InputGateListenerThatThrowsDoesNotKeepItShut()
+    {
+        var g=new InputGate();g.PromptEnded+=()=>throw new InvalidOperationException();
+        Assert.True(await g.BeginPrompt(TimeSpan.Zero));g.EndPrompt();
+        Assert.True(await g.BeginPrompt(TimeSpan.Zero));
+    }
+    [Fact] public void HeadingNamesTheCharactersAlreadyInTheBoxAfterAnInterruption()
+    {
+        Assert.Equal("Nicht eingetippt: die Eingabe wurde unterbrochen",PromptCodes.Heading(PromptCodes.Interrupted));
+        Assert.Equal("Nicht eingetippt: die Eingabe wurde unterbrochen · 48 Zeichen stehen schon im Feld",PromptCodes.Heading(PromptCodes.Interrupted,48));
+        Assert.Equal("Nicht eingetippt: Claude-Eingabefeld nicht gefunden",PromptCodes.Heading(PromptCodes.NoField,48));
     }
     [Fact] public void CodesAreOkOnlyWhenTyped()
     {
@@ -129,6 +182,35 @@ public class MainAgentTests
         Assert.Throws<InvalidDataException>(()=>AppConfig.Parse("""{"CanvasPanel":"always"}"""));
         Assert.Throws<InvalidDataException>(()=>AppConfig.Parse("""{"MainAgentInputNames":[]}"""));
         Assert.Equal(["A","B"],AppConfig.Parse("""{"MainAgentInputNames":["A","B"]}""").MainAgentInputNames);
+    }
+    [Fact] public void ACollidingDefaultCanvasChordNeverStopsTheApp()
+    {
+        string Cfg(string extra)=>"{\"Hotkeys\":{\"session\":\"Ctrl+Win+Shift\",\"dictation\":\"Alt+Win\",\"dictationToggle\":\"Alt+Win+Shift\",\"mute\":\"Ctrl+Win+Shift+D\",\"pause\":\"Ctrl+Win+Shift+P\",\"handsFree\":\"Alt+Win+Y\",\"draw\":\"Caps\""+extra+"}}";
+        var c=AppConfig.Parse(Cfg(""));   // D is the mute key here
+        Assert.Equal("Ctrl+Win+Shift+Z",c.Hotkeys["canvas"]);Assert.Contains("Z",c.HotkeyNote);
+        var b=new HotkeyBindings(c.Hotkeys);Assert.Equal('Z',b.CanvasVk);
+        // D, Z, G and J taken by the other four action keys: K is the first free letter. (Four action keys can block four of the five letters at most; the empty chord is the fallback of the fallback.)
+        var k=AppConfig.Parse("{\"Hotkeys\":{\"session\":\"Ctrl+Win+Shift\",\"dictation\":\"Alt+Win\",\"dictationToggle\":\"Alt+Win+Shift\",\"mute\":\"Ctrl+Win+Shift+D\",\"pause\":\"Ctrl+Win+Shift+Z\",\"handsFree\":\"Alt+Win+G\",\"draw\":\"J\"}}");
+        Assert.Equal("Ctrl+Win+Shift+K",k.Hotkeys["canvas"]);
+        Assert.Null(AppConfig.Parse("{}").HotkeyNote);
+    }
+    [Fact] public void ACanvasChordThatIsExplicitlyInvalidStillFails()
+    {
+        var keys=new AppConfig().Hotkeys;keys["canvas"]="Ctrl+Win+Shift+M";
+        Assert.Throws<InvalidDataException>(()=>new HotkeyBindings(keys));
+    }
+    [Fact] public void NoCanvasChordMatchesNothingAndTheRestWorks()
+    {
+        var keys=new AppConfig().Hotkeys;keys["canvas"]=AppConfig.NoChord;
+        var b=new HotkeyBindings(keys);Assert.Equal(-1,b.CanvasVk);Assert.Equal(Key.Other,b.Role('D'));Assert.False(b.CanvasChordHeld);
+        var h=new Hotkeys(b.Layout);h.SetSession(true);var r=new Run(h);
+        r.Down(Key.Ctrl,Key.Win,Key.Shift,Key.Canvas);Assert.Equal(0,r.Count(ActionKind.CanvasToggle));
+    }
+    [Fact] public void MainAgentConfigNullNamesFallBackAndStableCodeIsOptIn()
+    {
+        Assert.Equal(["Message input"],AppConfig.Parse("""{"MainAgentInputNames":null}""").MainAgentInputNames);
+        Assert.False(AppConfig.Parse("{}").MainAgentAllowStableCode);
+        Assert.True(AppConfig.Parse("""{"MainAgentAllowStableCode":true}""").MainAgentAllowStableCode);
     }
     // Drawing panel placement.
     static readonly PxRect M1=new(0,0,1920,1040),M2=new(1920,0,1920,1040);

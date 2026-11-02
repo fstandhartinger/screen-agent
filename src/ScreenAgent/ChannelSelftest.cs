@@ -28,12 +28,12 @@ internal static class ChannelSelftest
             string temp=Path.Combine(Path.GetTempPath(),"ScreenAgent-channel-"+Guid.NewGuid());Directory.CreateDirectory(temp);
             var desk=new Desk();using var client=new DeviceClient(config,desk,Path.Combine(temp,"device.bin"));
             client.Pair(new(new string('t',43),Guid.NewGuid().ToString(),DateTimeOffset.UtcNow.AddDays(1)));
-            var release=new TaskCompletionSource<bool>();var events=new List<string>();var fallbacks=new List<string>();bool sessionOk=true;bool crash=false;
-            var channel=new PromptChannel(client,async (text,ct)=>
+            var release=new TaskCompletionSource<bool>();var events=new List<string>();var fallbacks=new List<string>();bool sessionOk=true;bool crash=false;bool logBroken=false;
+            var channel=new PromptChannel(client,async (text,ct,_)=>
             {
                 if(crash)throw new InvalidOperationException("boom");
                 await release.Task;return new PromptResult(PromptCodes.Typed,true,text.Length,"element",1,false,5,IntPtr.Zero);
-            },(t,d)=>events.Add(t),(code,_)=>fallbacks.Add(code),_=>sessionOk);
+            },(t,d)=>{if(logBroken)throw new InvalidOperationException("log broken");events.Add(t);},(code,_,_)=>fallbacks.Add(code),_=>sessionOk);
             string P(string id)=>"/api/device/session/sid1/commands/"+id+"/result";
             string id1="p0123456789abcdef",id2="pfedcba9876543210",id3="p1111111111111111",id4="p2222222222222222";
             var first=channel.Handle("sid1",new(id1,secret),CancellationToken.None);
@@ -54,6 +54,11 @@ internal static class ChannelSelftest
             var boom=desk.Posts.Where(p=>p.Path==P(id4)).Select(p=>p.Body).ToArray();
             Case("a-crash-reports-interrupted-and-frees-the-gate",boom.Length==2&&boom[1].Contains("\"code\":\"interrupted\""),new{boom});
             crash=false;
+            string id5="p3333333333333333",id6="p4444444444444444";
+            logBroken=true;channel.Handle("sid1",new(id5,"x"),CancellationToken.None).Wait(10000);logBroken=false;
+            channel.Handle("sid1",new(id6,"y"),CancellationToken.None).Wait(10000);
+            var afterLog=desk.Posts.Where(p=>p.Path==P(id6)).Select(p=>p.Body).ToArray();
+            Case("a-throwing-log-never-blocks-later-prompts",afterLog.Length==2&&afterLog[1].Contains("\"state\":\"done\""),new{afterLog});
             Case("the-prompt-text-is-in-no-report",!desk.Posts.Any(p=>p.Body.Contains("GEHEIMER")||p.Body.Contains("abc123")||p.Path.Contains("GEHEIMER")));
             Case("telemetry-events-carry-no-text",events.All(e=>e.StartsWith("main.prompt.")));
             Directory.Delete(temp,true);
