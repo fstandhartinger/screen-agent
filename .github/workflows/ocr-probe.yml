@@ -1,0 +1,21 @@
+name: OCR on real page screenshots
+on:
+  push:
+    branches: ['fix/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ocr:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
+      - name: Read every id off the real pages
+        shell: pwsh
+        run: ./ci/ocr-screens.ps1
