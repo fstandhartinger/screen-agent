@@ -9,13 +9,19 @@ namespace ScreenAgent;
 internal static class OverlayStyle
 {
     // Capture exclusion for every window we own; click-through/no-activate/tool-window only for overlays.
-    public static void Apply(Window w,bool clickThrough)
+    public static bool Apply(Window w,bool clickThrough,bool excludeFromCapture=true)
     {
         var h=new WindowInteropHelper(w).Handle;
         long ex=Native.GetWindowLongPtr(h,-20).ToInt64();
         ex|=0x08000000L|0x80L|(clickThrough?0x20L:0L);
         Native.SetWindowLongPtr(h,-20,(IntPtr)ex);
-        Native.SetWindowDisplayAffinity(h,0x11);
+        return Native.SetWindowDisplayAffinity(h,excludeFromCapture?0x11u:0u)&&excludeFromCapture;
+    }
+    // WS_EX_TRANSPARENT: mouse input goes to whatever is below.
+    public static void MakeClickThrough(Window w)
+    {
+        var h=new WindowInteropHelper(w).Handle;
+        Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()|0x20L));
     }
 }
 // Small status note in the bottom-right corner. It is click-through, never takes focus, has no taskbar button and is
@@ -69,44 +75,58 @@ internal sealed class StatusToast : Window
     }
     internal static PxRect Px(Rectangle r)=>new(r.X,r.Y,r.Width,r.Height);
 }
+// Full-screen drawing layer for one monitor, up while Caps is held. Strokes are kept in physical pixels of that monitor (what CopyFromScreen sees),
+// drawn 5 physical px wide whatever the monitor's scaling is.
 internal sealed class DrawOverlay : Window
 {
+    public const int FadeMs=1500,StrokePx=5;
     readonly Canvas canvas=new(){Background=new SolidColorBrush(System.Windows.Media.Color.FromArgb(1,0,0,0))};
     System.Windows.Shapes.Polyline? current;
     readonly List<List<System.Drawing.PointF>> strokes=[];
     readonly Rectangle monitor;
-    readonly double sx,sy;
     public IReadOnlyList<List<System.Drawing.PointF>> Strokes=>strokes;
     public Rectangle Monitor=>monitor;
-    public long LastStrokeAt {get;private set;}
     public bool InStroke=>current!=null;
-    public void Fade(){IsHitTestVisible=false;BeginAnimation(OpacityProperty,new System.Windows.Media.Animation.DoubleAnimation(1,0,TimeSpan.FromMilliseconds(1500)));}
-    public DrawOverlay(System.Windows.Forms.Screen screen)
+    // True when Windows leaves this window out of screen captures (WDA_EXCLUDEFROMCAPTURE); the product relies on it, the selftest switches it off to see the strokes.
+    public bool CaptureExcluded {get;private set;}
+    bool fading;
+    double Scale=>VisualTreeHelper.GetDpi(this).DpiScaleX;
+    // The instant Caps is released: clicks go to the window below, the strokes stay visible while they fade.
+    public void ClickThrough(){IsHitTestVisible=false;OverlayStyle.MakeClickThrough(this);if(current!=null){current=null;canvas.ReleaseMouseCapture();}}
+    public void Fade()
+    {
+        if(fading)return;fading=true;IsHitTestVisible=false;
+        BeginAnimation(OpacityProperty,new System.Windows.Media.Animation.DoubleAnimation(1,0,TimeSpan.FromMilliseconds(FadeMs)));
+    }
+    public DrawOverlay(System.Windows.Forms.Screen screen,bool excludeFromCapture=true)
     {
         monitor=screen.Bounds;
-        // Per-monitor DPI is obtained via a tiny HWND on that monitor, then coordinates mapped to DIPs.
-        WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;Topmost=true;ShowInTaskbar=false;ShowActivated=false;
-        Left=monitor.Left;Top=monitor.Top;Width=monitor.Width;Height=monitor.Height;Content=canvas;
-        new WindowInteropHelper(this).EnsureHandle();
-        var hwnd=new WindowInteropHelper(this).Handle;
+        WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;Topmost=true;ShowInTaskbar=false;ShowActivated=false;Focusable=false;Content=canvas;
+        double s=Native.ScaleAt(monitor.Left+monitor.Width/2,monitor.Top+monitor.Height/2);
+        Left=monitor.Left/s;Top=monitor.Top/s;Width=monitor.Width/s;Height=monitor.Height/s;
+        var hwnd=new WindowInteropHelper(this).EnsureHandle();
+        CaptureExcluded=OverlayStyle.Apply(this,false,excludeFromCapture);
         Native.SetWindowPos(hwnd,(IntPtr)(-1),monitor.Left,monitor.Top,monitor.Width,monitor.Height,0x10);
-        uint dpi=GetDpiForWindow(hwnd);sx=sy=(dpi==0?96:dpi)/96.0;
-        Left=monitor.Left/sx;Top=monitor.Top/sy;Width=monitor.Width/sx;Height=monitor.Height/sy;
-        SourceInitialized+=(_,_)=>OverlayStyle.Apply(this,false);OverlayStyle.Apply(this,false);
         Loaded+=(_,_)=>Native.SetWindowPos(hwnd,(IntPtr)(-1),monitor.Left,monitor.Top,monitor.Width,monitor.Height,0x10);
         canvas.MouseLeftButtonDown+=(_,e)=>
         {
-            current=new(){Stroke=Brushes.Magenta,StrokeThickness=5/sx,StrokeLineJoin=PenLineJoin.Round};canvas.Children.Add(current);strokes.Add([]);canvas.CaptureMouse();Add(e.GetPosition(canvas));
+            current=new(){Stroke=Brushes.Magenta,StrokeThickness=StrokePx/Scale,StrokeLineJoin=PenLineJoin.Round,StrokeStartLineCap=PenLineCap.Round,StrokeEndLineCap=PenLineCap.Round};canvas.Children.Add(current);strokes.Add([]);canvas.CaptureMouse();Add(e.GetPosition(canvas));
         };
         canvas.MouseMove+=(_,e)=>{if(current!=null&&e.LeftButton==MouseButtonState.Pressed)Add(e.GetPosition(canvas));};
-        canvas.MouseLeftButtonUp+=(_,_)=>{current=null;LastStrokeAt=Environment.TickCount64;canvas.ReleaseMouseCapture();};
+        canvas.MouseLeftButtonUp+=(_,_)=>{current=null;canvas.ReleaseMouseCapture();};
     }
-    void Add(System.Windows.Point p){current!.Points.Add(p);strokes[^1].Add(new((float)(p.X*sx),(float)(p.Y*sy)));}
+    void Add(System.Windows.Point p){current!.Points.Add(p);double s=Scale;strokes[^1].Add(new((float)(p.X*s),(float)(p.Y*s)));}
+    // Test hook: draws the same stroke the mouse would.
+    internal void AddPoints(IEnumerable<System.Drawing.PointF> points)
+    {
+        double s=Scale;var line=new System.Windows.Shapes.Polyline{Stroke=Brushes.Magenta,StrokeThickness=StrokePx/s,StrokeLineJoin=PenLineJoin.Round};
+        var list=new List<System.Drawing.PointF>();foreach(var p in points){line.Points.Add(new(p.X/s,p.Y/s));list.Add(p);}
+        canvas.Children.Add(line);strokes.Add(list);
+    }
     public void Composite(Bitmap clean)
     {
         using var g=Graphics.FromImage(clean);g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using var pen=new System.Drawing.Pen(System.Drawing.Color.Magenta,5){StartCap=System.Drawing.Drawing2D.LineCap.Round,EndCap=System.Drawing.Drawing2D.LineCap.Round};
-        foreach(var stroke in strokes){if(stroke.Count>=2)g.DrawLines(pen,stroke.ToArray());else if(stroke.Count==1)g.FillEllipse(System.Drawing.Brushes.Magenta,stroke[0].X-2.5f,stroke[0].Y-2.5f,5,5);}
+        using var pen=new System.Drawing.Pen(System.Drawing.Color.Magenta,StrokePx){StartCap=System.Drawing.Drawing2D.LineCap.Round,EndCap=System.Drawing.Drawing2D.LineCap.Round,LineJoin=System.Drawing.Drawing2D.LineJoin.Round};
+        foreach(var stroke in strokes){if(stroke.Count>=2)g.DrawLines(pen,stroke.ToArray());else if(stroke.Count==1)g.FillEllipse(System.Drawing.Brushes.Magenta,stroke[0].X-StrokePx/2f,stroke[0].Y-StrokePx/2f,StrokePx,StrokePx);}
     }
-    [System.Runtime.InteropServices.DllImport("user32.dll")]static extern uint GetDpiForWindow(IntPtr h);
 }

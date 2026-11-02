@@ -9,7 +9,8 @@ internal static class Native
     [StructLayout(LayoutKind.Sequential)] internal struct Msg { public IntPtr hwnd; public uint message; public UIntPtr wParam; public IntPtr lParam; public uint time; public Point pt; public uint extra; }
     [StructLayout(LayoutKind.Sequential)] internal struct Kbd { public uint vk,scan,flags,time; public UIntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] internal struct Keyboard { public ushort vk,scan; public uint flags,time; public UIntPtr extra; }
-    [StructLayout(LayoutKind.Explicit,Size=32)] internal struct InputUnion { [FieldOffset(0)] public Keyboard keyboard; }
+    [StructLayout(LayoutKind.Sequential)] internal struct Mouse { public int dx,dy; public uint data,flags,time; public UIntPtr extra; }
+    [StructLayout(LayoutKind.Explicit,Size=32)] internal struct InputUnion { [FieldOffset(0)] public Keyboard keyboard; [FieldOffset(0)] public Mouse mouse; }
     [StructLayout(LayoutKind.Sequential)] internal struct Input { public uint type; public InputUnion u; }
     [DllImport("user32.dll",SetLastError=true)] internal static extern uint SendInput(uint n,Input[] inputs,int size);
     [DllImport("user32.dll",SetLastError=true)] internal static extern IntPtr SetWindowsHookEx(int id,HookProc proc,IntPtr module,uint thread);
@@ -56,6 +57,11 @@ internal static class Native
     public static Input Key(ushort key,bool up=false,ushort scan=0,bool unicode=false,UIntPtr extra=default) => new(){type=1,u=new(){keyboard=new(){vk=key,scan=scan,flags=(up?2u:0u)|(unicode?4u:0u),extra=extra}}};
     // Unassigned virtual key: cancels "Win alone opens Start" and "Alt alone focuses the menu bar" for the chord in progress.
     public static void Mask()=>SendInput(2,new[]{Key(0xe8,false,0,false,Marker),Key(0xe8,true,0,false,Marker)},Marshal.SizeOf<Input>());
+    [DllImport("user32.dll")] internal static extern bool SetCursorPos(int x,int y);
+    [DllImport("user32.dll")] internal static extern IntPtr WindowFromPoint(Point point);
+    [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr window,uint flags);
+    // Left button down (0x2) or up (0x4) at the current cursor position; selftests only.
+    public static Input Button(bool down)=>new(){type=0,u=new(){mouse=new(){flags=down?2u:4u}}};
     public static void Tap(ushort vk)=>Send(Key(vk),Key(vk,true));
     public static bool Caps => (GetKeyState(0x14)&1)!=0;
     public static void RestoreCaps(bool baseline) { if(Caps!=baseline) Tap(0x14); }

@@ -19,6 +19,8 @@ internal sealed class AgentBridge : Window
     TaskCompletionSource<bool>? voiceAck;
     bool requestedVoice;
     public bool VoiceOn {get;private set;}
+    public static volatile bool AllowMicForTests;
+    public static string TestBrowserArgs="";
     readonly SemaphoreSlim muteGate=new(1,1);
     public bool AllowClose {get;set;}
     public string? SessionId {get;private set;}
@@ -69,7 +71,7 @@ internal sealed class AgentBridge : Window
         {
             string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","WebView2");
             // The page keeps the voice session alive while this window is hidden: no background throttling.
-            var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows");
+            var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"+TestBrowserArgs);
             InitStage="environment";
             var env=await CoreWebView2Environment.CreateAsync(null,profile,options);
             if(lifetime.IsCancellationRequested)return;
@@ -125,7 +127,8 @@ internal sealed class AgentBridge : Window
             browser.PermissionRequested+=(_,e)=>
             {
                 // Explicit prompt for the Desk's own microphone request; WebView2 remembers the answer in its profile.
-                if(e.PermissionKind==CoreWebView2PermissionKind.Microphone)
+                if(e.PermissionKind==CoreWebView2PermissionKind.Microphone&&AllowMicForTests)e.State=Trusted(e.Uri)?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
+                else if(e.PermissionKind==CoreWebView2PermissionKind.Microphone)
                     // Win32 box: topmost and foreground, so it cannot hide behind other windows while the Desk is hidden.
                     e.State=Trusted(e.Uri)&&Native.MessageBox(IntPtr.Zero,"Darf Desk dein Mikrofon verwenden?","Screen Agent",0x4|0x20|0x10000|0x40000)==6?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
             };

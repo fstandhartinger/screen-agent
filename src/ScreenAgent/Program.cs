@@ -22,10 +22,20 @@ internal static class Program
                 var output=args[0]=="--selftest-tesseract"?Ocr.ReadTesseractMemory(png):Ocr.ReadMemory(png).GetAwaiter().GetResult();
                 Console.WriteLine(JsonSerializer.Serialize(output));return output.Ids.Length>0?0:1;
             }
+            if(args.FirstOrDefault()=="--selftest-find-ids")
+            {
+                using var image=new System.Drawing.Bitmap(args[1]);
+                var clock=System.Diagnostics.Stopwatch.StartNew();
+                var output=Ocr.FindIds(image,CancellationToken.None).GetAwaiter().GetResult();
+                Console.WriteLine(JsonSerializer.Serialize(new{output.Engine,output.Ids,output.WinRtFailure,Ms=clock.ElapsedMilliseconds}));return 0;
+            }
             if(args.FirstOrDefault()=="--selftest-inject")return InjectTest();
             if(args.FirstOrDefault()=="--selftest-ui")return UiTest();
+            if(args.FirstOrDefault()=="--selftest-draw")return DrawSelftests.Draw();
+            if(args.FirstOrDefault()=="--selftest-frame")return DrawSelftests.Frame(args[1]);
             if(args.FirstOrDefault()=="--selftest-hotkeys")return Selftests.Hotkeys();
             if(args.FirstOrDefault()=="--selftest-windows")return Selftests.Windows();
+            if(args.FirstOrDefault()=="--selftest-live")return LiveSelftests.Run(args[1],args[2],args[3]);
             string sid=System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value??"";
             using var instance=new Mutex(true,"Local\\ScreenAgent-"+sid,out bool first);
             string showName="Local\\ScreenAgent-Show-"+sid;

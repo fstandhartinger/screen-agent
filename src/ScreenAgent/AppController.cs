@@ -17,7 +17,7 @@ internal sealed class AppController : IDisposable
     readonly System.Windows.Forms.NotifyIcon tray;
     CancellationTokenSource epoch=new();
     readonly List<DrawOverlay> drawings=[];
-    bool paused,busy,disposed,privacyBlocked;
+    bool paused,busy,disposed,locked,excluded;
     long capturedAt,noticeUntil;
     readonly FrameClock versions=new();
     readonly ScreenSchedule schedule=new();
@@ -33,15 +33,18 @@ internal sealed class AppController : IDisposable
     string? contextSid;
     long unmuteRetryAt;
     bool voiceSyncing;
-    IntPtr lastForeground,underlying,hashForeground;
-    ulong? lastHash;
-    string[] ids=[],terms=[];
+    IntPtr lastForeground,underlying,ocrForeground;
+    byte[]? ocrGrid;
+    bool ocrRunning;
+    int ocrGen;
+    // ids = what the agent is told: OCR candidates the registry confirmed plus ids the vision model read (verified by the gateway).
+    string[] ids=[],ocrIds=[],visionIds=[],terms=[];
+    readonly RunLog quiet=new();
     TextInjector.Target? target,audioTarget;
     string before="",process="";
     DictationCapture? audio;
     string? audioSession;
     Task audioQueue=Task.CompletedTask;
-    bool finishingDraw;
     readonly Telemetry telemetry;
     readonly FramePlanner planner;
     string? freshId,commandsSid;
@@ -52,7 +55,7 @@ internal sealed class AppController : IDisposable
         this.config=config;this.client=client;this.bridge=bridge;this.hook=hook;this.toast=toast;
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
         telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);
-        telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["frames"]=config.SendFrames,["hookHealthy"]=hook.Healthy});
+        telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
         bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();};
         hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
         {
@@ -65,10 +68,9 @@ internal sealed class AppController : IDisposable
         {
             try
             {
-                if(pendingClear is {} pending&&!clearing&&clearRetry.Ready(Environment.TickCount64))_=ClearContext(pending);
+                if(pendingClear is {} pending&&!clearing&&clearRetry.Ready(Environment.TickCount64))_=ClearContext(pending,pendingWhy??"stop");
                 if(needsUnmute&&audio is null&&!unmuting&&audioQueue.IsCompleted&&Environment.TickCount64>=unmuteRetryAt){unmuteRetryAt=Environment.TickCount64+2000;_=Unmute();}
-                if(!hook.Healthy){if(ids.Length>0||audio!=null)Reset();await SyncVoice();UpdateStatus();return;}
-                if(drawings.Count>0&&!finishingDraw&&drawings.Any(d=>d.LastStrokeAt>0)&&drawings.All(d=>!d.InStroke)&&Environment.TickCount64-drawings.Max(d=>d.LastStrokeAt)>=700)await FinishDraw();
+                if(!hook.Healthy){if(ids.Length>0||audio!=null)Reset("error");await SyncVoice();UpdateStatus();return;}
                 await SyncVoice();
                 await Lifecycle();
                 UpdateStatus();
@@ -83,7 +85,7 @@ internal sealed class AppController : IDisposable
         menu.Items.Add("Desk öffnen",null,(_,_)=>bridge.ShowDesk());
         sessionItem.Click+=(_,_)=>hook.SetSession(!hook.Session);menu.Items.Add(sessionItem);
         pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
-        menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset();bridge.Disconnect();});
+        menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset("stop");bridge.Disconnect();});
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         foreach(var line in KeyHelp(config.Hotkeys))menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(line){Enabled=false});
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
@@ -114,7 +116,7 @@ internal sealed class AppController : IDisposable
     ];
     void Balloon(string text){tray.BalloonTipTitle="Screen Agent";tray.BalloonTipText=text;tray.BalloonTipIcon=System.Windows.Forms.ToolTipIcon.Info;tray.ShowBalloonTip(8000);}
     Status Current()=>StatusLine.Compute(new(hook.Healthy,client.Paired,bridge.SessionId is not null,hook.Session,paused||hook.Paused,voiceFailed,needsUnmute,
-        schedule.Ready(Environment.TickCount64),privacyBlocked,audio!=null,drawings.Count>0,ids.Length,KeyNames.Display(config.Hotkeys["session"]),micMuted&&bridge.VoiceOn,KeyNames.Display(config.Hotkeys["mute"])));
+        schedule.Ready(Environment.TickCount64),locked,audio!=null,drawings.Count>0,ids.Length,KeyNames.Display(config.Hotkeys["session"]),micMuted&&bridge.VoiceOn,KeyNames.Display(config.Hotkeys["mute"]),excluded));
     // The single place that touches the visible state: tray icon, tray tooltip, and the toast.
     void UpdateStatus()
     {
@@ -148,20 +150,22 @@ internal sealed class AppController : IDisposable
         }
         finally{voiceSyncing=false;}
     }
-    async Task ClearContext(string? sid)
+    // why: the contract's word for the gateway (locked | paused | stop | error). The agent's picture is gone afterwards, so the next frame starts over.
+    async Task ClearContext(string? sid,string why="stop")
     {
-        ids=[];lastHash=null;bridge.Screen([]);
+        ForgetLocal();
         if(sid is null||!client.Paired)return;
         clearing=true;
         try
         {
-            await screenWrites.Enqueue(()=>client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen/clear",new{},CancellationToken.None));
+            await screenWrites.Enqueue(()=>client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen/clear",DevicePayloads.Why(why),CancellationToken.None));
             if(pendingClear==sid)pendingClear=null;clearRetry.Success(Environment.TickCount64);
         }
-        catch{pendingClear=sid;clearRetry.Failure(Environment.TickCount64);Notice("Kontext-Löschung ausstehend",Level.Warn);}
+        catch{pendingClear=sid;pendingWhy=why;clearRetry.Failure(Environment.TickCount64);Notice("Kontext-Löschung ausstehend",Level.Warn);}
         finally{clearing=false;}
     }
-    string? pendingClear;
+    string? pendingClear,pendingWhy;
+    void ForgetLocal(){ids=ocrIds=visionIds=[];ocrGrid=null;planner.Reset();bridge.Screen([]);}
     async Task Unmute()
     {
         if(unmuting)return;
@@ -176,11 +180,11 @@ internal sealed class AppController : IDisposable
         ct.ThrowIfCancellationRequested();
         return client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen",body,ct);
     });
-    void Reset()
+    void Reset(string why="stop")
     {
-        _=ClearContext(contextSid??bridge.SessionId);
-        epoch.Cancel();epoch.Dispose();epoch=new();ids=[];lastHash=null;capturedAt=0;lastForeground=IntPtr.Zero;learner.Cancel();
-        planner.Reset();freshId=null;commandsSid=null;
+        _=ClearContext(contextSid??bridge.SessionId,why);
+        epoch.Cancel();epoch.Dispose();epoch=new();ocrRunning=false;ocrGen++;capturedAt=0;lastForeground=IntPtr.Zero;learner.Cancel();
+        locked=excluded=false;quiet.Break();freshId=null;commandsSid=null;
         foreach(var d in drawings)d.Close();drawings.Clear();
         QueueAudio(ActionKind.DictationDiscard);
     }
@@ -188,12 +192,16 @@ internal sealed class AppController : IDisposable
     void Action(ActionKind action)
     {
         if(action is not (ActionKind.CapsTap or ActionKind.DictationBind or ActionKind.DrawBind))
-            telemetry.Event(HotkeyEvent(action),new(){["session"]=hook.Session,["paused"]=hook.Paused,["voice"]=bridge.VoiceOn,["muted"]=micMuted,["dictating"]=hook.Dictating});
+        {
+            var data=new Dictionary<string,object?>{["session"]=hook.Session,["paused"]=hook.Paused,["voice"]=bridge.VoiceOn,["muted"]=micMuted,["dictating"]=hook.Dictating};
+            if(action is ActionKind.DrawStart or ActionKind.DrawStop)data["key"]=config.Hotkeys["draw"];   // the log proves which key drew
+            telemetry.Event(HotkeyEvent(action),data);
+        }
         if(action==ActionKind.MuteToggle){_=ToggleMute();return;}
         if(action is ActionKind.DictationStart or ActionKind.DictationStop or ActionKind.DictationDiscard){QueueAudio(action);return;}
         if(action is ActionKind.SessionToggle or ActionKind.PauseToggle)
         {
-            Reset();
+            Reset(action==ActionKind.PauseToggle&&hook.Paused?"paused":"stop");
             if(action==ActionKind.SessionToggle)
             {
                 // Say what the key did and, if the session cannot work yet, what is missing: never a bare green "an".
@@ -205,12 +213,8 @@ internal sealed class AppController : IDisposable
         }
         if(action==ActionKind.DrawStart&&Active&&drawings.Count==0)
         {
-            if(underlying==IntPtr.Zero||Native.GetForegroundWindow()!=underlying)return;
-            foreach(var screen in System.Windows.Forms.Screen.AllScreens)
-            {
-                using var probe=privacy.Capture(screen.Bounds,true,false,underlying);if(probe is null)continue;
-                var draw=new DrawOverlay(screen);drawings.Add(draw);draw.Show();
-            }
+            // Always draws: whatever is in front, whatever is under the strokes. Whether and what to send is decided at the end.
+            foreach(var screen in System.Windows.Forms.Screen.AllScreens){var draw=new DrawOverlay(screen);drawings.Add(draw);draw.Show();}
         }
         if(action==ActionKind.DrawStop)_=FinishDraw();
     }
@@ -321,72 +325,92 @@ internal sealed class AppController : IDisposable
         if(frames&&commandsSid!=sid){commandsSid=sid;_=CommandLoop(sid,ct);}
         try
         {
-            if(pendingClear is {} oldSid){pendingClear=null;await ClearContext(oldSid);if(pendingClear!=null)throw new HttpRequestException();}
+            if(pendingClear is {} oldSid){pendingClear=null;await ClearContext(oldSid,pendingWhy??"stop");if(pendingClear!=null)throw new HttpRequestException();}
             var monitor=System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position).Bounds;
-            using var frame=privacy.Capture(monitor,true,false,out var verified);
-            if(frame is null)
+            CaptureInfo? info=null;
+            using var frame=await Task.Run(()=>privacy.Capture(monitor,true,false,out info),ct);
+            if(frame is null||info is null){await Skipped(privacy.LastSkip,sid,ct);return;}
+            if(locked||excluded){locked=excluded=false;quiet.Break();}
+            if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid)return;
+            var grid=await Task.Run(()=>FrameGrid.Of(frame),ct);
+            var window=info.Foreground;
+            // OCR never delays the frame: it runs in the background on a copy of the native picture and posts the ids when it is done.
+            if(!ocrRunning&&(ocrGrid is null||fg!=ocrForeground||ChangeDetector.Changed(ocrGrid,grid)))StartOcr(frame,grid,fg,window.Process,sid,ct);
+            else if(schedule.RenewalDue(Environment.TickCount64))
             {
-                privacyBlocked=true;ids=[];lastHash=null;bridge.Screen(ids);Notice("Privat · nicht erfasst");
-                telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="private-or-secure-desktop"});
-                freshId=null;await ClearContext(sid);schedule.Success(Environment.TickCount64);
-                return;
+                await PostScreen(sid,DevicePayloads.Screen(ids,window.Process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
+                schedule.Success(Environment.TickCount64);
             }
-            privacyBlocked=false;
-            var luma=Luma(frame);ulong hash=DHash.Compute(luma);
-            var window=verified.FirstOrDefault(w=>w.Handle==fg);
-            if(lastHash==hash&&hashForeground==fg)
-            {
-                if(schedule.RenewalDue(Environment.TickCount64))
-                {
-                    await PostScreen(sid,DevicePayloads.Screen(ids,frameProcess,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
-                    schedule.Success(Environment.TickCount64);
-                }
-            }
-            else
-            {
-                if(window is null||window.Blocked){telemetry.Event("screen.frame",new(){["decision"]="masked",["why"]="foreground-blocked"});freshId=null;await ClearContext(sid);return;}
-                double ocrScale=Math.Min(1,2560.0/Math.Max(frame.Width,frame.Height));
-                using var ocrFrame=new Bitmap(frame,new Size(Math.Max(1,(int)(frame.Width*ocrScale)),Math.Max(1,(int)(frame.Height*ocrScale))));
-                byte[] png=PrivacyCapture.Png(ocrFrame);var ocr=await Task.Run(()=>Ocr.ReadMemory(png),ct);
-                var confirmed=await client.Exists(ocr.Ids,ct);
-                if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg)return;
-                await PostScreen(sid,DevicePayloads.Screen(confirmed,window.Process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
-                if(!Active||ct.IsCancellationRequested)return;
-                bool changed=!confirmed.SequenceEqual(ids);
-                lastHash=hash;hashForeground=fg;frameProcess=window.Process;ids=confirmed;bridge.Screen(ids);schedule.Success(Environment.TickCount64);
-                if(changed)telemetry.Event("screen.ids",new(){["ids"]=confirmed,["count"]=confirmed.Length,["process"]=window.Process});
-                if(terms.Length==0)terms=await client.Dictionary(ct);
-            }
-            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,monitor,verified,window,fg,hash,sid,ct);
+            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,info,fg,grid,sid,ct);
         }
         catch(OperationCanceledException){}
-        catch{schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",new(){["where"]="watch"});await ClearContext(sid);Notice("Desk/Registry nicht erreichbar",Level.Warn);}
+        catch{schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",new(){["where"]="watch"});await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn);}
         finally{busy=false;}
     }
-    // One screenshot to the vision model. Order of the fences: blocked window (never captured), dedupe, Earnings app (ids only, no image),
-    // then black rectangles over every blocked or ids-only window still visible, then encode in memory and send.
-    async Task SendFrame(Bitmap frame,Rectangle monitor,List<WindowInfo> windows,WindowInfo? window,IntPtr fg,ulong hash,string sid,CancellationToken ct)
+    // No frame this tick. Only a lock screen (or a window from the user's own list) is told to the user and the agent; everything else is retried on the next tick without a word.
+    async Task Skipped(string why,string sid,CancellationToken ct)
     {
-        string? command=freshId;bool fresh=command!=null;long now=Environment.TickCount64;
-        if(window is null||window.Blocked){freshId=null;telemetry.Event("screen.frame",new(){["decision"]="masked",["why"]="foreground-blocked"});return;}
-        var decision=planner.Decide(now,hash,(long)fg,fresh);
-        if(decision.Verdict==FrameVerdict.Wait)return;
-        if(decision.Verdict==FrameVerdict.Deduped){telemetry.Event("screen.frame",new(){["decision"]="deduped",["why"]="unchanged"});return;}
-        if(window.IdsOnly)
+        long now=Environment.TickCount64;
+        if(quiet.ShouldLog("skip:"+why,now))telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]=why});
+        if(why is not ("locked" or "config-list")){if(why=="capture-failed")schedule.Success(now);return;}
+        bool entering=why=="locked"?!locked:!excluded;
+        locked=why=="locked";excluded=why=="config-list";freshId=null;
+        if(entering)
         {
-            // The Earnings app: ids only, never an image of it. The ids already went out through /screen.
-            freshId=null;planner.Sent(now,hash,(long)fg);
-            telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="ids-only-window",["reason"]=decision.Reason.ToString().ToLowerInvariant(),["process"]=window.Process});
-            using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>(),ct); // the agent must not keep describing the previous window
-            return;
-        }
-        int masked=0;
-        using(var g=Graphics.FromImage(frame))
-            foreach(var w in windows.Where(w=>w.Handle!=fg&&(w.Blocked||w.IdsOnly)))
+            if(locked){Notice("Bildschirm gesperrt");await ClearContext(sid,"locked");}
+            else
             {
-                var r=Rectangle.Intersect(monitor,w.Rect);if(r.IsEmpty)continue;
-                r.Offset(-monitor.X,-monitor.Y);g.FillRectangle(Brushes.Black,r);masked++;
+                Notice("Fenster ausgenommen (Liste)");ForgetLocal();
+                using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>{["why"]="excluded"},ct);   // the agent must not keep describing the previous window
             }
+        }
+        schedule.Success(now);
+    }
+    void StartOcr(Bitmap frame,byte[] grid,IntPtr fg,string process,string sid,CancellationToken ct)
+    {
+        var copy=new Bitmap(frame);ocrGrid=grid;ocrForeground=fg;ocrRunning=true;
+        _=RunOcr(copy,fg,process,sid,ct,ocrGen);
+    }
+    async Task RunOcr(Bitmap copy,IntPtr fg,string process,string sid,CancellationToken ct,int gen)
+    {
+        try
+        {
+            using(copy)
+            {
+                var clock=System.Diagnostics.Stopwatch.StartNew();
+                var found=await Task.Run(()=>Ocr.FindIds(copy,ct),ct);long ms=clock.ElapsedMilliseconds;
+                var confirmed=await client.Exists(found.Ids,ct);
+                if(gen!=ocrGen||!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg){ocrGrid=null;return;}   // the picture moved on: look again
+                ocrIds=confirmed;var merged=DevicePayloads.Merge(ocrIds,visionIds);
+                await PostScreen(sid,DevicePayloads.Screen(merged,process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
+                if(gen!=ocrGen||!Active||ct.IsCancellationRequested)return;
+                telemetry.Event("screen.ocr",new(){["ms"]=ms,["engine"]=found.Engine,["candidates"]=found.Ids.Length,["confirmed"]=confirmed.Length});
+                SetIds(merged,process,"ocr");frameProcess=process;schedule.Success(Environment.TickCount64);
+                if(terms.Length==0)terms=await client.Dictionary(ct);
+            }
+        }
+        catch(OperationCanceledException){}
+        catch(Exception) when(gen==ocrGen)
+        {
+            ocrGrid=null;schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",new(){["where"]="ocr"});
+            await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn);
+        }
+        finally{if(gen==ocrGen)ocrRunning=false;}
+    }
+    void SetIds(string[] merged,string process,string source)
+    {
+        bool changed=!merged.SequenceEqual(ids);ids=merged;bridge.Screen(ids);
+        if(changed)telemetry.Event("screen.ids",new(){["ids"]=merged,["count"]=merged.Length,["process"]=process,["source"]=source});
+    }
+    // One screenshot to the vision model: change test against the last SENT frame, encode in memory, send with the ids known now.
+    async Task SendFrame(Bitmap frame,CaptureInfo info,IntPtr fg,byte[] grid,string sid,CancellationToken ct)
+    {
+        string? command=freshId;bool fresh=command!=null;long now=Environment.TickCount64;var window=info.Foreground;
+        var decision=planner.Decide(now,grid,(long)fg,fresh);
+        if(decision.Verdict==FrameVerdict.Wait)return;
+        if(decision.Verdict==FrameVerdict.Deduped){if(quiet.ShouldLog("deduped",now))telemetry.Event("screen.frame",new(){["decision"]="deduped",["why"]="unchanged"});return;}
+        quiet.Break();
+        int masked=info.Windows.Count(w=>w.Blocked);
         var (jpeg,width,height)=await Task.Run(()=>FrameJpeg.Encode(frame),ct);
         if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg&&!fresh)return;
         string? url=window.Url is {} u&&(u.StartsWith("http://")||u.StartsWith("https://"))?(u.Length>300?u[..300]:u):null;
@@ -403,82 +427,78 @@ internal sealed class AppController : IDisposable
         string vision=reply.Json is {} j&&j.RootElement.ValueKind==System.Text.Json.JsonValueKind.Object&&j.RootElement.TryGetProperty("vision",out var v)&&v.ValueKind==System.Text.Json.JsonValueKind.String?v.GetString()??"":"";
         if(reply.Ok)
         {
-            planner.Sent(now,hash,(long)fg);
-            telemetry.Event("screen.frame",new(){["decision"]="sent",["reason"]=decision.Reason.ToString().ToLowerInvariant(),["bytes"]=jpeg.Length,["w"]=width,["h"]=height,["masked"]=masked,["ids"]=ids.Length,["vision"]=vision,["process"]=window.Process});
+            planner.Sent(now,grid,(long)fg);   // "queued" counts as sent; only an accepted frame becomes the reference
+            if(vision is "ok" or "unchanged")visionIds=VisionIds(reply); // a queued or capped frame says nothing about the ids
+            telemetry.Event("screen.frame",new(){["decision"]="sent",["reason"]=decision.Reason.ToString().ToLowerInvariant(),["bytes"]=jpeg.Length,["w"]=width,["h"]=height,["masked"]=masked,["ids"]=ids.Length,["visionIds"]=visionIds.Length,["vision"]=vision,["process"]=window.Process});
+            if(visionIds.Length>0||ids.Except(ocrIds).Any())SetIds(DevicePayloads.Merge(ocrIds,visionIds),window.Process,"vision");
             if(reply.Json is {} r2&&r2.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.Object&&f.TryGetProperty("id",out var fid)&&fid.ValueKind==System.Text.Json.JsonValueKind.String)freshId=fid.GetString();
             return;
         }
-        // 409 no-session: the gateway has no session yet or any more; nothing is sent until it does. stale-frame: drop it and carry on.
+        // 409 no-session: the gateway has no session yet or any more; nothing is sent until it does. stale-frame: drop it and carry on. Not sent = not the reference.
         if(reply.Status==409&&(reply.Stop||reply.Code=="no-session")){frameBackoffUntil=Environment.TickCount64+3000;telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="frame"});return;}
         if(reply.Status==429){frameBackoffUntil=Environment.TickCount64+Math.Clamp(reply.RetryAfter,2,60)*1000L;}
         telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="rejected",["status"]=reply.Status,["code"]=reply.Code??"",["bytes"]=jpeg.Length});
     }
-    // 9x8 brightness grid for the dHash (area-averaged by the resize, so one-pixel changes do not flip bits).
-    static float[] Luma(Bitmap image)
-    {
-        using var small=new Bitmap(DHash.Width,DHash.Height);
-        using(var g=Graphics.FromImage(small)){g.InterpolationMode=System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;g.DrawImage(image,new Rectangle(0,0,DHash.Width,DHash.Height));}
-        var grid=new float[DHash.Width*DHash.Height];
-        for(int y=0;y<DHash.Height;y++)for(int x=0;x<DHash.Width;x++)grid[y*DHash.Width+x]=small.GetPixel(x,y).GetBrightness();
-        return grid;
-    }
+    // `ids` in the gateway's reply: a#... the vision model read on the picture and the registry confirmed.
+    static string[] VisionIds(RawReply reply)=>reply.Json is {} j&&j.RootElement.ValueKind==System.Text.Json.JsonValueKind.Object&&j.RootElement.TryGetProperty("ids",out var list)&&list.ValueKind==System.Text.Json.JsonValueKind.Array
+        ?DevicePayloads.Ids(list.EnumerateArray().Where(e=>e.ValueKind==System.Text.Json.JsonValueKind.String).Select(e=>e.GetString()!)):[];
+    // Finish at Caps release, never earlier: he holds the key, draws, lets go. From that instant the overlay is click-through (his next click
+    // must reach the window below) while the strokes fade; the picture is taken without the overlay (it is excluded from capture, or made invisible when it cannot be).
     async Task FinishDraw()
     {
-        if(finishingDraw||drawings.Count==0)return;finishingDraw=true;
+        if(drawings.Count==0)return;   // each drawing carries its own batch: a second circle while the first is still being sent gets its own overlay and closes it again
         var batch=drawings.ToArray();drawings.Clear();string? sid=bridge.SessionId;var ct=epoch.Token;
+        long t0=Environment.TickCount64;
+        foreach(var d in batch)d.ClickThrough();
+        void Trace(bool ok,string why,int bytes=0)=>telemetry.Event("screen.highlight",new(){["ok"]=ok,["why"]=why,["ms"]=Environment.TickCount64-t0,["bytes"]=bytes});
         try
         {
-            foreach(var d in batch)d.Hide();
+            if(batch.All(d=>d.Strokes.All(s=>s.Count==0))){Trace(false,"no-stroke");return;}   // held the key, drew nothing: nothing is sent
+            if(sid is null||!Active){Trace(false,"not-active");return;}
             foreach(var d in batch)
             {
-                if(!Active||sid is null||ct.IsCancellationRequested)break;
-                var points=d.Strokes.SelectMany(s=>s).ToArray();if(points.Length==0)continue;
-                // Recheck the actual top-level window under every stroke point with overlays hidden.
-                if(points.Any(p=>GetAncestor(WindowFromPoint(new((int)p.X+d.Monitor.X,(int)p.Y+d.Monitor.Y)),2)!=underlying))continue;
-                var windows=privacy.Snapshot(d.Monitor);
-                bool idsOnly=windows.Any(w=>w.Handle==underlying&&w.IdsOnly);
-                using var clean=privacy.Capture(d.Monitor,true,false,underlying,!idsOnly);if(clean is null)continue;
-                float minX=points.Min(p=>p.X),maxX=points.Max(p=>p.X),minY=points.Min(p=>p.Y),maxY=points.Max(p=>p.Y);
-                int margin=(int)Math.Ceiling(Math.Max(maxX-minX,maxY-minY)*.15)+5;
-                var bounds=Rectangle.Intersect(new Rectangle(0,0,clean.Width,clean.Height),Rectangle.FromLTRB((int)minX-margin,(int)minY-margin,(int)maxX+margin+1,(int)maxY+margin+1));
-                if(idsOnly)
+                if(ct.IsCancellationRequested||!Active)break;
+                if(d.Strokes.All(s=>s.Count==0))continue;
+                Bitmap? clean=null;
+                for(int attempt=0;attempt<3&&clean is null;attempt++)
                 {
-                    var local=await Ocr.IdsIntersecting(PrivacyCapture.Png(clean),bounds);
-                    var confirmed=await client.Exists(local,ct);
-                    if(Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)
-                        await client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/highlight",new IdsHighlightPayload(DevicePayloads.Ids(confirmed),new(bounds.X+d.Monitor.X,bounds.Y+d.Monitor.Y,bounds.Width,bounds.Height)),ct);
-                    Notice("Markierung · nur IDs");continue;
+                    if(!d.CaptureExcluded){d.Opacity=0;await Task.Delay(50,ct);}
+                    try{clean=await Task.Run(()=>privacy.Capture(d.Monitor,true,false,underlying),ct);}
+                    finally{if(!d.CaptureExcluded)d.Opacity=1;}
+                    if(clean is null&&privacy.LastSkip!="windows-changed")break;
+                    if(clean is null)await Task.Delay(150,ct);
                 }
-                d.Composite(clean);
-                using var crop=clean.Clone(bounds,PixelFormat.Format32bppArgb);
-                byte[] png=PrivacyCapture.Png(crop);
-                int cropWidth=crop.Width,cropHeight=crop.Height;
-                while(png.Length>2*1024*1024&&cropWidth>64&&cropHeight>64)
+                if(clean is null)
                 {
-                    cropWidth=Math.Max(1,(int)(cropWidth*.8));cropHeight=Math.Max(1,(int)(cropHeight*.8));
-                    using var resized=new Bitmap(crop,new Size(cropWidth,cropHeight));png=PrivacyCapture.Png(resized);
+                    string why=privacy.LastSkip is {Length:>0} w?w:"capture-failed";Trace(false,why);
+                    Notice(why switch{"locked"=>"Markierung nicht gesendet · Bildschirm gesperrt","config-list"=>"Markierung nicht gesendet · Fenster ausgenommen (Liste)","not-active"=>"Markierung nicht gesendet · Sitzung nicht aktiv",_=>"Markierung nicht gesendet · Aufnahme fehlgeschlagen"},Level.Warn);
+                    continue;
                 }
-                double scale=Math.Min(1,1280.0/Math.Max(clean.Width,clean.Height));
-                using var small=new Bitmap(clean,new Size(Math.Max(1,(int)(clean.Width*scale)),Math.Max(1,(int)(clean.Height*scale))));
-                using var stream=new MemoryStream();small.Save(stream,ImageFormat.Jpeg);
-                var body=DevicePayloads.Highlight(png,stream.ToArray(),new(bounds.X+d.Monitor.X,bounds.Y+d.Monitor.Y,bounds.Width,bounds.Height),ids);
-                if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid)break;
-                await client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/highlight",body,ct);Notice("Markierung gesendet");
+                using(clean)
+                {
+                    var made=HighlightBuilder.Build(d,clean);
+                    if(made is null){Trace(false,"offscreen");Notice("Markierung nicht gesendet · außerhalb des Bildschirms",Level.Warn);continue;}
+                    foreach(var other in batch)other.Fade();
+                    var body=DevicePayloads.Highlight(made.Png,made.Jpeg,made.Bbox,ids);
+                    if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid){Trace(false,"cancelled");break;}
+                    using var reply=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/highlight",body,ct);
+                    int bytes=made.Png.Length+made.Jpeg.Length;
+                    if(reply.Ok)
+                    {
+                        Trace(true,"sent",bytes);Notice("Markierung gesendet");
+                        var more=VisionIds(reply);if(more.Length>0){visionIds=DevicePayloads.Merge(visionIds,more);SetIds(DevicePayloads.Merge(ocrIds,visionIds),"","highlight");}
+                    }
+                    else if(reply.Status==409){Trace(false,"no-session",bytes);Notice("Keine aktive Stimme · Markierung nicht gesendet",Level.Warn);}
+                    else{Trace(false,"rejected-"+reply.Status,bytes);Notice($"Markierung nicht gesendet · Desk antwortet {reply.Status}",Level.Warn);}
+                }
             }
-            if(!ct.IsCancellationRequested&&Active)
-            {
-                foreach(var d in batch){d.Show();d.Fade();}
-                await Task.Delay(1500,ct);
-            }
+            foreach(var d in batch)d.Fade();   // idempotent; also after a failure the strokes go away on their own
+            if(!ct.IsCancellationRequested)await Task.Delay(Math.Max(0,(int)(DrawOverlay.FadeMs-(Environment.TickCount64-t0))),ct);
         }
         catch(OperationCanceledException){}
-        catch(HttpRequestException ex) when(ex.StatusCode==System.Net.HttpStatusCode.Conflict){Notice("Keine aktive Stimme · Markierung nicht gesendet",Level.Warn);}
-        catch{Notice("Markierung nicht gesendet · Verbindung prüfen",Level.Warn);}
-        finally{foreach(var d in batch)d.Close();finishingDraw=false;}
+        catch(Exception ex){Trace(false,"error:"+ex.GetType().Name);Notice("Markierung nicht gesendet · Verbindung prüfen",Level.Warn);}
+        finally{foreach(var d in batch)d.Close();}
     }
-    [StructLayout(LayoutKind.Sequential)]readonly record struct Point(int X,int Y);
-    [DllImport("user32.dll")]static extern IntPtr WindowFromPoint(Point point);
-    [DllImport("user32.dll")]static extern IntPtr GetAncestor(IntPtr window,uint flags);
     public void Dispose()
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);

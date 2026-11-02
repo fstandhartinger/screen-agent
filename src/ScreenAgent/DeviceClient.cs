@@ -84,9 +84,13 @@ internal sealed class DeviceClient : IDisposable
     }
     public async Task<string[]> Exists(string[] ids,CancellationToken ct)
     {
-        if(ids.Length==0)return [];
-        using var r=await Send(HttpMethod.Get,"api/device/exists?ids="+Uri.EscapeDataString(string.Join(',',DevicePayloads.Ids(ids))),null,ct);
-        return DeviceProtocol.Known(await r.Content.ReadAsStringAsync(ct),ids);
+        var known=new List<string>();
+        foreach(var part in ids.Chunk(20)) // the route takes 20 at a time; OCR hands over up to 60 candidates, most of them misreadings the registry rejects
+        {
+            using var r=await Send(HttpMethod.Get,"api/device/exists?ids="+Uri.EscapeDataString(string.Join(',',DevicePayloads.Ids(part))),null,ct);
+            known.AddRange(DeviceProtocol.Known(await r.Content.ReadAsStringAsync(ct),part));
+        }
+        return known.Distinct().Take(20).ToArray();
     }
     public async Task Post(string path,object body,CancellationToken ct){using var r=await Send(HttpMethod.Post,path,JsonContent.Create(body),ct);}
     // Like Post/Get but hands back status and a (small) JSON body instead of throwing: the frame and commands routes answer 409 with a code that decides what to do next.

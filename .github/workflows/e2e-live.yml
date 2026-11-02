@@ -1,0 +1,40 @@
+name: End to end against a Desk
+on:
+  workflow_dispatch:
+  push:
+    branches: ['e2e/**']
+permissions:
+  contents: read
+jobs:
+  e2e:
+    if: github.actor == 'fstandhartinger'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
+      - name: Real page in front, real app, recorded microphone
+        shell: pwsh
+        env:
+          SA_E2E: '1'
+          SA_E2E_TOKEN: ${{ secrets.E2E_DEVICE_TOKEN }}
+          E2E_DESK_URL: ${{ secrets.E2E_DESK_URL }}
+        run: |
+          $wav = (Resolve-Path testdata/e2e-questions.wav).Path
+          $env:SA_E2E_ARGS = "--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=$wav%noloop --autoplay-policy=no-user-gesture-required"
+          $p = Start-Process -FilePath ./publish/ScreenAgent.exe -ArgumentList '--selftest-live',$env:E2E_DESK_URL,'https://explainers.app.mintapis.com/p/agent-artifact-ids-1wfd2l8boy/','https://github.com/fstandhartinger/screen-agent' -PassThru -RedirectStandardOutput e2e.txt -RedirectStandardError e2e.err
+          if (-not $p.WaitForExit(330000)) { Stop-Process $p -Force; Write-Host 'timed out after 330 s' }
+          Get-Content e2e.txt; Get-Content e2e.err -ErrorAction SilentlyContinue | Select-Object -Last 20
+          Get-Content "$env:LOCALAPPDATA/ScreenAgent/logs/screenagent.log" -ErrorAction SilentlyContinue | Select-Object -Last 150
+          if (-not (Select-String -Quiet -Path e2e.txt -Pattern '"voice":true')) { throw 'live selftest failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-shots
+          path: e2e-shots/
+          retention-days: 3
+          if-no-files-found: warn

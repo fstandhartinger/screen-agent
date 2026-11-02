@@ -1,0 +1,80 @@
+{
+ "explainer-100.png": [
+  "a#e0b59c",
+  "a#b3f477",
+  "a#d7c856",
+  "a#19505f",
+  "a#248bbb",
+  "a#486322",
+  "a#1cb83f",
+  "a#bc352d",
+  "a#4d05bc",
+  "a#6183cc"
+ ],
+ "explainer-125.png": [
+  "a#e0b59c",
+  "a#b3f477",
+  "a#d7c856",
+  "a#19505f",
+  "a#248bbb",
+  "a#486322",
+  "a#1cb83f",
+  "a#bc352d",
+  "a#4d05bc",
+  "a#6183cc"
+ ],
+ "explainer-150.png": [
+  "a#e0b59c",
+  "a#b3f477",
+  "a#d7c856",
+  "a#19505f",
+  "a#248bbb",
+  "a#486322",
+  "a#1cb83f",
+  "a#bc352d"
+ ],
+ "explainer-200.png": [
+  "a#e0b59c",
+  "a#b3f477",
+  "a#d7c856",
+  "a#19505f",
+  "a#248bbb",
+  "a#486322",
+  "a#1cb83f",
+  "a#bc352d"
+ ],
+ "earnings-100.png": [
+  "a#25392b",
+  "a#5c7b10",
+  "a#bca8f6",
+  "a#7615ae",
+  "a#44b61f",
+  "a#dc51fe",
+  "a#6e784b",
+  "a#94975a",
+  "a#ecdbf3",
+  "a#53d303"
+ ],
+ "earnings-125.png": [
+  "a#25392b",
+  "a#5c7b10",
+  "a#bca8f6",
+  "a#7615ae",
+  "a#44b61f",
+  "a#dc51fe"
+ ],
+ "earnings-150.png": [
+  "a#25392b",
+  "a#5c7b10",
+  "a#bca8f6",
+  "a#7615ae",
+  "a#44b61f"
+ ],
+ "earnings-200.png": [
+  "a#25392b",
+  "a#5c7b10",
+  "a#bca8f6",
+  "a#7615ae",
+  "a#44b61f"
+ ]
+}

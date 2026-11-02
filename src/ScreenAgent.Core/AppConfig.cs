@@ -8,15 +8,16 @@ public sealed class AppConfig
     public string VoiceProvider {get;init;}="xai";
     public bool RetainScreenshots {get;init;}=false;
     public string? UserEmail {get;init;}
+    // Optional lists of windows that are never captured (process name prefixes, domains, title regexes). Empty by default: nothing is excluded.
+    // An old config.json that still has IdsOnlyDomains (v0.1.2-v0.1.4) is read without error; the key is ignored.
     public string[] BlockProcesses {get;init;}=[];
-    public string[] IdsOnlyDomains {get;init;}=["bittensor-earnings.lovable.app"];
     public string[] BlockDomains {get;init;}=[];
     public string[] BlockTitlePatterns {get;init;}=[];
     // "session": small click-through indicator while a session runs, plus short notices.
     // "notices": only short notices; the tray icon alone shows the state.
     public string Indicator {get;init;}="session";
     // Screen vision (Florian's spec): while a voice session runs, a downscaled JPEG goes to the Desk every IntervalMs when the picture changed.
-    // Blocked windows are painted black first, the Earnings app is never sent as an image. Images stay in memory.
+    // Windows matching the three lists above (if you set any) are painted black or not captured. Images stay in memory, never on disk.
     public int LearnThreshold {get;init;}=1;
     public bool SendFrames {get;init;}=true;
     // Client events (hotkeys, frame decisions, ids, lifecycle; no images or text) go to the Desk session trace.
@@ -47,8 +48,8 @@ public sealed class AppConfig
     AppConfig WithHotkeys(Dictionary<string,string> keys,bool migrated)=>new()
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
-        BlockProcesses=BlockProcesses,IdsOnlyDomains=IdsOnlyDomains,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
+        BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
         Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,Hotkeys=keys,HotkeysMigrated=migrated
     };
-    public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,IdsOnlyDomains=IdsOnlyDomains,ExtraTitlePatterns=BlockTitlePatterns};
+    public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};
 }

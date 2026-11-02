@@ -1,0 +1,33 @@
+name: OCR on real page screenshots
+on:
+  push:
+    branches: ['fix/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ocr:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
+      - name: Read every id off the real pages
+        shell: pwsh
+        run: |
+          Write-Host '--- old path, whole frame: for comparison'
+          ./ci/ocr-screens.ps1 -Mode --selftest-memory-ocr -MaxMissing 99
+          Write-Host '--- FindIds'
+          ./ci/ocr-screens.ps1
+      - name: The same with the German OCR language (a German Windows may have no en-US OCR)
+        continue-on-error: true   # installing the language takes the runner very long; the result is read from the log
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          Get-WindowsCapability -Online -Name 'Language.OCR~~~de-DE*' | Add-WindowsCapability -Online | Out-Null
+          $env:SCREENAGENT_OCR_LANG = 'de-DE'
+          ./ci/ocr-screens.ps1
