@@ -82,7 +82,7 @@ jobs:
         shell: pwsh
         run: |
           . ./ci/invoke-sa.ps1
-          Invoke-SA --selftest-frame fixtures/ocr-36.png | Tee-Object artifacts/frame.json
+          Invoke-SA --selftest-frame testdata/screens/explainer-125.png | Tee-Object artifacts/frame.json
           if ($LASTEXITCODE -ne 0) { throw 'Frame change selftest failed' }
       - name: No console window (GUI subsystem)
         shell: pwsh
