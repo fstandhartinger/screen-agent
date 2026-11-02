@@ -4,6 +4,8 @@ using System.Windows;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Net.Sockets;
+using System.Text;
 namespace ScreenAgent;
 // Windows CI selftests for the first-run findings (hotkey pass-through, Desk window, status toast).
 // Exit codes: 0 passed, 1 failed, 2 skipped because the runner cannot provide the precondition (documented in the output).
@@ -102,7 +104,7 @@ internal static class Selftests
     sealed class PairingHandler : HttpMessageHandler
     {
         public readonly string PairId=new('p',43),PollToken=new('q',43),DeviceToken=new('t',43);
-        public readonly string DeviceId=Guid.NewGuid().ToString();
+        public readonly string DeviceId=Guid.NewGuid().ToString(),ApprovalProof=new('a',43);
         public int Polls;public bool BodyOnly=true,AuthorizationOk=true;
         public readonly long Expiry=DateTimeOffset.UtcNow.AddDays(90).ToUnixTimeMilliseconds();
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
@@ -114,7 +116,7 @@ internal static class Selftests
                 case "/api/device/pairing/start":value=new{pairId=PairId,pollToken=PollToken,browserUrl="https://example.com/device?pair="+PairId,expiresAt=DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds()};break;
                 case "/api/device/pairing/poll":
                     using(var body=JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)))
-                        AuthorizationOk&=body.RootElement.GetProperty("pairId").GetString()==PairId&&body.RootElement.GetProperty("pollToken").GetString()==PollToken;
+                        AuthorizationOk&=body.RootElement.GetProperty("pairId").GetString()==PairId&&body.RootElement.GetProperty("pollToken").GetString()==PollToken&&body.RootElement.GetProperty("approvalProof").GetString()==ApprovalProof;
                     if(++Polls==1){status=HttpStatusCode.Accepted;value=new{status="pending"};}
                     else value=new{token=DeviceToken,deviceId=DeviceId,expiresAt=Expiry};
                     break;
@@ -140,10 +142,27 @@ internal static class Selftests
                 string temp=Path.Combine(Path.GetTempPath(),"ScreenAgent-selftest-"+Guid.NewGuid());Directory.CreateDirectory(temp);
                 string tokenFile=Path.Combine(temp,"device.bin");var handler=new PairingHandler();
                 using var client=new DeviceClient(config,handler,tokenFile);
-                var start=await client.StartPairing(CancellationToken.None);
+                using var approval=new LoopbackApproval();
+                using var callbackTimeout=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                var receive=approval.WaitForProof(callbackTimeout.Token);
+                async Task<string> Callback(string url,string? host=null)
+                {
+                    var uri=new Uri(url);using var tcp=new TcpClient();await tcp.ConnectAsync(IPAddress.Loopback,uri.Port,callbackTimeout.Token);
+                    using var network=tcp.GetStream();
+                    var request=Encoding.ASCII.GetBytes("GET "+uri.PathAndQuery+" HTTP/1.1\r\nHost: "+(host??uri.Authority)+"\r\nConnection: close\r\n\r\n");
+                    await network.WriteAsync(request,callbackTimeout.Token);
+                    using var reader=new StreamReader(network);return await reader.ReadToEndAsync(callbackTimeout.Token);
+                }
+                string wrongPath=await Callback(approval.CallbackUrl.Replace("/ScreenAgent/","/wrong/")+"?proof="+handler.ApprovalProof);
+                string wrongHost=await Callback(approval.CallbackUrl+"?proof="+handler.ApprovalProof,"attacker.invalid");
+                Case("loopback-rejects-unrelated-path-and-host",wrongPath.StartsWith("HTTP/1.1 400")&&wrongHost.StartsWith("HTTP/1.1 400")&&!receive.IsCompleted);
+                string callbackPage=await Callback(approval.CallbackUrl+"?proof="+handler.ApprovalProof);
+                string proof=await receive;
+                Case("loopback-delivers-one-use-proof-without-reflecting-it",proof==handler.ApprovalProof&&callbackPage.StartsWith("HTTP/1.1 200")&&callbackPage.Contains("Referrer-Policy: no-referrer")&&!callbackPage.Contains(proof));
+                var start=await client.StartPairing(approval.CallbackUrl,CancellationToken.None);
                 Case("pairing-start-receives-separate-proof",start.pairId!=start.pollToken&&start.browserUrl.EndsWith("?pair="+start.pairId));
-                var pending=await client.PollPairing(start.pairId,start.pollToken,CancellationToken.None);
-                var paired=await client.PollPairing(start.pairId,start.pollToken,CancellationToken.None);
+                var pending=await client.PollPairing(start.pairId,start.pollToken,proof,CancellationToken.None);
+                var paired=await client.PollPairing(start.pairId,start.pollToken,proof,CancellationToken.None);
                 Case("pairing-polls-until-browser-approval",pending is null&&paired?.deviceId==handler.DeviceId);
                 client.Pair(paired!);
                 var protectedBytes=File.ReadAllBytes(tokenFile);

@@ -34,9 +34,9 @@ internal sealed class DeviceClient : IDisposable
     {
         if(!response.IsSuccessStatusCode)throw new HttpRequestException("Desk-Anfrage abgelehnt",null,response.StatusCode);
     }
-    public async Task<PairingStart> StartPairing(CancellationToken ct)
+    public async Task<PairingStart> StartPairing(string callbackUrl,CancellationToken ct)
     {
-        using var r=await http.PostAsJsonAsync("api/device/pairing/start",new{},ct);Success(r);
+        using var r=await http.PostAsJsonAsync("api/device/pairing/start",new{callbackUrl},ct);Success(r);
         var result=await Read<PairingStart>(r,ct);
         if(!System.Text.RegularExpressions.Regex.IsMatch(result.pairId??"","^[A-Za-z0-9_-]{43}$")||
            !System.Text.RegularExpressions.Regex.IsMatch(result.pollToken??"","^[A-Za-z0-9_-]{43}$")||
@@ -44,9 +44,9 @@ internal sealed class DeviceClient : IDisposable
             throw new InvalidDataException("Invalid pairing response");
         return result;
     }
-    public async Task<DeviceToken?> PollPairing(string pairId,string pollToken,CancellationToken ct)
+    public async Task<DeviceToken?> PollPairing(string pairId,string pollToken,string approvalProof,CancellationToken ct)
     {
-        using var r=await http.PostAsJsonAsync("api/device/pairing/poll",new{pairId,pollToken},ct);
+        using var r=await http.PostAsJsonAsync("api/device/pairing/poll",new{pairId,pollToken,approvalProof},ct);
         if(r.StatusCode==System.Net.HttpStatusCode.Accepted)return null;
         Success(r);using var json=await Read<JsonDocument>(r,ct);var m=json.RootElement;
         return new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,DeviceProtocol.Expiry(m.GetProperty("expiresAt")));

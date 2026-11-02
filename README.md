@@ -77,7 +77,11 @@ Before daily use, manually check on Windows:
 
 - Tray → Desk öffnen → Im Browser verbinden → confirm in the normal browser; return automatically signed in, restart without pairing again,
   revoke remotely, disconnect locally; reject foreign-origin messages/navigation. The short-lived browser nonce alone cannot poll or receive credentials;
-  the private poll proof stays in request bodies. Device tokens are stored with current-user DPAPI, and Desk cookies are installed in the app's own store.
+  the private poll proof stays in request bodies. A second one-use browser approval must reach a randomly addressed
+  listener bound only to `127.0.0.1` on this machine before a credential can be delivered; this prevents a remote
+  requester from enrolling their machine by sending Florian a pairing link. The listener expires after five minutes,
+  closes on completion/disconnect, checks its exact random path and Host, bounds requests to 8 KB/3 seconds, and
+  strips the one-use approval from the browser address without reflecting it into the page. Device tokens are stored with current-user DPAPI, and Desk cookies are installed in the app's own store.
 - Toggle Alt+Win+Shift, exercise modifier orders, simultaneous left/right modifiers and Start-menu masking; pause and resume from keys and tray; restore Caps baseline on exit.
 - Dictate into non-elevated Notepad and Claude Code in Windows Terminal: correct target binding, no Enter, clipboard restore/interference/history exclusion, protected-target refusal, Shift discard, hands-free toggle, 60-second limit, Desk mute acknowledgement/timeouts and unmute.
 - Draw with several strokes and idle/release completion; verify crop/context, 1.5-second fade, negative-origin mixed-DPI monitors, overlay exclusion, and changed/private window refusal.

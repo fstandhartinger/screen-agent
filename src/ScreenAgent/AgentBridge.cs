@@ -164,7 +164,7 @@ internal sealed class AgentBridge : Window
     {
         if(pairing is not null)return;
         using var run=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        run.CancelAfter(TimeSpan.FromMinutes(10));pairing=run;
+        run.CancelAfter(TimeSpan.FromMinutes(5));pairing=run;
         try
         {
             PairingStatus("pending","Der Browser öffnet sich. Bestätige dort „Dieses Gerät verbinden“. Desk wartet hier.");
@@ -174,17 +174,19 @@ internal sealed class AgentBridge : Window
                 try{await OpenSignedIn(run.Token);return;}
                 catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Unauthorized){client.Disconnect();}
             }
-            var start=await client.StartPairing(run.Token);
+            using var approval=new LoopbackApproval();
+            var start=await client.StartPairing(approval.CallbackUrl,run.Token);
             // The server may only send an HTTPS URL on our configured Desk origin, with the one-time public nonce.
             var url=new Uri(start.browserUrl);
             if(!Trusted(url.AbsoluteUri)||url.Scheme!="https"||url.AbsolutePath!="/device"||url.Query!="?pair="+start.pairId)
                 throw new InvalidDataException("Invalid pairing location");
             Process.Start(new ProcessStartInfo(url.AbsoluteUri){UseShellExecute=true});
+            var proof=await approval.WaitForProof(run.Token);
             var deadline=DateTimeOffset.FromUnixTimeMilliseconds(start.expiresAt);
             while(DateTimeOffset.UtcNow<deadline)
             {
                 await Task.Delay(2000,run.Token);
-                var token=await client.PollPairing(start.pairId,start.pollToken,run.Token);
+                var token=await client.PollPairing(start.pairId,start.pollToken,proof,run.Token);
                 if(token is null)continue;
                 run.Token.ThrowIfCancellationRequested();
                 client.Pair(token);
