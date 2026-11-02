@@ -7,10 +7,11 @@ internal sealed class CorrectionLearner
     readonly PrivacyPolicy policy;
     readonly List<PendingCorrection> pending;
     readonly string path=Path.Combine(ScreenConfig.Folder,"learn-pending.json");
+    readonly int learnThreshold;
     int generation;
-    public CorrectionLearner(DeviceClient client,PrivacyPolicy policy)
+    public CorrectionLearner(DeviceClient client,PrivacyPolicy policy,int learnThreshold=1)
     {
-        this.client=client;this.policy=policy;
+        this.client=client;this.policy=policy;this.learnThreshold=learnThreshold;
         try{pending=JsonSerializer.Deserialize<List<PendingCorrection>>(File.ReadAllText(path))??[];}catch{pending=[];}
     }
     void Save(){File.WriteAllText(path+".tmp",JsonSerializer.Serialize(pending));File.Move(path+".tmp",path,true);}
@@ -36,7 +37,7 @@ internal sealed class CorrectionLearner
                 if(pair is null){last=null;stable=0;continue;}
                 stable=pair==last?stable+1:1;last=pair;
                 if(stable<2)continue;
-                bool promote=Corrections.Observe(pending,pair);Save();
+                bool promote=Corrections.Observe(pending,pair,learnThreshold);Save();
                 if(promote)
                 {
                     await client.Post("api/device/dictionary/learn",new{from=pair.From,to=pair.To},ct);

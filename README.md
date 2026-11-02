@@ -118,7 +118,7 @@ Before daily use, manually check on Windows:
 - Draw with several strokes and idle/release completion; verify crop/context, 1.5-second fade, negative-origin mixed-DPI monitors, overlay exclusion, and changed/private window refusal.
 - Recognize IDs at https://bittensor-earnings.lovable.app/reax and confirm they appear in the current Desk session. OCR text must stay local.
 - Test privacy blocklist foreground and background masking, browser address changes/unreadable address bars, lock/UAC/Alt-Tab/toasts, and pause/session changes during OCR or upload.
-- Correct the same term in two independent readable editor insertions; verify one learned entry. Check ambiguous spans, terminals, digits/email-like corrections and focus changes never learn.
+- Correct a term once in a readable editor insertion; verify one learned entry (config `LearnThreshold`, default 1 as in Florian's spec; 2 = older cautious mode). Check ambiguous spans, terminals, digits/email-like corrections and focus changes never learn.
 - Validate OCR on the actual screen with local language availability and the optional model folder removed/present. CI exercises synthetic file/memory WinRT and forced Tesseract paths. Force-kill/power-loss cannot run Caps/mic cleanup handlers.
 
 No manual gate is claimed passed by a green workflow. This is an unsigned review prerelease.

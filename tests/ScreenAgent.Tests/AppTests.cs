@@ -14,13 +14,18 @@ public class AppTests
     [InlineData("me@here","you@there")][InlineData("one two three four","new text right here")]
     [InlineData("123","Jev")][InlineData("word!","Word")]
     public void RejectUnsafeOrBroadDiff(string a,string b)=>Assert.Null(Corrections.Diff(a,b));
-    [Fact]public void PromoteOnlyIndependentSecondObservation()
+    [Fact]public void LearnsAtFirstCorrectionByDefault()
+    {
+        List<PendingCorrection> pending=[];
+        Assert.True(Corrections.Observe(pending,new("Jeff","Jev")));
+        Assert.False(Corrections.Observe(pending,new("DE123","DE456")));Assert.Single(pending);
+    }
+    [Fact]public void ThresholdTwoPromotesOnlyIndependentSecondObservation()
     {
         List<PendingCorrection> pending=[];var pair=new Correction("Jeff","Jev");
-        Assert.False(Corrections.Observe(pending,pair));
+        Assert.False(Corrections.Observe(pending,pair,2));
         string saved=JsonSerializer.Serialize(pending);pending=JsonSerializer.Deserialize<List<PendingCorrection>>(saved)!;
-        Assert.True(Corrections.Observe(pending,pair));Assert.Equal(2,pending[0].Count);
-        Assert.False(Corrections.Observe(pending,new("DE123","DE456")));Assert.Single(pending);
+        Assert.True(Corrections.Observe(pending,pair,2));Assert.Equal(2,pending[0].Count);
     }
     [Fact]public void UniqueInsertionOnly()
     {

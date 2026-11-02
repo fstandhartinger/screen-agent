@@ -50,7 +50,7 @@ internal sealed class AppController : IDisposable
     public AppController(AppConfig config,DeviceClient client,AgentBridge bridge,KeyboardHook hook,StatusToast toast)
     {
         this.config=config;this.client=client;this.bridge=bridge;this.hook=hook;this.toast=toast;
-        privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy());
+        privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
         telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["frames"]=config.SendFrames,["hookHealthy"]=hook.Healthy});
         bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();};
@@ -241,7 +241,7 @@ internal sealed class AppController : IDisposable
             {
                 byte[] wav=await recording.Finish();
                 if(action==ActionKind.DictationDiscard||bound is null||paused||hook.Paused||audioSession!=bridge.SessionId)return;
-                var context=new DictationContext(proc,prior.Length<=500?prior:prior[^500..],ids.ToArray(),terms.Take(30).ToArray());
+                var context=new DictationContext(proc,prior.Length<=500?prior:prior[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray());
                 _=transcriptions.Enqueue(async ()=>
                 {
                     try

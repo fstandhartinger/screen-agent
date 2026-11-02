@@ -17,6 +17,7 @@ public sealed class AppConfig
     public string Indicator {get;init;}="session";
     // Screen vision (Florian's spec): while a voice session runs, a downscaled JPEG goes to the Desk every IntervalMs when the picture changed.
     // Blocked windows are painted black first, the Earnings app is never sent as an image. Images stay in memory.
+    public int LearnThreshold {get;init;}=1;
     public bool SendFrames {get;init;}=true;
     // Client events (hotkeys, frame decisions, ids, lifecycle; no images or text) go to the Desk session trace.
     public bool TraceUpload {get;init;}=true;
