@@ -112,7 +112,13 @@ internal static class Selftests
                 var bridge=new AgentBridge(config,client);
                 var ex=0L;
                 Case("desk-is-ordinary-window",!bridge.Topmost&&bridge.ShowInTaskbar&&bridge.ResizeMode==ResizeMode.CanResize&&bridge.WindowStyle==WindowStyle.SingleBorderWindow,new{bridge.Topmost,bridge.ShowInTaskbar,bridge.ResizeMode,bridge.WindowStyle});
-                bool everVisible=false;bridge.IsVisibleChanged+=(_,e)=>{if((bool)e.NewValue)everVisible=true;};
+                bool shownOnScreen=false;
+                bridge.IsVisibleChanged+=(_,e2)=>
+                {
+                    if(!(bool)e2.NewValue)return;
+                    var hw=new System.Windows.Interop.WindowInteropHelper(bridge).Handle;
+                    if(Native.GetWindowRect(hw,out var vr)&&vr.Left>-1000)shownOnScreen=true;
+                };
                 bridge.StartHidden();
                 Case("desk-hidden-at-start",!bridge.IsVisible);
                 if(runtime is null)
@@ -122,7 +128,10 @@ internal static class Selftests
                 else
                 {
                     for(int i=0;i<400&&!bridge.BrowserReady;i++)await Task.Delay(100);
-                    Case("page-starts-while-hidden",bridge.BrowserReady,new{runtime,becameVisibleOffscreen=everVisible,visibleNow=bridge.IsVisible});
+                    Case("page-starts-while-hidden",bridge.BrowserReady,new{runtime,readyMs=bridge.ReadyMs,fallbackUsed=bridge.FallbackUsed});
+                    // The window must settle hidden on its own, and must never have been on screen on the way.
+                    for(int i=0;i<250&&bridge.IsVisible;i++)await Task.Delay(100);
+                    Case("desk-settles-hidden-never-seen",!bridge.IsVisible&&!shownOnScreen,new{visibleNow=bridge.IsVisible,shownOnScreen});
                 }
                 // Open like the tray does.
                 bridge.ShowDesk();await Task.Delay(500);
@@ -137,7 +146,7 @@ internal static class Selftests
                 bridge.ShowDesk();await Task.Delay(300);
                 Case("desk-restores",bridge.WindowState==WindowState.Normal&&bridge.DeskOpen);
                 // Remembers its size: resize, hide, open again.
-                int w=Math.Min(box.W+60,work.W-40),hh=Math.Min(box.H-40,work.H-40);
+                int w=Math.Min(Math.Max(box.W-40,WindowPlacement.DeskMinWidthDip+40),work.W-40),hh=Math.Min(Math.Max(box.H-60,WindowPlacement.DeskMinHeightDip+60),work.H-40);
                 Native.SetWindowPos(h,IntPtr.Zero,box.X,box.Y,w,hh,0x14);await Task.Delay(300);
                 bridge.HideDesk();await Task.Delay(200);
                 bridge.ShowDesk();await Task.Delay(400);

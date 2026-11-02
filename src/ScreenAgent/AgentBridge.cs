@@ -20,7 +20,11 @@ internal sealed class AgentBridge : Window
     readonly AppConfig config;
     readonly System.Windows.Threading.DispatcherTimer saveTimer=new(){Interval=TimeSpan.FromMilliseconds(600)};
     Task initTask=Task.CompletedTask;
-    bool initStarted,userShown;
+    bool initStarted,userShown,offscreen;
+    readonly System.Diagnostics.Stopwatch startup=new();
+    public bool FallbackUsed {get;private set;}
+    public long ReadyMs {get;private set;}
+    public static int FallbackSeconds=6;
     public bool BrowserReady=>browser.CoreWebView2 is not null;
     public static string StateFile=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","desk-window.json");
     public AgentBridge(AppConfig config,DeviceClient client)
@@ -48,6 +52,7 @@ internal sealed class AgentBridge : Window
             var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows");
             var env=await CoreWebView2Environment.CreateAsync(null,profile,options);
             await browser.EnsureCoreWebView2Async(env);
+            ReadyMs=startup.ElapsedMilliseconds;
             browser.CoreWebView2.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri))e.Cancel=true;else{SessionId=null;SessionChanged?.Invoke();}};
             browser.CoreWebView2.WebMessageReceived+=(_,e)=>
             {
@@ -95,17 +100,25 @@ internal sealed class AgentBridge : Window
     // has not come alive after a few seconds, show it off-screen without taskbar activation and hide it again when ready.
     public void StartHidden()
     {
+        startup.Restart();
         new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
         Begin();
-        var fallback=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromSeconds(6)};
+        var fallback=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromSeconds(FallbackSeconds)};
         fallback.Tick+=async (_,_)=>
         {
             fallback.Stop();
             if(BrowserReady||IsVisible)return;
+            FallbackUsed=true;
             var h=new System.Windows.Interop.WindowInteropHelper(this).Handle;
-            Native.SetWindowPos(h,IntPtr.Zero,-32000,-32000,400,300,0x14);ShowActivated=false;Show();
+            // Off-screen, no activation, no taskbar button (tool window) while the control comes alive.
+            long ex=Native.GetWindowLongPtr(h,-20).ToInt64();Native.SetWindowLongPtr(h,-20,(IntPtr)(ex|0x80L));
+            Native.SetWindowPos(h,IntPtr.Zero,-32000,-32000,400,300,0x14);ShowActivated=false;offscreen=true;Show();
             await Task.WhenAny(initTask,Task.Delay(15000));
-            if(!userShown)Hide();
+            if(offscreen)
+            {
+                Hide();offscreen=false;
+                Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()&~0x80L));
+            }
         };
         fallback.Start();
     }
@@ -113,9 +126,15 @@ internal sealed class AgentBridge : Window
     {
         userShown=true;
         var h=new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
-        if(!IsVisible)
+        if(!IsVisible||offscreen)
         {
-            ApplyPlacement(h);ShowActivated=true;Show();
+            if(offscreen)
+            {
+                offscreen=false;
+                Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()&~0x80L));
+            }
+            ApplyPlacement(h);ShowActivated=true;
+            if(!IsVisible)Show();
             ApplyPlacement(h); // WPF applies its own first-show position; set ours again
         }
         if(WindowState==WindowState.Minimized)WindowState=WindowState.Normal;
