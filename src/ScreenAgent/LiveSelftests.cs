@@ -66,6 +66,8 @@ internal static class LiveSelftests
                     await Task.Delay(5000);
                     var read=await Task.Run(()=>{try{return prompt.FindInput(code,1500) is {} b?MainAgentPrompt.ReadDraft(b):null;}catch{return null;}});
                     if(!string.IsNullOrEmpty(read)&&read!=seen){seen=read;Step($"{t}s box has {read.Length} chars");Shot($"2-box-{t}s");report["boxAtS"]=t;}
+                    // A quick tunnel does not carry the page's event stream, so the page cannot hear of the drawing here: tell the app the way the page would (the page's part is tested on its own).
+                    if(t==125)await bridge.Eval("chrome.webview.postMessage({type:'canvas-pending',title:'e2e'})");
                     if(!shotPanel&&controller.CanvasForTests is {IsOpen:true} panel){await Task.Delay(9000);shotPanel=true;try{await panel.CaptureBrowser(Path.GetFullPath("e2e-shots/4-panel-webview.png"));}catch(Exception ex){Step("panel shot "+ex.GetType().Name);}Shot("3-screen-while-panel-open");report["panelAtS"]=t;report["panelAffinityOk"]=panel.AffinityOk;report["panelRect"]=panel.ScreenRect.ToString();Step($"{t}s panel open");}
                 }
                 report["box"]=seen;report["boxStillHoldsText"]=seen is not null;report["panelOpened"]=shotPanel;Shot("5-end");
