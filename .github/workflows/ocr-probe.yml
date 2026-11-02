@@ -8,7 +8,7 @@ permissions:
 jobs:
   ocr:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -24,6 +24,8 @@ jobs:
           Write-Host '--- FindIds'
           ./ci/ocr-screens.ps1
       - name: The same with the German OCR language (a German Windows may have no en-US OCR)
+        continue-on-error: true   # installing the language takes the runner very long; the result is read from the log
+        timeout-minutes: 30
         shell: pwsh
         run: |
           Get-WindowsCapability -Online -Name 'Language.OCR~~~de-DE*' | Add-WindowsCapability -Online | Out-Null
