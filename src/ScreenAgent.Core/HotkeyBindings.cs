@@ -5,11 +5,12 @@ public sealed class HotkeyBindings
 {
     public int DrawVk {get;}
     public int MuteVk {get;}
+    public int CanvasVk {get;}
     public HotkeyLayout Layout {get;}
     readonly int pauseVk,spaceVk;
     readonly HashSet<int> held=[];
     readonly ChordTracker tracker;
-    public static readonly string[] Required=["session","dictation","dictationToggle","mute","pause","handsFree","draw"];
+    public static readonly string[] Required=["session","dictation","dictationToggle","mute","pause","handsFree","draw","canvas"];
     public HotkeyBindings(Dictionary<string,string> keys)
     {
         static string[] Parts(string value)=>value.Split('+',StringSplitOptions.TrimEntries|StringSplitOptions.RemoveEmptyEntries);
@@ -31,10 +32,10 @@ public sealed class HotkeyBindings
         }
         var session=Mods("Session",keys["session"],3);var dictation=Mods("Dictation",keys["dictation"],2,false);var toggle=Mods("Dictation toggle",keys["dictationToggle"],3);
         if(HotkeyLayout.Same(session,toggle))throw new InvalidDataException("Session and dictation toggle need different modifiers");
-        var pause=WithKey("Pause",keys["pause"]);var hands=WithKey("Hands-free",keys["handsFree"]);var mute=WithKey("Mute",keys["mute"]);
-        pauseVk=VirtualKey(pause.Key);spaceVk=VirtualKey(hands.Key);MuteVk=VirtualKey(mute.Key);DrawVk=VirtualKey(keys["draw"]);
-        if(new[]{pauseVk,spaceVk,MuteVk,DrawVk}.Distinct().Count()!=4)throw new InvalidDataException("Draw, pause, hands-free and mute keys must differ");
-        Layout=new(session,dictation,toggle,pause.Mods,hands.Mods,mute.Mods);tracker=new(Layout);
+        var pause=WithKey("Pause",keys["pause"]);var hands=WithKey("Hands-free",keys["handsFree"]);var mute=WithKey("Mute",keys["mute"]);var canvas=WithKey("Canvas",keys["canvas"]);
+        pauseVk=VirtualKey(pause.Key);spaceVk=VirtualKey(hands.Key);MuteVk=VirtualKey(mute.Key);DrawVk=VirtualKey(keys["draw"]);CanvasVk=VirtualKey(canvas.Key);
+        if(new[]{pauseVk,spaceVk,MuteVk,DrawVk,CanvasVk}.Distinct().Count()!=5)throw new InvalidDataException("Draw, pause, hands-free, mute and canvas keys must differ");
+        Layout=new(session,dictation,toggle,pause.Mods,hands.Mods,mute.Mods,canvas.Mods);tracker=new(Layout);
     }
     static int VirtualKey(string key)=>key switch
     {
@@ -44,10 +45,11 @@ public sealed class HotkeyBindings
         _=>throw new InvalidDataException("Use Caps, Space, A-Z or F1-F12 for action keys")
     };
     static Key? Modifier(int vk)=>vk switch{0x11 or 0xa2 or 0xa3=>Key.Ctrl,0x12 or 0xa4 or 0xa5=>Key.Alt,0x5b or 0x5c=>Key.Win,0x10 or 0xa0 or 0xa1=>Key.Shift,_=>null};
-    public Key Role(int vk)=>Modifier(vk) ?? (vk==DrawVk?Key.Caps:vk==pauseVk?Key.P:vk==spaceVk?Key.Space:vk==MuteVk?Key.Mute:Key.Other);
+    public Key Role(int vk)=>Modifier(vk) ?? (vk==DrawVk?Key.Caps:vk==pauseVk?Key.P:vk==spaceVk?Key.Space:vk==MuteVk?Key.Mute:vk==CanvasVk?Key.Canvas:Key.Other);
     // Ctrl+Win is Wispr Flow's dictation chord; binding it as a hold chord here makes both tools fight over the same keys.
     public bool CollidesWithWispr=>HotkeyLayout.Same(Layout.Dictation,[Key.Ctrl,Key.Win]);
     // The mute key is swallowed only while its chord is held, so Ctrl+Shift+M still works for everybody else.
+    public bool CanvasChordHeld=>tracker.Is(Layout.Canvas)&&!tracker.Tainted;
     public bool MuteChordHeld=>tracker.Is(Layout.Mute)&&!tracker.Tainted;
     public bool Is(Key[] set)=>tracker.Is(set);
     // True for exactly one Feed call per press: the moment a chord of ours completes while Win or Alt is held.

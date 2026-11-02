@@ -1,6 +1,6 @@
 namespace ScreenAgent.Core;
-public enum Key { Ctrl, Alt, Win, Shift, Caps, P, Space, Mute, Other }
-public enum ActionKind { SessionToggle, PauseToggle, MuteToggle, DictationStart, DictationStop, DictationDiscard, DrawStart, DrawStop, CapsTap, DictationBind, DrawBind }
+public enum Key { Ctrl, Alt, Win, Shift, Caps, P, Space, Mute, Canvas, Other }
+public enum ActionKind { SessionToggle, PauseToggle, MuteToggle, CanvasToggle, DictationStart, DictationStop, DictationDiscard, DrawStart, DrawStop, CapsTap, DictationBind, DrawBind }
 public readonly record struct KeyEvent(Key Key, bool Down, long Ms);
 // Default layout: Ctrl+Win+Shift session (any order, +P pause, +M mute), Alt+Win hold = dictate, Alt+Win+Shift = dictation on/off, Alt+Win+Y hands-free.
 public sealed class Hotkeys
@@ -12,7 +12,7 @@ public sealed class Hotkeys
     Chord armed;
     bool dictating, drawing, capsOwned, handsFree, bound;
     public Hotkeys(HotkeyLayout? layout=null){this.layout=layout??Default;chords=new(this.layout);}
-    public static readonly HotkeyLayout Default=new([Key.Ctrl,Key.Win,Key.Shift],[Key.Alt,Key.Win],[Key.Alt,Key.Win,Key.Shift],[Key.Ctrl,Key.Win,Key.Shift],[Key.Alt,Key.Win],[Key.Ctrl,Key.Win,Key.Shift]);
+    public static readonly HotkeyLayout Default=new([Key.Ctrl,Key.Win,Key.Shift],[Key.Alt,Key.Win],[Key.Alt,Key.Win,Key.Shift],[Key.Ctrl,Key.Win,Key.Shift],[Key.Alt,Key.Win],[Key.Ctrl,Key.Win,Key.Shift],[Key.Ctrl,Key.Win,Key.Shift]);
     public bool Session { get; private set; }
     public bool Paused { get; private set; }
     public bool Dictating => dictating;
@@ -66,6 +66,7 @@ public sealed class Hotkeys
             if(drawing) { drawing=false; result.Add(ActionKind.DrawStop); }
         }
         if (e.Down && e.Key == Key.Mute && chords.Is(layout.Mute) && MuteLive) result.Add(ActionKind.MuteToggle);
+        if (e.Down && e.Key == Key.Canvas && chords.Is(layout.Canvas) && MuteLive) result.Add(ActionKind.CanvasToggle);
         if(e.Down&&e.Key==Key.Space&&chords.Is(layout.HandsFree)&&!Paused)
         {
             dictSince=null;handsFree=!handsFree;

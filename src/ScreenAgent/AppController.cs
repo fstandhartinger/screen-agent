@@ -48,6 +48,10 @@ internal sealed class AppController : IDisposable
     readonly Telemetry telemetry;
     readonly FramePlanner planner;
     string? freshId,commandsSid;
+    readonly MainAgentPrompt prompts;
+    readonly PromptGate promptGate=new();
+    CanvasPanel? canvas;
+    bool canvasClosed,canvasNoted;
     bool micMuted,manualSession,prevVoice,prevActive;
     long frameBackoffUntil,mutePollAt;
     public AppController(AppConfig config,DeviceClient client,AgentBridge bridge,KeyboardHook hook,StatusToast toast)
@@ -55,6 +59,8 @@ internal sealed class AppController : IDisposable
         this.config=config;this.client=client;this.bridge=bridge;this.hook=hook;this.toast=toast;
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
         telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);
+        prompts=new(config.MainAgentInputNames,(type,data)=>telemetry.Event(type,data));
+        bridge.CanvasPending+=OnCanvasPending;bridge.CanvasToggle+=ToggleCanvas;
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
         bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();};
         hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
@@ -83,6 +89,7 @@ internal sealed class AppController : IDisposable
         menu.Items.Add(statusItem);
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Desk öffnen",null,(_,_)=>bridge.ShowDesk());
+        menu.Items.Add("Zeichnung zeigen",null,(_,_)=>{_=ShowCanvas(true,"tray");});
         sessionItem.Click+=(_,_)=>hook.SetSession(!hook.Session);menu.Items.Add(sessionItem);
         pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
         menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset("stop");bridge.Disconnect();});
@@ -110,6 +117,7 @@ internal sealed class AppController : IDisposable
         $"{KeyNames.Display(k["session"])}: Gespräch an/aus (Reihenfolge egal)",
         $"{KeyNames.Display(k["mute"])}: Mikro stumm/an",
         $"{KeyNames.Display(k["pause"])}: Pause",
+        $"{KeyNames.Display(k["canvas"])}: Zeichnung zeigen/verbergen",
         $"{KeyNames.Display(k["dictation"])} halten: Diktat",
         $"{KeyNames.Display(k["dictationToggle"])}: Diktat an/aus",
         $"{(k["draw"]=="Caps"?"Feststelltaste":k["draw"])} halten: zeichnen",
@@ -188,7 +196,7 @@ internal sealed class AppController : IDisposable
         foreach(var d in drawings)d.Close();drawings.Clear();
         QueueAudio(ActionKind.DictationDiscard);
     }
-    static string HotkeyEvent(ActionKind a)=>a switch{ActionKind.SessionToggle=>"hotkey.session",ActionKind.PauseToggle=>"hotkey.pause",ActionKind.MuteToggle=>"hotkey.mute",ActionKind.DictationStart=>"hotkey.dictation.start",ActionKind.DictationStop=>"hotkey.dictation.stop",ActionKind.DictationDiscard=>"hotkey.dictation.discard",ActionKind.DrawStart=>"hotkey.draw.start",ActionKind.DrawStop=>"hotkey.draw.stop",_=>"hotkey."+a.ToString().ToLowerInvariant()};
+    static string HotkeyEvent(ActionKind a)=>a switch{ActionKind.SessionToggle=>"hotkey.session",ActionKind.PauseToggle=>"hotkey.pause",ActionKind.MuteToggle=>"hotkey.mute",ActionKind.CanvasToggle=>"hotkey.canvas",ActionKind.DictationStart=>"hotkey.dictation.start",ActionKind.DictationStop=>"hotkey.dictation.stop",ActionKind.DictationDiscard=>"hotkey.dictation.discard",ActionKind.DrawStart=>"hotkey.draw.start",ActionKind.DrawStop=>"hotkey.draw.stop",_=>"hotkey."+a.ToString().ToLowerInvariant()};
     void Action(ActionKind action)
     {
         if(action is not (ActionKind.CapsTap or ActionKind.DictationBind or ActionKind.DrawBind))
@@ -198,6 +206,7 @@ internal sealed class AppController : IDisposable
             telemetry.Event(HotkeyEvent(action),data);
         }
         if(action==ActionKind.MuteToggle){_=ToggleMute();return;}
+        if(action==ActionKind.CanvasToggle){ToggleCanvas();return;}
         if(action is ActionKind.DictationStart or ActionKind.DictationStop or ActionKind.DictationDiscard){QueueAudio(action);return;}
         if(action is ActionKind.SessionToggle or ActionKind.PauseToggle)
         {
@@ -270,7 +279,11 @@ internal sealed class AppController : IDisposable
         // A dialog started with the purple button in the Desk window is a session too: same indicator, same screen context.
         if(voice&&!prevVoice&&!hook.Session&&!paused&&client.Paired){manualSession=true;hook.SetSession(true);}
         if(!voice&&prevVoice&&manualSession){manualSession=false;hook.SetSession(false);}
-        if(voice!=prevVoice){telemetry.Event("client.voice",new(){["on"]=voice,["manual"]=manualSession});prevVoice=voice;if(!voice)micMuted=false;}
+        if(voice!=prevVoice)
+        {
+            telemetry.Event("client.voice",new(){["on"]=voice,["manual"]=manualSession});prevVoice=voice;if(!voice)micMuted=false;
+            if(voice)canvasClosed=false;else canvas?.HidePanel(false);   // a closed panel stays closed until the next voice session; at the end of a session it goes away
+        }
         if(active!=prevActive)
         {
             telemetry.Event("client.session",new(){["state"]=active?"start":"stop",["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]=config.SendFrames?"windows":"windows-noframes"});
@@ -303,7 +316,8 @@ internal sealed class AppController : IDisposable
                 using var reply=await client.Raw(HttpMethod.Get,"api/device/session/"+Uri.EscapeDataString(sid)+"/commands",null,ct);
                 // The page says voice is on before the gateway has its session (connecting), and a dialog can end: wait, the loop ends with VoiceOn.
                 if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="commands"});await Task.Delay(3000,ct);continue;}
-                if(reply.Ok&&reply.Json is {} j&&j.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.True&&j.RootElement.TryGetProperty("id",out var id)&&id.ValueKind==System.Text.Json.JsonValueKind.String)
+                if(reply.Ok&&reply.Json is {} pj&&PromptCommand.Parse(pj.RootElement) is {} request)_=RunPrompt(sid,request,ct);   // typing runs on its own; the long poll is parked again at once
+                else if(reply.Ok&&reply.Json is {} j&&j.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.True&&j.RootElement.TryGetProperty("id",out var id)&&id.ValueKind==System.Text.Json.JsonValueKind.String)
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
                 else if(!reply.Ok)await Task.Delay(3000,ct);
             }
@@ -311,6 +325,70 @@ internal sealed class AppController : IDisposable
             catch{try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}}
         }
     }
+    // Main Agent prompt (command channel): acknowledge at once, type, report the outcome. The text itself never goes back.
+    async Task RunPrompt(string sid,PromptRequest request,CancellationToken ct)
+    {
+        var start=promptGate.Begin(request.Id);
+        if(start==PromptStart.Repeat)return;
+        string url="api/device/session/"+Uri.EscapeDataString(sid)+"/commands/"+Uri.EscapeDataString(request.Id)+"/result";
+        await ReportPrompt(url,new{state="received"});
+        telemetry.Event("main.prompt.received",new(){["chars"]=request.Text.Length});
+        void Fallback(string code)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,request.Text);}catch{ /* the result below still tells */ }}));
+        if(start==PromptStart.Busy)
+        {
+            telemetry.Event("main.prompt.done",new(){["code"]=PromptCodes.Busy,["chars"]=0});Fallback(PromptCodes.Busy);
+            await ReportPrompt(url,new{state="failed",code=PromptCodes.Busy,landed=(bool?)null,chars=0});return;
+        }
+        try
+        {
+            if(bridge.SessionId!=sid||!bridge.VoiceOn||ct.IsCancellationRequested)
+            {
+                telemetry.Event("main.prompt.done",new(){["code"]=PromptCodes.NoSession,["chars"]=0});Fallback(PromptCodes.NoSession);
+                await ReportPrompt(url,new{state="failed",code=PromptCodes.NoSession,landed=(bool?)null,chars=0});return;
+            }
+            var result=await prompts.Run(request.Text,ct);
+            bool ok=PromptCodes.Ok(result.Code);
+            if(!ok)Fallback(result.Code);
+            await ReportPrompt(url,new{state=ok?"done":"failed",code=result.Code,landed=result.Landed,chars=result.Chars});
+        }
+        catch{await ReportPrompt(url,new{state="failed",code=PromptCodes.Interrupted,landed=(bool?)null,chars=0});}
+        finally{promptGate.End();}
+    }
+    async Task ReportPrompt(string url,object body)
+    {
+        for(int attempt=0;attempt<2;attempt++)
+        {
+            try
+            {
+                using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);
+                if(reply.Ok||reply.Status is 404 or 409)return;
+            }
+            catch{ /* one retry */ }
+            await Task.Delay(500);
+        }
+    }
+    // Drawing panel. Auto-open only when allowed (config, not closed by him this session) and only with the capture exclusion confirmed.
+    CanvasPanel Panel(){if(canvas is null){canvas=new CanvasPanel(bridge);canvas.ClosedByUser+=()=>canvasClosed=true;}return canvas;}
+    async Task ShowCanvas(bool byUser,string why)
+    {
+        try
+        {
+            var panel=Panel();
+            if(!panel.Prepare())
+            {
+                if(!canvasNoted){canvasNoted=true;telemetry.Event("canvas.unavailable",new(){["why"]="affinity"});Notice("Zeichnung nicht verfügbar · Windows nimmt das Fenster nicht aus der Aufnahme",Level.Warn);}
+                return;
+            }
+            if(byUser)canvasClosed=false;
+            else if(canvasClosed||config.CanvasPanel=="manual")return;
+            bool opened=await panel.Open();
+            telemetry.Event("canvas.open",new(){["why"]=why,["ok"]=opened,["restores"]=panel.ForegroundRestores});
+        }
+        catch(Exception ex){telemetry.Event("canvas.error",new(){["type"]=ex.GetType().Name});}
+    }
+    void OnCanvasPending(){if(canvas is {IsOpen:true})return;_=ShowCanvas(false,"pending");}
+    void ToggleCanvas(){if(canvas is {IsOpen:true} open)open.HidePanel(true);else _=ShowCanvas(true,"toggle");}
     async Task Watch()
     {
         var fg=Native.GetForegroundWindow();long now=Environment.TickCount64;
@@ -322,7 +400,7 @@ internal sealed class AppController : IDisposable
         if(busy||!schedule.Ready(now)||!Active||drawings.Count>0||!(idsDue||frameDue))return;
         busy=true;capturedAt=now;lastForeground=fg;planner.Captured(now,(long)fg);
         var ct=epoch.Token;string sid=bridge.SessionId!;contextSid=sid;
-        if(frames&&commandsSid!=sid){commandsSid=sid;_=CommandLoop(sid,ct);}
+        if(voice&&commandsSid!=sid){commandsSid=sid;_=CommandLoop(sid,ct);}   // also without frames: prompts for the Main Agent arrive on this channel
         try
         {
             if(pendingClear is {} oldSid){pendingClear=null;await ClearContext(oldSid,pendingWhy??"stop");if(pendingClear!=null)throw new HttpRequestException();}
@@ -503,7 +581,7 @@ internal sealed class AppController : IDisposable
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);
         telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);
-        disposed=true;timer.Stop();epoch.Cancel();learner.Cancel();audio?.Dispose();audio=null;
+        disposed=true;canvas?.Terminate();timer.Stop();epoch.Cancel();learner.Cancel();audio?.Dispose();audio=null;
         foreach(var d in drawings)d.Close();drawings.Clear();tray.Visible=false;tray.Dispose();epoch.Dispose();
     }
 }

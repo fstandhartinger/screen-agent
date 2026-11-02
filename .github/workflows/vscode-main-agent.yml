@@ -1,0 +1,62 @@
+name: VS Code Main Agent prompt
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'ci/main-agent-e2e.ps1'
+      - 'ci/invoke-sa.ps1'
+      - '.github/workflows/vscode-main-agent.yml'
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Scenario prefixes, comma separated (A,B,C,D,E,F,G); empty = all'
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  panel:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
+      - name: Drawing panel selftest (opens without taking focus, capture exclusion, real capture, close and toggle)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Invoke-SA --selftest-canvas-panel | Tee-Object artifacts/canvas-panel.json
+          if ($LASTEXITCODE -ne 0) { throw 'Drawing panel selftest failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canvas-panel
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+  main-agent:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
+      - name: Main Agent prompt against the real VS Code Insiders and Claude Code extension
+        shell: pwsh
+        run: ./ci/main-agent-e2e.ps1 -Only "${{ github.event.inputs.only }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: main-agent-e2e
+          path: artifacts/main-agent/
+          retention-days: 14
+          if-no-files-found: warn

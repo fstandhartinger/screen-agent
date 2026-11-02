@@ -1,0 +1,259 @@
+using System.Diagnostics;
+using System.Text;
+using System.Windows.Automation;
+namespace ScreenAgent;
+internal sealed record PromptResult(string Code,bool? Landed,int Chars,string Route,int Windows,bool Wsl,long Ms,IntPtr Window);
+// Types a prompt into the Claude Code message box of VS Code Insiders. Hard rules: the text goes into that box and nowhere else, is never submitted (the only
+// unshifted Enter is the one that runs the palette command, checked immediately before), and never touches the clipboard. Whatever cannot be proven before
+// the first character is typed ends in "type nothing, fail". Runs on a worker thread: UIA searches on Electron can be slow.
+internal sealed class MainAgentPrompt
+{
+    const ushort Ctrl=0x11,Shift=0x10,Alt=0x12,Return=0x0d,Esc=0x1b,KeyEnd=0x23,P=0x50,Neutral=0xe8;
+    public const int SearchBudgetMs=2500,PaletteWaitMs=3000;
+    // Selftest hooks. Keys counts every key event this class sends (a failed prompt must leave it at the value it had).
+    public static volatile bool PaletteDisabledForTests;
+    public static long KeysSent;
+    public static Action<string>? Debug;
+    readonly string[] names;
+    readonly Action<string,Dictionary<string,object?>> log;
+    public MainAgentPrompt(string[] names,Action<string,Dictionary<string,object?>> log){this.names=names;this.log=log;}
+    internal sealed record FocusInfo(AutomationElement Element,int Pid,string Name,List<string> Classes);
+    public Task<PromptResult> Run(string raw,CancellationToken ct)=>Task.Run(()=>RunCore(raw,ct));
+    PromptResult RunCore(string raw,CancellationToken ct)
+    {
+        var clock=Stopwatch.StartNew();string route="none";int windows=0,typed=0;bool wsl=false;IntPtr hwnd=IntPtr.Zero;
+        PromptResult Finish(string code,bool? landed=null)
+        {
+            var r=new PromptResult(code,landed,typed,route,windows,wsl,clock.ElapsedMilliseconds,hwnd);
+            log("main.prompt.done",new(){["code"]=code,["landed"]=landed,["chars"]=typed,["route"]=route,["windows"]=windows,["wsl"]=wsl,["ms"]=r.Ms});return r;
+        }
+        string text=PromptText.Normalize(raw);
+        log("main.prompt.start",new(){["chars"]=text.Length});
+        if(text.Length==0)return Finish(PromptCodes.Interrupted);
+        try
+        {
+            var found=CandidateOrder.Pick(Enumerate());windows=found.Count;
+            if(found.Count==0)return Finish(PromptCodes.NoWindow);
+            // b. Which window has an open Claude session: the first one with a message box. None: the first candidate and the palette.
+            var chosen=found[0];AutomationElement? input=null;
+            foreach(var c in found)
+            {
+                ct.ThrowIfCancellationRequested();
+                if(FindInput((IntPtr)c.Handle,SearchBudgetMs) is {} hit){chosen=c;input=hit;break;}
+            }
+            hwnd=(IntPtr)chosen.Handle;wsl=CandidateOrder.Wsl(chosen);
+            Native.GetWindowThreadProcessId(hwnd,out uint pidRaw);int pid=(int)pidRaw;
+            Debug?.Invoke($"candidates={found.Count} chosen={chosen.Handle:x} minimized={chosen.Minimized} elementFound={input is not null}");
+            // c. In front.
+            if(!WaitModifiersUp(2000))return Finish(PromptCodes.Busy);
+            if(!Front(hwnd))return Finish(PromptCodes.NoForeground);
+            // d. Focus: the element when there is one, the palette otherwise or when the element did not take the focus.
+            route="element";
+            if(input is null&&FindInput(hwnd,1500) is {} late)input=late;   // a minimized window shows nothing before it is restored
+            bool ok=false;
+            if(input is not null)
+            {
+                try{input.SetFocus();}catch(Exception ex){Debug?.Invoke("SetFocus failed: "+ex.GetType().Name);}
+                ok=Verified(pid,1000,out _);
+            }
+            if(!ok)
+            {
+                route="palette";
+                if(!Palette(hwnd,pid,ct,out string? stop)){return Finish(stop!);}
+                ok=Verified(pid,PaletteWaitMs,out string why);
+                if(!ok)
+                {
+                    Debug?.Invoke("verify after palette: "+why);
+                    if(InQuickInput(pid))Tap(Esc);
+                    return Finish(PromptCodes.WrongFocus);
+                }
+            }
+            log("main.prompt.route",new(){["route"]=route,["windows"]=windows,["wsl"]=wsl});
+            // e/f. Verified. Type.
+            var box=Focus()!.Element;
+            string existing="";bool readable=true;
+            try{var now=ReadBox(box);existing=now??"";readable=now is not null;}catch{readable=false;}
+            if(existing.Trim().Length>0||!readable)
+            {
+                Chord(Ctrl,KeyEnd);   // never clear a draft: continue after it
+                if(existing.Trim().Length>0)Type(" ",hwnd,pid,ct,false,ref typed,out _);
+                typed=0;
+            }
+            if(!Type(text,hwnd,pid,ct,true,ref typed,out string? failed))return Finish(failed!);
+            // g. Read back.
+            Thread.Sleep(150);
+            string? read=null;try{read=ReadBox(box);}catch{ /* unreadable */ }
+            if(read is null)return Finish(PromptCodes.TypedUnverified);
+            if(!PromptText.Landed(read,text))return Finish(PromptCodes.WrongFocus,false);
+            Thread.Sleep(500);
+            try{read=ReadBox(box);}catch{read=null;}
+            if(read is null||!PromptText.Landed(read,text)){Debug?.Invoke("text vanished after 500 ms");return Finish(PromptCodes.WrongFocus,false);}
+            return Finish(PromptCodes.Typed,true);
+        }
+        catch(OperationCanceledException){return Finish(PromptCodes.Interrupted);}
+        catch(Exception ex){Debug?.Invoke("unexpected "+ex);return Finish(PromptCodes.Interrupted);}
+    }
+    // ---- windows
+    internal static List<CodeWindow> Enumerate()
+    {
+        var list=new List<CodeWindow>();var cache=new Dictionary<uint,string>();var sb=new StringBuilder(512);
+        Native.EnumWindows((h,_)=>
+        {
+            if(!Native.IsWindowVisible(h)||Native.GetWindow(h,4)!=IntPtr.Zero)return true;   // visible or minimized, top level, not owned
+            sb.Clear();Native.GetClassName(h,sb,512);string cls=sb.ToString();
+            if(cls!=CandidateOrder.WindowClass)return true;
+            sb.Clear();Native.GetWindowText(h,sb,512);string title=sb.ToString();
+            if(title.Length==0)return true;
+            Native.GetWindowThreadProcessId(h,out uint pid);
+            if(!cache.TryGetValue(pid,out var name)){try{using var p=Process.GetProcessById((int)pid);name=p.ProcessName;}catch{name="";}cache[pid]=name;}
+            list.Add(new((long)h,name,cls,title,Native.IsIconic(h)));
+            return true;
+        },IntPtr.Zero);
+        return list;
+    }
+    internal AutomationElement? FindInput(IntPtr hwnd,int budgetMs)
+    {
+        var until=Environment.TickCount64+budgetMs;
+        Condition cond=names.Length==1?new PropertyCondition(AutomationElement.NameProperty,names[0]):new OrCondition(names.Select(n=>(Condition)new PropertyCondition(AutomationElement.NameProperty,n)).ToArray());
+        AutomationElement root;
+        try{root=AutomationElement.FromHandle(hwnd);}catch{return null;}
+        while(true)
+        {
+            long left=until-Environment.TickCount64;if(left<=0)return null;
+            var search=Task.Run(()=>{try{return root.FindFirst(TreeScope.Descendants,cond);}catch{return null;}});
+            if(!search.Wait((int)left))return null;   // the search itself ran over the budget; abandon it
+            if(search.Result is {} hit)return hit;
+            Thread.Sleep(250);
+        }
+    }
+    static bool WaitModifiersUp(int ms)
+    {
+        for(long until=Environment.TickCount64+ms;;Thread.Sleep(10)){if(Native.ModifiersUp)return true;if(Environment.TickCount64>=until)return false;}
+    }
+    static bool Stable(IntPtr h,int overallMs)
+    {
+        long until=Environment.TickCount64+overallMs,since=0;
+        while(Environment.TickCount64<until)
+        {
+            if(Native.GetForegroundWindow()==h){if(since==0)since=Environment.TickCount64;if(Environment.TickCount64-since>=300)return true;}else since=0;
+            Thread.Sleep(20);
+        }
+        return false;
+    }
+    // Restore if minimized, then three ways in order. No visible focus-stealing hack beyond these.
+    internal static bool Front(IntPtr h)
+    {
+        if(Native.IsIconic(h)){Native.ShowWindow(h,9);Thread.Sleep(200);}
+        if(Native.GetForegroundWindow()==h&&Stable(h,600))return true;
+        try{AutomationElement.FromHandle(h).SetFocus();}catch{ /* not every window takes it */ }
+        if(Stable(h,900))return true;
+        // Alt tap: Windows lets the process that just received input take the foreground. The neutral key between Alt down and up keeps the menu bar closed.
+        SendKeys(Key(Alt,false));
+        Native.SetForegroundWindow(h);
+        SendKeys(Key(Neutral,false),Key(Neutral,true),Key(Alt,true));
+        if(Stable(h,900))return true;
+        uint self=Native.GetCurrentThreadId();
+        uint fgThread=Native.GetWindowThreadProcessId(Native.GetForegroundWindow(),out _);
+        bool attached=fgThread!=0&&fgThread!=self&&Native.AttachThreadInput(self,fgThread,true);
+        try{Native.SetForegroundWindow(h);}finally{if(attached)Native.AttachThreadInput(self,fgThread,false);}
+        return Stable(h,900);
+    }
+    // ---- focus
+    internal static FocusInfo? Focus()
+    {
+        try
+        {
+            var e=AutomationElement.FocusedElement;if(e is null)return null;
+            var cur=e.Current;var classes=new List<string>();var walker=TreeWalker.RawViewWalker;
+            var p=walker.GetParent(e);
+            for(int i=0;p is not null&&i<80;i++){classes.Add(p.Current.ClassName??"");p=walker.GetParent(p);}
+            return new(e,cur.ProcessId,cur.Name??"",classes);
+        }
+        catch{return null;}
+    }
+    bool Verified(int pid,int waitMs,out string why)
+    {
+        why="no focused element";
+        for(long until=Environment.TickCount64+waitMs;;Thread.Sleep(100))
+        {
+            var f=Focus();
+            if(f is null)why="no focused element";
+            else if(f.Pid!=pid)why="focus in another process";
+            else if(!FocusRules.MayType(f.Name,names,f.Classes)){why=$"name '{f.Name}' classes [{string.Join(" | ",f.Classes.Take(12))}]";}
+            else{why="ok";return true;}
+            if(Environment.TickCount64>=until)break;
+        }
+        Debug?.Invoke("not verified: "+why);return false;
+    }
+    static bool InQuickInput(int pid)=>Focus() is {} f&&f.Pid==pid&&FocusRules.InQuickInput(f.Classes);
+    bool Palette(IntPtr hwnd,int pid,CancellationToken ct,out string? stop)
+    {
+        stop=null;
+        if(PaletteDisabledForTests){stop=PromptCodes.NoField;return false;}
+        if(!WaitModifiersUp(1000)){stop=PromptCodes.Busy;return false;}
+        Chord(Ctrl,Shift,P);
+        bool open=false;
+        for(long until=Environment.TickCount64+2000;Environment.TickCount64<until&&!open;Thread.Sleep(100))open=InQuickInput(pid);
+        if(!open){Tap(Esc);stop=PromptCodes.NoField;return false;}
+        int n=0;
+        if(!Type("Claude Code: Focus input",hwnd,pid,ct,false,ref n,out string? failed)){Tap(Esc);stop=failed;return false;}
+        Thread.Sleep(400);
+        // The only unshifted Enter of the whole feature: while the palette has the focus, checked right before.
+        if(!InQuickInput(pid)||Native.GetForegroundWindow()!=hwnd){Tap(Esc);stop=PromptCodes.NoField;return false;}
+        Tap(Return);
+        return true;
+    }
+    // ---- keys
+    static Native.Input Key(ushort vk,bool up)=>Native.Key(vk,up,0,false,Native.Marker);
+    static void SendKeys(params Native.Input[] keys){Interlocked.Add(ref KeysSent,keys.Length);Native.Send(keys);}
+    static void Tap(ushort vk)=>SendKeys(Key(vk,false),Key(vk,true));
+    // One atomic batch: modifiers down in order, last key down and up, modifiers up in reverse.
+    static void Chord(params ushort[] vks)
+    {
+        var list=new List<Native.Input>();
+        foreach(var v in vks)list.Add(Key(v,false));
+        for(int i=vks.Length-1;i>=0;i--)list.Add(Key(vks[i],true));
+        SendKeys(list.ToArray());
+    }
+    // VK_PACKET batches. Before each batch: the target is still in front and no physical modifier is held (it would turn typed characters into shortcuts); every 300 characters the box is looked at again.
+    bool Type(string text,IntPtr hwnd,int pid,CancellationToken ct,bool recheck,ref int typed,out string? failed)
+    {
+        failed=null;int sinceCheck=0;var rnd=new Random();
+        foreach(var step in PromptText.Steps(text))
+        {
+            if(ct.IsCancellationRequested||Native.GetForegroundWindow()!=hwnd){failed=PromptCodes.Interrupted;return false;}
+            if(!WaitModifiersUp(1000)){failed=PromptCodes.Interrupted;return false;}
+            if(recheck&&sinceCheck>=300)
+            {
+                sinceCheck=0;var f=Focus();
+                if(f is null||f.Pid!=pid||!FocusRules.MayType(f.Name,names,f.Classes)){failed=PromptCodes.Interrupted;return false;}
+            }
+            try
+            {
+                if(step.Kind==StepKind.Newline)Chord(Shift,Return);
+                else
+                {
+                    var keys=new Native.Input[step.Chars.Length*2];
+                    for(int i=0;i<step.Chars.Length;i++){keys[2*i]=Native.Key(0,false,step.Chars[i],true,Native.Marker);keys[2*i+1]=Native.Key(0,true,step.Chars[i],true,Native.Marker);}
+                    SendKeys(keys);
+                }
+            }
+            catch(System.ComponentModel.Win32Exception){failed=PromptCodes.Interrupted;return false;}
+            typed+=step.Chars.Length;sinceCheck+=step.Chars.Length;
+            Thread.Sleep(rnd.Next(6,11));
+        }
+        return true;
+    }
+    // What the box shows now: the longer of ValuePattern and TextPattern; null when the element offers neither.
+    internal static string? ReadBox(AutomationElement el)
+    {
+        string? best=null;
+        if(el.TryGetCurrentPattern(ValuePattern.Pattern,out var v))best=((ValuePattern)v).Current.Value??"";
+        if(el.TryGetCurrentPattern(TextPattern.Pattern,out var t))
+        {
+            string s=((TextPattern)t).DocumentRange.GetText(-1)??"";
+            if(best is null||s.Length>best.Length)best=s;
+        }
+        return best;
+    }
+}

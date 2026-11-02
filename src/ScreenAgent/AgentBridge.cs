@@ -25,6 +25,11 @@ internal sealed class AgentBridge : Window
     public bool AllowClose {get;set;}
     public string? SessionId {get;private set;}
     public event System.Action? SessionChanged;
+    // Drawing panel requests from the Desk page: "canvas-pending" (the agent has something on the board: open unless manual) and "canvas-panel-toggle" (the page's own button).
+    public event System.Action? CanvasPending,CanvasToggle;
+    internal CoreWebView2Environment? WebEnvironment {get;private set;}
+    internal bool IsTrusted(string url)=>Trusted(url);
+    internal Uri DeskOrigin=>origin;
     bool Trusted(string url)=>Uri.TryCreate(url,UriKind.Absolute,out var u)&&u.GetLeftPart(UriPartial.Authority)==origin.GetLeftPart(UriPartial.Authority);
     readonly AppConfig config;
     readonly System.Windows.Threading.DispatcherTimer saveTimer=new(){Interval=TimeSpan.FromMilliseconds(600)};
@@ -74,6 +79,7 @@ internal sealed class AgentBridge : Window
             var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"+TestBrowserArgs);
             InitStage="environment";
             var env=await CoreWebView2Environment.CreateAsync(null,profile,options);
+            WebEnvironment=env;
             if(lifetime.IsCancellationRequested)return;
             InitStage="controller";
             // Direct HWND hosting deliberately uses device pixels. WPF's old WebView2 control retained its
@@ -87,13 +93,7 @@ internal sealed class AgentBridge : Window
             browser=controller.CoreWebView2;
             // Installed only by the CI helper before startup. No selftest navigation can escape to the network,
             // including the initial /device request that otherwise races a later synthetic fixture navigation.
-            if(testResponse is not null)
-            {
-                browser.AddWebResourceRequestedFilter("*",CoreWebView2WebResourceContext.All);
-                browser.WebResourceRequested+=(_,e)=>e.Response=env.CreateWebResourceResponse(
-                    new MemoryStream(System.Text.Encoding.UTF8.GetBytes(testResponse)),200,"OK",
-                    "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\n");
-            }
+            InstallTestResponses(browser);
             ResizeBrowser();
             ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";
             browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri))e.Cancel=true;else{SessionId=null;SessionChanged?.Invoke();}};
@@ -117,6 +117,8 @@ internal sealed class AgentBridge : Window
                                 else if(m.TryGetProperty("state",out var state)&&state.GetString()=="error")voiceAck?.TrySetResult(false);
                             }
                             break;
+                        case "canvas-pending":CanvasPending?.Invoke();break;
+                        case "canvas-panel-toggle":CanvasToggle?.Invoke();break;
                         case "mute-ack":if(!m.TryGetProperty("on",out var on)||on.GetBoolean()==requestedMute)muteAck?.TrySetResult(true);break;
                     }
                 }
@@ -352,6 +354,15 @@ internal sealed class AgentBridge : Window
     {
         pairing?.Cancel();pairStatus=null;SessionId=null;VoiceOn=false;client.Disconnect();
         browser?.CookieManager.DeleteCookies("desk_s",origin.AbsoluteUri);OpenPairing();SessionChanged?.Invoke();
+    }
+    // Selftests answer every request of a browser with one synthetic page (the drawing panel's browser as well); the product never sets it.
+    internal void InstallTestResponses(CoreWebView2 target)
+    {
+        if(testResponse is not {} html||WebEnvironment is not {} env)return;
+        target.AddWebResourceRequestedFilter("*",CoreWebView2WebResourceContext.All);
+        target.WebResourceRequested+=(_,e)=>e.Response=env.CreateWebResourceResponse(
+            new MemoryStream(System.Text.Encoding.UTF8.GetBytes(html)),200,"OK",
+            "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\n");
     }
     // CI uses the real native controller at each rasterization scale; never enabled by the product path.
     internal void TestStartupPresentation(){Hide();ShowOffscreenForStartup();}
