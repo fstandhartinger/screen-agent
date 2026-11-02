@@ -72,7 +72,7 @@ internal sealed class MainAgentPrompt
             // e/f. Verified. Type.
             var box=Focus()!.Element;
             string existing="";bool readable=true;
-            try{var now=ReadBox(box);existing=now??"";readable=now is not null;}catch{readable=false;}
+            try{var now=ReadDraft(box);existing=now??"";readable=now is not null;Debug?.Invoke($"draft: readable={readable} length={existing.Length} parts={Describe(box)}");}catch{readable=false;}
             if(existing.Trim().Length>0||!readable)
             {
                 Chord(Ctrl,KeyEnd);   // never clear a draft: continue after it
@@ -261,6 +261,25 @@ internal sealed class MainAgentPrompt
             return ReadBox(fallback);
         }
         catch{return null;}
+    }
+    // The user's own text in the box. An empty box reports its placeholder ("Ask Claude to edit…") as ValuePattern value, so the text pattern (the real content) wins when there is one.
+    internal static string? ReadDraft(AutomationElement el)
+    {
+        if(el.TryGetCurrentPattern(TextPattern.Pattern,out var t))return ((TextPattern)t).DocumentRange.GetText(-1)??"";
+        if(el.TryGetCurrentPattern(ValuePattern.Pattern,out var v))return ((ValuePattern)v).Current.Value??"";
+        return null;
+    }
+    // Selftest diagnostics: what each pattern says (lengths and a short head, never used for decisions).
+    internal static string Describe(AutomationElement el)
+    {
+        string Head(string? x)=>x is null?"null":$"{x.Length}:'{(x.Length>30?x[..30]:x).Replace("\n","\\n")}'";
+        try
+        {
+            string? value=el.TryGetCurrentPattern(ValuePattern.Pattern,out var v)?((ValuePattern)v).Current.Value:null;
+            string? text=el.TryGetCurrentPattern(TextPattern.Pattern,out var t)?((TextPattern)t).DocumentRange.GetText(-1):null;
+            return $"value={Head(value)} text={Head(text)} help={Head(el.Current.HelpText)}";
+        }
+        catch(Exception ex){return "describe failed: "+ex.GetType().Name;}
     }
     // What the box shows now: the longer of ValuePattern and TextPattern; null when the element offers neither.
     internal static string? ReadBox(AutomationElement el)

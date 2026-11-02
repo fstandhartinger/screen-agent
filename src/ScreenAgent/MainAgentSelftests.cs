@@ -54,7 +54,7 @@ internal static class MainAgentSelftests
         var log=new Action<string,Dictionary<string,object?>>((t,d)=>{string e=t+" "+JsonSerializer.Serialize(TraceSanitizer.Clean(d));events.Add(e);Step("  telemetry "+e);});
         var scenariosToRun=new (string Name,Func<Scn,Task> Body)[]
         {
-            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G)
+            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G),("I-existing-draft-is-kept",I)
         };
         string only=Environment.GetEnvironmentVariable("SA_E2E_ONLY")??"";
         foreach(var (name,body) in scenariosToRun)
@@ -185,6 +185,7 @@ internal static class MainAgentSelftests
             finally{MainAgentPrompt.PaletteDisabledForTests=false;}
             long keys=Interlocked.Read(ref MainAgentPrompt.KeysSent)-keysBefore;
             s.Facts["code"]=r.Code;s.Facts["route"]=r.Route;s.Facts["keysSent"]=keys;s.Facts["chars"]=r.Chars;
+            var fgAfterRun=Native.GetForegroundWindow();
             PromptFallbackWindow? fallback=null;string heading="";bool visible=false,readOnly=false;IntPtr fh=IntPtr.Zero;
             await app.Dispatcher.InvokeAsync(()=>{fallback=PromptFallbackWindow.Show(r.Code,Prompt);heading=fallback.Heading;visible=fallback.IsVisible;readOnly=fallback.ReadOnlyText;fh=new System.Windows.Interop.WindowInteropHelper(fallback).Handle;});
             await Task.Delay(700);Shot("G-fallback");
@@ -192,18 +193,33 @@ internal static class MainAgentSelftests
             s.Facts["fallbackHeading"]=heading;s.Facts["fallbackVisible"]=visible;s.Facts["fallbackReadOnly"]=readOnly;
             Native.GetWindowDisplayAffinity(fh,out uint aff);s.Facts["fallbackAffinity"]=aff;
             s.Facts["clipboardUntouchedUntilCopyClicked"]=clipUnchanged;
-            s.Facts["foregroundUnchangedByFallback"]=Native.GetForegroundWindow()==fgBefore;
-            string? boxNow=null;try{var el=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,3000);boxNow=el is null?null:MainAgentPrompt.ReadBox(el);}catch{ }
+            s.Facts["foregroundUnchangedByFallback"]=Native.GetForegroundWindow()==fgAfterRun;s.Facts["foregroundChangedByRunItself"]=fgAfterRun!=fgBefore;
+            string? boxNow=null;try{var el=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,3000);boxNow=el is null?null:MainAgentPrompt.ReadDraft(el);s.Facts["messageInputParts"]=el is null?null:MainAgentPrompt.Describe(el);}catch{ }
             s.Facts["messageInputAfter"]=boxNow;s.Facts["titleDirty"]=TitleOf(w).Contains('●');
             await app.Dispatcher.InvokeAsync(()=>fallback!.ClickCopyForTests());await Task.Delay(300);
             string? copied=null;await app.Dispatcher.InvokeAsync(()=>{try{copied=System.Windows.Clipboard.GetText();}catch{ }});
             s.Facts["copyButtonPutsTheTextOnTheClipboard"]=copied==PromptText.Normalize(Prompt);
             await app.Dispatcher.InvokeAsync(()=>fallback!.Close());
-            bool ok=r.Code is PromptCodes.NoField or PromptCodes.WrongFocus&&keys==0&&r.Chars==0&&clipUnchanged&&visible&&readOnly&&heading.StartsWith("Nicht eingetippt: ")
+            bool ok=r.Code is PromptCodes.NoField or PromptCodes.WrongFocus&&keys==0&&r.Chars==0&&clipUnchanged&&visible&&readOnly&&(bool)s.Facts["foregroundUnchangedByFallback"]!&&heading.StartsWith("Nicht eingetippt: ")
                 &&aff==0x11&&(boxNow is null||boxNow.Trim().Length==0)&&!(bool)s.Facts["titleDirty"]!&&(bool)s.Facts["copyButtonPutsTheTextOnTheClipboard"]!;
             s.Status=ok?"passed":"failed";if(!ok)s.Why="see facts";
         }
 
+        async Task I(Scn s)
+        {
+            var w=await Start(s,"ws-I",openClaude:true);if(w==IntPtr.Zero)return;
+            const string draft="Alter Entwurf";
+            var el=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,3000);
+            if(el is null||!MainAgentPrompt.Front(w)){s.Status="precondition-failed";s.Why="no message box to put a draft in";return;}
+            try{el.SetFocus();}catch{ }
+            await Task.Delay(600);
+            foreach(char c in draft)Native.Send(Native.Key(0,false,c,true,Test),Native.Key(0,true,c,true,Test));
+            await Task.Delay(800);
+            string? before=el is null?null:MainAgentPrompt.ReadDraft(el);s.Facts["draftBeforeRun"]=before;
+            if(before is null||!before.Contains(draft)){s.Status="precondition-failed";s.Why="the draft did not land in the box";return;}
+            await NotepadInFront(s);
+            await RunAndProve(s,w,"I",expectRoute:null,draft:draft);
+        }
         // ---- helpers
         async Task<IntPtr> Start(Scn s,string ws,bool openClaude)
         {
@@ -211,21 +227,24 @@ internal static class MainAgentSelftests
             if(openClaude&&!await OpenClaude(s,w)){s.Status="precondition-failed";s.Why="the Claude panel did not open (no 'Message input' in the UIA tree); see uia dump";return IntPtr.Zero;}
             return w;
         }
-        async Task<PromptResult?> RunAndProve(Scn s,IntPtr w,string tag,string? expectRoute)
+        async Task<PromptResult?> RunAndProve(Scn s,IntPtr w,string tag,string? expectRoute,string draft="")
         {
             uint clip=Native.GetClipboardSequenceNumber();Shot(tag+"-before-run");
             var r=await new MainAgentPrompt(Names,log).Run(Prompt,CancellationToken.None);
             s.Facts["code"]=r.Code;s.Facts["landed"]=r.Landed;s.Facts["route"]=r.Route;s.Facts["chars"]=r.Chars;s.Facts["ms"]=r.Ms;s.Facts["windowsSeen"]=r.Windows;s.Facts["wsl"]=r.Wsl;
             Shot(tag+"-after-run");
             // Proof by UIA, independent of the code under test: the box holds the text, normalized equal; three seconds later it still does (nothing was sent).
-            string want=PromptText.Squash(PromptText.Normalize(Prompt));
+            string exact=draft.Length>0?draft+" "+PromptText.Normalize(Prompt):PromptText.Normalize(Prompt);string want=PromptText.Squash(exact);
             var probe=new MainAgentPrompt(Names,(_,_)=>{});
             string? first=ReadInput(probe,r.Window!=IntPtr.Zero?r.Window:w);
             s.Facts["boxAfterRun"]=first;
+            try{var el=probe.FindInput(r.Window!=IntPtr.Zero?r.Window:w,3000);s.Facts["boxParts"]=el is null?null:MainAgentPrompt.Describe(el);}catch{ }
             await Task.Delay(3000);
             string? later=ReadInput(probe,r.Window!=IntPtr.Zero?r.Window:w);
             s.Facts["boxAfter3s"]=later;Shot(tag+"-after-3s");
-            bool equal=first is not null&&PromptText.Squash(first)==want,still=later is not null&&PromptText.Squash(later)==want;
+            // Equal normalized, and no stray character in front (a placeholder mistaken for a draft once put a space there).
+            bool equal=first is not null&&PromptText.Squash(first)==want&&first.Replace("\r\n","\n").TrimEnd()==exact,still=later is not null&&PromptText.Squash(later)==want;
+            s.Facts["boxExactlyTheText"]=first is not null&&first.Replace("\r\n","\n").TrimEnd()==exact;
             s.Facts["boxEqualsTextNormalized"]=equal;s.Facts["stillThereAfter3s"]=still;
             bool clipOk=Native.GetClipboardSequenceNumber()==clip;s.Facts["clipboardUntouched"]=clipOk;
             bool routeOk=expectRoute is null||r.Route==expectRoute;s.Facts["routeAsExpected"]=routeOk;
