@@ -1,4 +1,4 @@
-# Screen Agent v0.1.4 preview
+# Screen Agent v0.1.5 preview
 
 Unsigned .NET 8 WPF companion for Windows 10 2004+ / Windows 11 x64. This prerelease wires device pairing, confirmed screen IDs, draw highlights, dictation and correction learning to Agent Desk. Windows desktop behavior and the live Desk integration still require the manual checks below. Use a non-sensitive test desktop first.
 

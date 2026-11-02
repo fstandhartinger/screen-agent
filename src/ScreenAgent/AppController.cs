@@ -148,6 +148,7 @@ internal sealed class AppController : IDisposable
         }
         finally{voiceSyncing=false;}
     }
+    string[] lastCandidates=[];IntPtr ocrForeground;
     async Task ClearContext(string? sid)
     {
         ids=[];lastHash=null;bridge.Screen([]);
@@ -327,7 +328,7 @@ internal sealed class AppController : IDisposable
             if(frame is null)
             {
                 privacyBlocked=true;ids=[];lastHash=null;bridge.Screen(ids);Notice("Privat · nicht erfasst");
-                telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="private-or-secure-desktop"});
+                telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]=privacy.LastSkip is {Length:>0} skip?skip:"private-or-secure-desktop"});
                 freshId=null;await ClearContext(sid);schedule.Success(Environment.TickCount64);
                 return;
             }
@@ -353,6 +354,8 @@ internal sealed class AppController : IDisposable
                 await PostScreen(sid,DevicePayloads.Screen(confirmed,window.Process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
                 if(!Active||ct.IsCancellationRequested)return;
                 bool changed=!confirmed.SequenceEqual(ids);
+                // Per window and whenever the candidates change: OCR chars, candidates and confirmed count explain "I see ids, the agent does not" afterwards (ids are not secret).
+                if(fg!=ocrForeground||!ocr.Ids.SequenceEqual(lastCandidates)){lastCandidates=ocr.Ids;ocrForeground=fg;telemetry.Event("screen.ocr",new(){["candidates"]=ocr.Ids.Take(20).ToArray(),["confirmed"]=confirmed.Length,["chars"]=ocr.Text.Length,["engine"]=ocr.Engine,["process"]=window.Process});}
                 lastHash=hash;hashForeground=fg;frameProcess=window.Process;ids=confirmed;bridge.Screen(ids);schedule.Success(Environment.TickCount64);
                 if(changed)telemetry.Event("screen.ids",new(){["ids"]=confirmed,["count"]=confirmed.Length,["process"]=window.Process});
                 if(terms.Length==0)terms=await client.Dictionary(ct);
@@ -377,7 +380,7 @@ internal sealed class AppController : IDisposable
             // The Earnings app: ids only, never an image of it. The ids already went out through /screen.
             freshId=null;planner.Sent(now,hash,(long)fg);
             telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="ids-only-window",["reason"]=decision.Reason.ToString().ToLowerInvariant(),["process"]=window.Process});
-            using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>(),ct); // the agent must not keep describing the previous window
+            using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>{["why"]="ids-only"},ct); // the agent must not keep describing the previous window
             return;
         }
         int masked=0;

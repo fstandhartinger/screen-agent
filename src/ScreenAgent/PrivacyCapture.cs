@@ -61,8 +61,9 @@ internal sealed class PrivacyCapture
     // `verified`: the window list the pixels were checked against (before == after). Every later decision about this frame uses this list, never a newer snapshot.
     public Bitmap? Capture(Rectangle monitor,bool sessionActive,bool paused,out List<WindowInfo> verified,IntPtr underlying=default,bool forUpload=false)
     {
-        verified=[];
+        verified=[];LastSkip="not-allowed";
         if(!sessionActive||paused||!stillAllowed())return null;
+        LastSkip="secure-desktop";
         IntPtr desktop=Native.OpenInputDesktop(0,false,0x0100); // DESKTOP_SWITCHDESKTOP access fails on secure desktop
         if(desktop==IntPtr.Zero)return null;
         try
@@ -71,10 +72,12 @@ internal sealed class PrivacyCapture
             if(!Native.GetUserObjectInformation(desktop,2,name,name.Capacity*2,out _) || !name.ToString().Equals("Default",StringComparison.OrdinalIgnoreCase))return null;
         }
         finally{Native.CloseDesktop(desktop);}
-        IntPtr foreground=underlying==IntPtr.Zero?Native.GetForegroundWindow():underlying;
+        IntPtr foreground=underlying==IntPtr.Zero?Native.GetForegroundWindow():underlying;LastSkip="foreground-blocked";
         var before=Snapshot(System.Windows.Forms.SystemInformation.VirtualScreen);var fg=before.FirstOrDefault(w=>w.Handle==foreground);
         if(fg is null || fg.Blocked || PrivacyPolicy.TransientHost(fg.Process,fg.Title))return null;
+        LastSkip="transient-host";
         if(before.Any(w=>PrivacyPolicy.TransientHost(w.Process,w.Title)))return null;
+        LastSkip="windows-changed-during-capture";
         var image=new Bitmap(monitor.Width,monitor.Height,PixelFormat.Format32bppArgb);
         try
         {
@@ -89,10 +92,12 @@ internal sealed class PrivacyCapture
             // Stronger than title/URL-only recheck: any visible-window identity/geometry/order change discards.
             if(!stillAllowed()||!before.SequenceEqual(after)||(underlying==IntPtr.Zero && Native.GetForegroundWindow()!=foreground))
             {image.Dispose();return null;}
-            verified=before;
+            verified=before;LastSkip="";
             return image;
         }
         catch{image.Dispose();throw;}
     }
+    /// <summary>Why the last Capture returned null (trace only: a reason word, never a title or URL).</summary>
+    public string LastSkip {get;private set;}="";
     public static byte[] Png(Bitmap image){using var s=new MemoryStream();image.Save(s,ImageFormat.Png);return s.ToArray();}
 }
