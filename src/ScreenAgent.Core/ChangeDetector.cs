@@ -1,11 +1,11 @@
 namespace ScreenAgent.Core;
-// Did the screen change enough for the agent to need a new picture? The frame is reduced to a 320x180 grey grid (area average, so thin
-// text keeps some weight); a pixel counts as changed when it moved by more than Level; the grid is cut into 16x9 tiles (20x20 grid pixels, overlapping by half)
-// and the screen counts as changed when any tile has MinPixels changed pixels. A 5-digit number in a corner changes ~10 pixels of one tile, a blinking
-// caret at most a handful (it is 1-2 px wide), so the number counts and the caret does not. A clock digit may or may not.
+// Did the screen change enough for the agent to need a new picture? The frame is reduced to a 640x360 grey grid (area average, so thin text keeps some weight);
+// a pixel counts as changed when it moved by more than Level; the grid is cut into 16x9 tiles overlapping by half, and a tile counts when it has MinPixels changed
+// pixels spread over at least MinWidth columns. On a real page (measured, 1920x1080): one digit of a 14 px number changes 8 pixels, a whole number 37, and a caret 7 in
+// a line one or two columns wide: the shape tells them apart, so a number counts and a caret does not. A clock digit counts too, which costs one frame a minute.
 public static class ChangeDetector
 {
-    public const int Width=320,Height=180,TilesX=16,TilesY=9,Level=20,MinPixels=8;
+    public const int Width=640,Height=360,TilesX=16,TilesY=9,Level=12,MinPixels=4,MinWidth=3;
     // Straight BGRA/BGRX pixels (System.Drawing Format32bppArgb), rows `stride` bytes apart.
     public static byte[] FromBgra(ReadOnlySpan<byte> pixels,int width,int height,int stride)
     {
@@ -25,24 +25,17 @@ public static class ChangeDetector
         return grid;
     }
     public static bool Changed(byte[] before,byte[] after,int level=Level,int minPixels=MinPixels)=>ChangedTiles(before,after,level,minPixels)>0;
-    // Tiles are 20x20 grid pixels and overlap by half, so a number that straddles a tile border still lands whole in one tile.
     public static int ChangedTiles(byte[] before,byte[] after,int level=Level,int minPixels=MinPixels)
     {
-        if(before.Length!=Width*Height||after.Length!=Width*Height)throw new ArgumentException("320x180 grid expected");
-        int tw=Width/TilesX,th=Height/TilesY,stride=Width+1;
-        var sum=new int[stride*(Height+1)];   // integral image of the "changed" mask
-        for(int y=0;y<Height;y++)
+        if(before.Length!=Width*Height||after.Length!=Width*Height)throw new ArgumentException("640x360 grid expected");
+        int tw=Width/TilesX,th=Height/TilesY,tiles=0;
+        for(int top=0;top+th<=Height;top+=th/2)for(int left=0;left+tw<=Width;left+=tw/2)
         {
-            int row=0;
-            for(int x=0;x<Width;x++)
-            {
-                if(Math.Abs(before[y*Width+x]-after[y*Width+x])>level)row++;
-                sum[(y+1)*stride+x+1]=sum[y*stride+x+1]+row;
-            }
+            int count=0,first=int.MaxValue,last=-1;
+            for(int y=top;y<top+th;y++)for(int x=left;x<left+tw;x++)
+                if(Math.Abs(before[y*Width+x]-after[y*Width+x])>level){count++;first=Math.Min(first,x);last=Math.Max(last,x);}
+            if(count>=minPixels&&last-first+1>=MinWidth)tiles++;
         }
-        int tiles=0;
-        for(int y=0;y+th<=Height;y+=th/2)for(int x=0;x+tw<=Width;x+=tw/2)
-            if(sum[(y+th)*stride+x+tw]-sum[y*stride+x+tw]-sum[(y+th)*stride+x]+sum[y*stride+x]>=minPixels)tiles++;
         return tiles;
     }
 }

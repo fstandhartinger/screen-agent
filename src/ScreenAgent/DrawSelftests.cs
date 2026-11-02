@@ -137,6 +137,8 @@ internal static class DrawSelftests
         var ga=FrameGrid.Of(a);
         Case("same-picture-is-unchanged",!ChangeDetector.Changed(ga,FrameGrid.Of(same)));
         Case("five-digit-number-in-the-corner-counts",ChangeDetector.Changed(ga,FrameGrid.Of(b)),new{tiles=ChangeDetector.ChangedTiles(ga,FrameGrid.Of(b)),source.Width,source.Height});
+        using var oneDigit=Number("12346");
+        Case("one-changed-digit-counts",ChangeDetector.Changed(ga,FrameGrid.Of(oneDigit)),new{tiles=ChangeDetector.ChangedTiles(ga,FrameGrid.Of(oneDigit))});
         Case("blinking-caret-does-not-count",!ChangeDetector.Changed(FrameGrid.Of(caret),FrameGrid.Of(withoutCaret)),new{tiles=ChangeDetector.ChangedTiles(FrameGrid.Of(caret),FrameGrid.Of(withoutCaret))});
         var planner=new FramePlanner();
         Case("planner-start",planner.Decide(0,ga,1,false).Reason==FrameReason.Start);
