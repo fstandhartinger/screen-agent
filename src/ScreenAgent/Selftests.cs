@@ -69,7 +69,8 @@ internal static class Selftests
             Console.WriteLine(JsonSerializer.Serialize(new{test="hotkeys",status="skipped",reason="Injected keys do not reach low-level hooks on this runner (no input desktop); manual checklist required",healthy=hook.Healthy,seen=probe.Snapshot().Count}));return 2;
         }
         bool Same(List<Seen> got,params (ushort vk,bool down)[] want)=>got.Where(s=>!s.Ours).Select(s=>(s.Vk,s.Down)).SequenceEqual(want.Select(w=>((uint)w.vk,w.down)));
-        List<ActionKind> Taken(){lock(actions){var copy=actions.ToList();actions.Clear();return copy;}}
+        // MaskWin is a legacy state-machine marker with no effect; the real mask is the injected key counted below.
+        List<ActionKind> Taken(){lock(actions){var copy=actions.Where(a=>a!=ActionKind.MaskWin).ToList();actions.Clear();return copy;}}
 
         // 1. Wispr's chord Ctrl+Win must reach everybody untouched: nothing swallowed, nothing injected, no action here.
         Taken();
