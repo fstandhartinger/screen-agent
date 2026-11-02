@@ -28,6 +28,7 @@ internal sealed class AppController : IDisposable
     bool needsUnmute,voiceFailed;
     readonly VoiceSync voice=new();
     Level shownLevel=Level.Idle;string shownText="";
+    string? toastText;Level toastLevel;bool unmuteNoticed;
     readonly System.Windows.Forms.ToolStripMenuItem statusItem=new(){Enabled=false},sessionItem=new(),pauseItem=new();
     string? contextSid;
     long unmuteRetryAt;
@@ -73,8 +74,8 @@ internal sealed class AppController : IDisposable
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Desk öffnen",null,(_,_)=>bridge.ShowDesk());
         sessionItem.Click+=(_,_)=>hook.SetSession(!hook.Session);menu.Items.Add(sessionItem);
-        pauseItem.Click+=(_,_)=>Pause();menu.Items.Add(pauseItem);
-        menu.Items.Add("Gerät trennen",null,(_,_)=>{Pause(true);bridge.Disconnect();});
+        pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
+        menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset();bridge.Disconnect();});
         menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem($"Tastenkürzel: {chord} = Sitzung an/aus"){Enabled=false});
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Beenden",null,async (_,_)=>{paused=true;Reset();await bridge.Voice(false,config.VoiceProvider);await ClearContext(contextSid??bridge.SessionId);await Unmute();bridge.AllowClose=true;System.Windows.Application.Current.Shutdown();});
@@ -82,7 +83,7 @@ internal sealed class AppController : IDisposable
         {
             var st=Current();statusItem.Text=st.Text;
             sessionItem.Text=hook.Session?"Sitzung beenden":"Sitzung starten";
-            pauseItem.Text=paused||hook.Paused?"Fortsetzen":"Pause";
+            pauseItem.Text=hook.Paused?"Fortsetzen":"Pause";
         };
         tray=new(){Icon=TrayIcons.For(Level.Idle),Text="Screen Agent",Visible=true,ContextMenuStrip=menu};
         // A left click is the obvious thing to try on a tray icon; the menu stays on the right button.
@@ -103,11 +104,14 @@ internal sealed class AppController : IDisposable
         string tip=st.Text.Length>120?st.Text[..120]:st.Text;
         if(tip!=shownText){shownText=tip;tray.Text=tip;}
         if(notice)return;   // the notice keeps the toast until it expires
-        if(st.ShowToast&&config.Indicator=="session")toast.Present(st.Text,st.Level);else toast.Dismiss();
+        if(st.ShowToast&&config.Indicator=="session")
+        {
+            if(toastText!=st.Text||toastLevel!=st.Level||!toast.IsVisible){toastText=st.Text;toastLevel=st.Level;toast.Present(st.Text,st.Level);}
+        }
+        else{toastText=null;toast.Dismiss();}
     }
     bool Active=>!disposed&&client.Paired&&bridge.SessionId is not null&&hook.Healthy&&hook.Session&&!hook.Paused&&!paused;
-    public void Pause(bool force=false){paused=force||!paused;Reset();}
-    void Notice(string text,Level level=Level.Active){noticeUntil=Environment.TickCount64+2200;toast.Present(text,level);}
+    void Notice(string text,Level level=Level.Active){noticeUntil=Environment.TickCount64+2200;toastText=null;toast.Present(text,level);}
     // Desk voice follows the session; see VoiceSync for why a stop is only sent after a start.
     async Task SyncVoice()
     {
@@ -145,7 +149,8 @@ internal sealed class AppController : IDisposable
         unmuting=true;needsUnmute=true;
         try{needsUnmute=!await bridge.Mute(false);}
         finally{unmuting=false;}
-        if(needsUnmute)Notice("Desk-Mikro stumm",Level.Warn);
+        if(!needsUnmute)unmuteNoticed=false;
+        else if(!unmuteNoticed){unmuteNoticed=true;Notice("Desk-Mikro stumm",Level.Warn);}   // once; the status line keeps saying it
     }
     Task PostScreen(string sid,object body,CancellationToken ct)=>screenWrites.Enqueue(()=>
     {
@@ -165,7 +170,12 @@ internal sealed class AppController : IDisposable
         if(action is ActionKind.SessionToggle or ActionKind.PauseToggle)
         {
             Reset();
-            if(action==ActionKind.SessionToggle)Notice(hook.Session?"Sitzung an":"Sitzung aus",hook.Session?Level.Active:Level.Idle);
+            if(action==ActionKind.SessionToggle)
+            {
+                // Say what the key did and, if the session cannot work yet, what is missing: never a bare green "an".
+                var st=Current();
+                if(hook.Session)Notice(st.Level==Level.Warn?st.Text:"Sitzung an",st.Level==Level.Warn?Level.Warn:Level.Active);else Notice("Sitzung aus",Level.Idle);
+            }
             else Notice(hook.Paused?"Pausiert":"Fortgesetzt",hook.Paused?Level.Paused:Level.Active);
             return;
         }

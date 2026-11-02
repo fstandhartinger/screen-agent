@@ -8,9 +8,11 @@ public sealed class VoiceSync
 {
     bool? requested;
     bool stopPending,retry;
+    int stopTries;
     long retryAt;
     public bool Failed {get;private set;}
     public const long RetryMs=2000;
+    public const int MaxStopTries=3;
     // want = session should be live; voiceOn = what the page last acknowledged; busy = a request is in flight.
     public VoiceStep Next(bool want,bool voiceOn,long now,bool busy)
     {
@@ -22,14 +24,15 @@ public sealed class VoiceSync
         }
         if(busy||(requested==want&&(!retry||now<retryAt)))return VoiceStep.None;
         requested=want;
-        if(want)stopPending=true;
+        if(want){stopPending=true;stopTries=0;}
         return want?VoiceStep.Start:VoiceStep.Stop;
     }
     public void Result(bool wasStart,bool acknowledged,long now)
     {
         retry=!acknowledged;retryAt=now+RetryMs;
-        if(wasStart)Failed=!acknowledged;else if(acknowledged)stopPending=false;
+        if(wasStart)Failed=!acknowledged;
+        else if(acknowledged||++stopTries>=MaxStopTries){stopPending=false;retry=false;}   // a page that never answers is not asked forever
     }
     // The page was reloaded or navigated: whatever voice it had is gone.
-    public void PageChanged(){requested=null;stopPending=false;retry=false;Failed=false;}
+    public void PageChanged(){requested=null;stopPending=false;retry=false;Failed=false;stopTries=0;}
 }

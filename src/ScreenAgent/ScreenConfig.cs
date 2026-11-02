@@ -12,7 +12,7 @@ internal static class ScreenConfig
         {
             // v0.1.1 wrote Ctrl+Win defaults that fight with Wispr. Keep the old file once, then store the new defaults.
             string backup=file+".v0.1.1.bak";if(!File.Exists(backup))File.WriteAllText(backup,text);
-            File.WriteAllText(file,JsonSerializer.Serialize(config,new JsonSerializerOptions{WriteIndented=true}));
+            string temp=file+".tmp";File.WriteAllText(temp,JsonSerializer.Serialize(config,new JsonSerializerOptions{WriteIndented=true}));File.Move(temp,file,true);
         }
         return config;
     }

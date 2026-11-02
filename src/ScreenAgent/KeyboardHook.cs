@@ -41,6 +41,7 @@ internal sealed class KeyboardHook : IDisposable
     }
     // Tray menu: start or stop the session without the chord. Runs on the consumer thread, like key events.
     public void SetSession(bool on)=>commands.Enqueue(()=>state.SetSession(on));
+    public void SetPaused(bool on)=>commands.Enqueue(()=>state.SetPaused(on));
     void Run()
     {
         threadId=Native.GetCurrentThreadId(); Install();
@@ -62,6 +63,9 @@ internal sealed class KeyboardHook : IDisposable
         if(k.extra==Native.Marker)return Native.CallNextHookEx(hook,code,w,l); // our own mask key
         if((k.flags&0x10)!=0&&!AcceptInjectedForTests)return Native.CallNextHookEx(hook,code,w,l); // other tools' synthetic keys
         bool down=w.ToInt64() is 0x100 or 0x104;
+        if(down)
+            foreach(var (_,role) in bindings.Resync(vk=>(Native.GetAsyncKeyState(vk)&0x8000)!=0,(int)k.vk))
+                queue.Enqueue((new(role,false,Environment.TickCount64),Native.GetForegroundWindow()));
         bool transition=bindings.Feed((int)k.vk,down,out var key);
         // One bounded native-only mask when OUR chord completes; never for foreign chords such as Ctrl+Win (Wispr).
         // No UI/OCR/network in this callback.

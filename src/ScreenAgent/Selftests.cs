@@ -133,6 +133,12 @@ internal static class Selftests
                     // The window must settle hidden on its own, and must never have been on screen on the way.
                     for(int i=0;i<250&&bridge.IsVisible;i++)await Task.Delay(100);
                     Case("desk-settles-hidden-never-seen",!bridge.IsVisible&&!shownOnScreen,new{visibleNow=bridge.IsVisible,shownOnScreen});
+                    // Voice sessions live in this page, so a hidden page must keep its timers and audio running.
+                    for(int i=0;i<150&&await bridge.Eval("document.readyState")!="\"complete\"";i++)await Task.Delay(100);
+                    string? visibility=await bridge.Eval("(()=>{window.__n=0;setInterval(()=>{window.__n++},100);return document.visibilityState})()");
+                    await Task.Delay(3000);
+                    int ticks=int.TryParse(await bridge.Eval("window.__n"),out var tv)?tv:-1;
+                    Case("hidden-page-timers-not-throttled",ticks>=20,new{visibility,ticks,expectedIfUnthrottled=30});
                 }
                 // Open like the tray does.
                 bridge.ShowDesk();await Task.Delay(500);
@@ -140,6 +146,8 @@ internal static class Selftests
                 ex=Native.GetWindowLongPtr(h,-20).ToInt64();
                 Native.GetWindowRect(h,out var r);var box=new PxRect(r.Left,r.Top,r.Right-r.Left,r.Bottom-r.Top);
                 Case("desk-opens-on-request",bridge.IsVisible&&bridge.DeskOpen);
+                Native.GetWindowDisplayAffinity(h,out uint deskAffinity);
+                Case("desk-excluded-from-screen-capture",deskAffinity==0x11,new{deskAffinity});
                 Case("desk-not-always-on-top",(ex&0x8)==0,new{ex});
                 var expected=WindowPlacement.Desk(work,Native.ScaleAt(work.X+work.W/2,work.Y+work.H/2),null,[work]);
                 Case("desk-fits-work-area-at-default-size",work.Contains(box)&&Math.Abs(box.W-expected.W)<=2&&Math.Abs(box.H-expected.H)<=2&&Math.Abs(box.X-expected.X)<=2,new{work,box,expected});
@@ -163,6 +171,8 @@ internal static class Selftests
                 long tex=Native.GetWindowLongPtr(th,-20).ToInt64();
                 Case("toast-visible-small-bottom-right",toast.IsVisible&&work.Contains(tb)&&tb.W<work.W/4&&tb.H<work.H/12&&tb.X>work.X+work.W/2&&tb.Y>work.Y+work.H/2,new{work,tb});
                 Case("toast-click-through-no-taskbar",(tex&0x20)!=0&&(tex&0x80)!=0&&(tex&0x08000000)!=0,new{tex});
+                Native.GetWindowDisplayAffinity(th,out uint toastAffinity);
+                Case("toast-excluded-from-screen-capture",toastAffinity==0x11,new{toastAffinity});
                 toast.Dismiss();await Task.Delay(100);
                 Case("toast-hidden-when-idle",!toast.IsVisible);
                 toast.Close();bridge.AllowClose=true;bridge.Close();

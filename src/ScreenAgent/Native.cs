@@ -37,6 +37,9 @@ internal static class Native
     [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW")] internal static extern IntPtr SetWindowLongPtr(IntPtr h,int index,IntPtr val);
     [DllImport("user32.dll",SetLastError=true)] internal static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
     [DllImport("user32.dll")] internal static extern bool CloseDesktop(IntPtr h);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode,EntryPoint="MessageBoxW")] internal static extern int MessageBox(IntPtr owner,string text,string caption,uint type);
+    [DllImport("user32.dll")] internal static extern bool AllowSetForegroundWindow(int pid);
+    [DllImport("user32.dll")] internal static extern bool GetWindowDisplayAffinity(IntPtr h,out uint affinity);
     [DllImport("user32.dll")] internal static extern IntPtr MonitorFromPoint(Point p,uint flags);
     [DllImport("shcore.dll")] internal static extern int GetDpiForMonitor(IntPtr monitor,int type,out uint x,out uint y);
     // Scale factor (1.0 = 96 dpi) of the monitor under a device-pixel point; 1.0 if Windows cannot say.

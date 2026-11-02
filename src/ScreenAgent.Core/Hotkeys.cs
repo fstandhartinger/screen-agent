@@ -22,6 +22,18 @@ public sealed class Hotkeys
         if(drawing){drawing=false;result.Add(ActionKind.DrawStop);}
         return result;
     }
+    // Tray menu: pause or resume without the chord, same effects as the chord's PauseToggle.
+    public IReadOnlyList<ActionKind> SetPaused(bool on)
+    {
+        if(Paused==on)return [];
+        List<ActionKind> result=[ActionKind.PauseToggle];Paused=on;cleanChord=false;
+        if(on)
+        {
+            if(dictating){dictating=false;handsFree=false;result.Add(ActionKind.DictationDiscard);}
+            if(drawing){drawing=false;result.Add(ActionKind.DrawStop);}
+        }
+        return result;
+    }
     public IReadOnlyList<ActionKind> Tick(long ms)
     {
         List<ActionKind> result = [];

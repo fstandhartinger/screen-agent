@@ -91,6 +91,51 @@ public class FirstRunTests
         Assert.Contains(ActionKind.SessionToggle,h.SetSession(false));Assert.False(h.Session);
     }
 
+    [Fact]public void TrayCanPauseAndResumeAChordPause()
+    {
+        var h=new Hotkeys();h.SetSession(true);
+        Assert.Contains(ActionKind.PauseToggle,h.SetPaused(true));Assert.True(h.Paused);
+        Assert.Empty(h.SetPaused(true));
+        Assert.Contains(ActionKind.PauseToggle,h.SetPaused(false));Assert.False(h.Paused);
+    }
+    // A key-up the hook never saw (Win+L, secure desktop) must not turn the next Alt into a chord.
+    [Fact]public void LostWinReleaseDoesNotStartDictation()
+    {
+        var rig=new Rig();
+        rig.Down(Win);                                                        // Win+L: the Win-up never arrives
+        var released=rig.Bindings.Resync(vk=>vk!=Win,Alt);                    // Windows says Win is no longer down
+        foreach(var (_,role) in released)rig.Actions.AddRange(rig.State.Feed(new(role,false,50)));
+        rig.Down(Alt);rig.Actions.AddRange(rig.State.Tick(5000));
+        Assert.Single(released);Assert.DoesNotContain(ActionKind.DictationStart,rig.Actions);Assert.False(rig.Bindings.CtrlWin);
+    }
+    [Fact]public void ResyncKeepsKeysWindowsStillSeesDown()
+    {
+        var b=new HotkeyBindings(AppConfig.DefaultHotkeys());
+        b.Feed(Alt,true,out _);b.Feed(Win,true,out _);
+        Assert.Empty(b.Resync(_=>true,Shift));Assert.True(b.CtrlWin);
+    }
+    [Fact]public void UnansweredStopIsNotRetriedForever()
+    {
+        var v=new VoiceSync();long now=0;
+        v.Next(true,false,now,false);v.Result(true,false,now);          // start never acknowledged
+        int stops=0;
+        for(int i=0;i<200;i++)
+        {
+            now+=1000;
+            if(v.Next(false,false,now,false)==VoiceStep.Stop){stops++;v.Result(false,false,now);}
+        }
+        Assert.Equal(VoiceSync.MaxStopTries,stops);Assert.False(v.Failed);
+    }
+    [Theory][InlineData(Ctrl,Win,Alt)][InlineData(Win,Ctrl,Alt)][InlineData(Ctrl,Alt,Win)][InlineData(Win,Alt,Ctrl)][InlineData(Alt,Ctrl,Win)]
+    public void CtrlChordsNeverGetTheMaskExceptWhenCtrlComesLast(int a,int b,int c)
+    {
+        var rig=new Rig();
+        rig.Down(a,b,c);
+        // Wispr's chord starts with Ctrl+Win. Once Ctrl is down, our mask must not be injected. Only when Alt and Win are both
+        // down BEFORE Ctrl arrives does one mask go out (the chord looked like ours at that moment); documented in the README.
+        Assert.Equal(a==Alt&&b==Win||a==Win&&b==Alt?1:0,rig.Masks);
+    }
+
     // Config written by v0.1.1 still holds the Ctrl+Win defaults: migrate them, keep real customisations.
     [Fact]public void UntouchedLegacyHotkeysAreMigrated()
     {

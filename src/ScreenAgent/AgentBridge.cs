@@ -20,7 +20,7 @@ internal sealed class AgentBridge : Window
     readonly AppConfig config;
     readonly System.Windows.Threading.DispatcherTimer saveTimer=new(){Interval=TimeSpan.FromMilliseconds(600)};
     Task initTask=Task.CompletedTask;
-    bool initStarted,userShown,offscreen;
+    bool initStarted,offscreen;
     readonly System.Diagnostics.Stopwatch startup=new();
     public bool FallbackUsed {get;private set;}
     public long ReadyMs {get;private set;}
@@ -86,7 +86,8 @@ internal sealed class AgentBridge : Window
             {
                 // Explicit prompt for the Desk's own microphone request; WebView2 remembers the answer in its profile.
                 if(e.PermissionKind==CoreWebView2PermissionKind.Microphone)
-                    e.State=Trusted(e.Uri)&&MessageBox.Show("Darf Desk dein Mikrofon verwenden?","Screen Agent",MessageBoxButton.YesNo,MessageBoxImage.Question)==MessageBoxResult.Yes?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
+                    // Win32 box: topmost and foreground, so it cannot hide behind other windows while the Desk is hidden.
+                    e.State=Trusted(e.Uri)&&Native.MessageBox(IntPtr.Zero,"Darf Desk dein Mikrofon verwenden?","Screen Agent",0x4|0x20|0x10000|0x40000)==6?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
             };
             browser.Source=new Uri(origin,client.Paired?"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider):"/device");
         }
@@ -124,7 +125,6 @@ internal sealed class AgentBridge : Window
     }
     public void ShowDesk()
     {
-        userShown=true;
         var h=new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
         if(!IsVisible||offscreen)
         {
@@ -140,7 +140,8 @@ internal sealed class AgentBridge : Window
         if(WindowState==WindowState.Minimized)WindowState=WindowState.Normal;
         Activate();
     }
-    public void HideDesk(){SaveBounds();Hide();userShown=false;}
+    public void HideDesk(){SaveBounds();Hide();}
+    public async Task<string?> Eval(string script)=>browser.CoreWebView2 is null?null:await browser.CoreWebView2.ExecuteScriptAsync(script);
     public bool DeskOpen=>IsVisible&&WindowState!=WindowState.Minimized;
     static PxRect Bounds(IntPtr h)=>Native.GetWindowRect(h,out var r)?new(r.Left,r.Top,r.Right-r.Left,r.Bottom-r.Top):default;
     void ApplyPlacement(IntPtr h)

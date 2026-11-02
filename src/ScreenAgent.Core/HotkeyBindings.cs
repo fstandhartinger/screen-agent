@@ -48,6 +48,15 @@ public sealed class HotkeyBindings
     // unassigned-key mask then, while the modifiers are still down, so Win-up does not open Start and Alt-up does
     // not focus the menu bar. Never true when a foreign modifier is held, so other tools' chords stay untouched.
     public bool MaskNow {get;private set;}
+    // Releases we never saw (Win+L, Ctrl+Alt+Del, a secure desktop swallowing the key-up) must not leave a key "held":
+    // the next Alt would then look like a chord. Called on every key-down with the physical state from Windows.
+    public List<(int Vk,Key Role)> Resync(Func<int,bool> isDown,int except)
+    {
+        List<(int,Key)> released=[];
+        foreach(int vk in held.Where(v=>v!=except&&!isDown(v)).ToList())
+            if(Feed(vk,false,out var key))released.Add((vk,key));
+        return released;
+    }
     public bool Feed(int vk,bool down,out Key key)
     {
         key=Role(vk);var role=key;bool was=held.Any(k=>Role(k)==role);MaskNow=false;

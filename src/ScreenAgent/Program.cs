@@ -32,6 +32,7 @@ internal static class Program
             if(!first)
             {
                 // A second start (double click on the exe) is a request to see the app: ask the running one to open the Desk.
+                Native.AllowSetForegroundWindow(-1); // let the running instance bring its window to the front for this click
                 try{using var running=EventWaitHandle.OpenExisting(showName);running.Set();}catch{ /* the first instance is still starting */ }
                 return 0;
             }
@@ -45,7 +46,16 @@ internal static class Program
             new Thread(()=>{while(showRequest.WaitOne())bridge.Dispatcher.BeginInvoke(new System.Action(bridge.ShowDesk));}){IsBackground=true,Name="ScreenAgent show request"}.Start();
             bridge.StartHidden();app.Run();return 0;
         }
-        catch(Exception ex){Console.WriteLine(JsonSerializer.Serialize(new{error=ex.ToString()}));return 1;}
+        catch(Exception ex)
+        {
+            if(args.FirstOrDefault()?.StartsWith("--selftest")==true){Console.WriteLine(JsonSerializer.Serialize(new{error=ex.ToString()}));return 1;}
+            // A GUI-subsystem exe has no console: say what is wrong where the user can see it, and keep a log.
+            string log=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","startup-error.log");
+            try{Directory.CreateDirectory(Path.GetDirectoryName(log)!);File.WriteAllText(log,DateTime.Now.ToString("s")+"\r\n"+ex);}catch{ /* the box below still tells */ }
+            string what=ex is InvalidDataException?"Die Einstellungen in config.json sind ungültig (%APPDATA%\\ScreenAgent\\config.json):\r\n\r\n"+ex.Message:ex.Message;
+            Native.MessageBox(IntPtr.Zero,"Screen Agent konnte nicht starten.\r\n\r\n"+what+"\r\n\r\nDetails: "+log,"Screen Agent",0x10|0x10000|0x40000);
+            return 1;
+        }
         finally{hook?.Dispose();}
     }
     static int UiTest()

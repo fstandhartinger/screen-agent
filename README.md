@@ -8,7 +8,7 @@ Download `ScreenAgent.exe` and verify it against `SHA256SUMS`. Optional `tessdat
 
 1. **Start `ScreenAgent.exe`.** Nothing opens on screen: no console window, no panel. The app lives in the notification area
    (bottom right of the taskbar; on Windows 11 the round icon may be hidden under the `^` arrow, drag it out to keep it visible).
-   A balloon says so the first time. Starting the exe a second time simply opens the Desk window of the running app.
+   A balloon says so at start until the device is connected. Starting the exe a second time simply opens the Desk window of the running app.
 2. **Connect the device.** Click the tray icon (or right-click, **Desk öffnen**). The Desk window opens as a normal window: it can be
    minimised, resized and moved, it is not always on top, and it remembers its size and position. Sign in on the page and press
    connect. After that the window opens on the companion page. Closing it only hides it; the app keeps running.
@@ -22,7 +22,10 @@ Download `ScreenAgent.exe` and verify it against `SHA256SUMS`. Optional `tessdat
 5. **Quit** from the tray menu (**Beenden**). Voice stops and the screen context is cleared first.
 
 **Wispr keeps working.** The default keys are built on Alt+Win, never Ctrl+Win. Ctrl+Win, Ctrl+Win+Alt and every other chord that
-includes a Ctrl key pass through untouched: the app neither swallows them nor adds keys to them. It swallows exactly one key, Caps
+starts with a Ctrl key pass through untouched: the app neither swallows them nor adds keys to them. (One corner: if you press Alt and
+Win first and Ctrl only afterwards, the app has already added its single invisible mask key, because at that moment the chord looked
+like its own. Press Ctrl first, as Wispr's chord does.) Use the LEFT Alt key: on German keyboards the right Alt is AltGr, which
+Windows reports as Ctrl+Alt, so the app treats it as somebody else's chord and ignores it. It swallows exactly one key, Caps
 Lock, and only while a session is on (so a Caps tap or hold can mean "draw"). Everything else is passed on to Windows and to the
 other tools. Version 0.1.1 used Ctrl+Win+Shift and injected extra keys into Ctrl+Win, which very likely is why Wispr stopped reacting (this cannot be proven without the laptop; the CI selftest now proves the new build leaves these keys alone).
 If your `config.json` still holds the old defaults the app replaces them with the new ones at start (the old file is kept as
@@ -58,7 +61,7 @@ Live and file OCR prefer Windows.Media.Ocr and fall back to bundled Tesseract en
 
 ## Verification and manual checklist
 
-Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config, window placement at 100–200 % scaling, status texts, voice-start logic), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. Since 0.1.2 it also checks that the exe is a GUI-subsystem program (no console window), that Ctrl+Win and Ctrl+Win+Alt pass through a real low-level keyboard hook untouched while Alt+Win+Shift toggles the session (`--selftest-hotkeys`, skipped with exit 2 if the runner has no input desktop), and that the Desk window starts hidden, is not topmost, opens, minimises, remembers its size, and that the status note is small, bottom-right, click-through and hides again (`--selftest-windows`). `--selftest-ui` proves that the status note accepts the capture-affinity API, not pixel-level exclusion. `--selftest-inject` skips with documented exit 2 if the hosted runner cannot supply an interactive non-elevated editor. A skip does not prove insertion. Exact output and manifest accompany every CI artifact.
+Windows CI builds, runs pure xUnit tests (shared OCR vectors, hotkeys, privacy, correction diff/promotion/span, payloads, config, window placement at 100–200 % scaling, status texts, voice-start logic), publishes a self-contained exe, renders synthetic OCR fixtures at 24/36/48 px, forces the in-memory Tesseract fallback at all three sizes, and runs overlay/insertion selftests. Since 0.1.2 it also checks that the exe is a GUI-subsystem program (no console window), that Ctrl+Win and Ctrl+Win+Alt pass through a real low-level keyboard hook untouched while Alt+Win+Shift toggles the session (`--selftest-hotkeys`; GitHub's `windows-latest` has an input desktop and runs it, a runner without one skips with exit 2 and the manual checklist applies), and that the Desk window starts hidden, is not topmost, opens, minimises, remembers its size, and that the status note is small, bottom-right, click-through and hides again (`--selftest-windows`). `--selftest-ui` proves that the status note accepts the capture-affinity API, not pixel-level exclusion. `--selftest-inject` skips with documented exit 2 if the hosted runner cannot supply an interactive non-elevated editor. A skip does not prove insertion. Exact output and manifest accompany every CI artifact.
 
 Before daily use, manually check on Windows:
 
