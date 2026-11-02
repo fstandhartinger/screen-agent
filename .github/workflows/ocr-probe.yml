@@ -18,10 +18,4 @@ jobs:
         run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
       - name: Read every id off the real pages
         shell: pwsh
-        run: ./ci/ocr-screens.ps1
-      - name: The same with the German OCR language (a German Windows may have no en-US OCR)
-        shell: pwsh
-        run: |
-          Get-WindowsCapability -Online -Name 'Language.OCR~~~de-DE*' | Add-WindowsCapability -Online | Out-Null
-          $env:SCREENAGENT_OCR_LANG = 'de-DE'
-          ./ci/ocr-screens.ps1
+        run: ./ci/ocr-matrix.ps1
