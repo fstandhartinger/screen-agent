@@ -25,7 +25,8 @@ internal static class LiveSelftests
             {
                 bridge.StartHidden();
                 for(int i=0;i<300&&bridge.SessionId is null;i++)await Task.Delay(100);
-                report["sid"]=bridge.SessionId is not null;
+                report["sid"]=bridge.SessionId is not null;report["stage"]=bridge.InitStage;report["browser"]=bridge.BrowserReady;report["paired"]=client.Paired;report["fallback"]=bridge.FallbackUsed;report["initError"]=bridge.InitErrorType;
+                report["page"]=await bridge.Eval("location.pathname+location.search+' | '+document.readyState+' | '+(document.body?document.body.innerText.slice(0,160):'')");
                 hook.SetSession(true);
                 for(int i=0;i<300&&!bridge.VoiceOn;i++)await Task.Delay(100);
                 report["voice"]=bridge.VoiceOn;
@@ -49,7 +50,7 @@ internal static class LiveSelftests
             catch(Exception ex){report["error"]=ex.GetType().Name+": "+ex.Message;}
             report["version"]=AppInfo.Version;
             Console.WriteLine(JsonSerializer.Serialize(report));
-            controller.Dispose();bridge.AllowClose=true;app.Shutdown();
+            bridge.AllowClose=true;app.Shutdown();
         };
         app.Run();
         return exit;
