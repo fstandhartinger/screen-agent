@@ -42,8 +42,10 @@ internal sealed class PrivacyCapture
             foreach(AutomationElement e in edits)
             {
                 string id=e.Current.AutomationId,name=e.Current.Name;
-                if(id is "addressEditBox" or "urlbar-input" || name.Contains("address",StringComparison.OrdinalIgnoreCase)||name.Contains("Adresse",StringComparison.OrdinalIgnoreCase))
+                // Only the real omnibox: a page field named "E-Mail-Adresse" must not decide the URL. Anything else, or text being typed, stays unreadable and fails closed.
+                if(id is "addressEditBox" or "urlbar-input" || name.StartsWith("Address and search",StringComparison.OrdinalIgnoreCase)||name.StartsWith("Adress- und Such",StringComparison.OrdinalIgnoreCase))
                 {
+                    if(e.Current.HasKeyboardFocus)return null;
                     if(e.TryGetCurrentPattern(ValuePattern.Pattern,out var v))
                     {
                         string value=((ValuePattern)v).Current.Value;
@@ -55,8 +57,11 @@ internal sealed class PrivacyCapture
         catch { }
         return null;
     }
-    public Bitmap? Capture(Rectangle monitor,bool sessionActive,bool paused,IntPtr underlying=default,bool forUpload=false)
+    public Bitmap? Capture(Rectangle monitor,bool sessionActive,bool paused,IntPtr underlying=default,bool forUpload=false)=>Capture(monitor,sessionActive,paused,out _,underlying,forUpload);
+    // `verified`: the window list the pixels were checked against (before == after). Every later decision about this frame uses this list, never a newer snapshot.
+    public Bitmap? Capture(Rectangle monitor,bool sessionActive,bool paused,out List<WindowInfo> verified,IntPtr underlying=default,bool forUpload=false)
     {
+        verified=[];
         if(!sessionActive||paused||!stillAllowed())return null;
         IntPtr desktop=Native.OpenInputDesktop(0,false,0x0100); // DESKTOP_SWITCHDESKTOP access fails on secure desktop
         if(desktop==IntPtr.Zero)return null;
@@ -84,6 +89,7 @@ internal sealed class PrivacyCapture
             // Stronger than title/URL-only recheck: any visible-window identity/geometry/order change discards.
             if(!stillAllowed()||!before.SequenceEqual(after)||(underlying==IntPtr.Zero && Native.GetForegroundWindow()!=foreground))
             {image.Dispose();return null;}
+            verified=before;
             return image;
         }
         catch{image.Dispose();throw;}

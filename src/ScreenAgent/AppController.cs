@@ -45,7 +45,7 @@ internal sealed class AppController : IDisposable
     readonly Telemetry telemetry;
     readonly FramePlanner planner;
     string? freshId,commandsSid;
-    bool frameStopped,micMuted,manualSession,prevVoice,prevActive;
+    bool micMuted,manualSession,prevVoice,prevActive;
     long frameBackoffUntil,mutePollAt;
     public AppController(AppConfig config,DeviceClient client,AgentBridge bridge,KeyboardHook hook,StatusToast toast)
     {
@@ -180,7 +180,7 @@ internal sealed class AppController : IDisposable
     {
         _=ClearContext(contextSid??bridge.SessionId);
         epoch.Cancel();epoch.Dispose();epoch=new();ids=[];lastHash=null;capturedAt=0;lastForeground=IntPtr.Zero;learner.Cancel();
-        planner.Reset();freshId=null;commandsSid=null;frameStopped=false;
+        planner.Reset();freshId=null;commandsSid=null;
         foreach(var d in drawings)d.Close();drawings.Clear();
         QueueAudio(ActionKind.DictationDiscard);
     }
@@ -292,12 +292,13 @@ internal sealed class AppController : IDisposable
     // Long poll: the voice agent asks for a fresh picture ("was siehst du jetzt?") through look_at_screen.
     async Task CommandLoop(string sid,CancellationToken ct)
     {
-        while(!ct.IsCancellationRequested)
+        while(!ct.IsCancellationRequested&&bridge.VoiceOn&&commandsSid==sid)
         {
             try
             {
                 using var reply=await client.Raw(HttpMethod.Get,"api/device/session/"+Uri.EscapeDataString(sid)+"/commands",null,ct);
-                if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){frameStopped=true;telemetry.Event("screen.stop",new(){["why"]="no-session",["via"]="commands"});return;}
+                // The page says voice is on before the gateway has its session (connecting), and a dialog can end: wait, the loop ends with VoiceOn.
+                if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="commands"});await Task.Delay(3000,ct);continue;}
                 if(reply.Ok&&reply.Json is {} j&&j.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.True&&j.RootElement.TryGetProperty("id",out var id)&&id.ValueKind==System.Text.Json.JsonValueKind.String)
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
                 else if(!reply.Ok)await Task.Delay(3000,ct);
@@ -310,8 +311,8 @@ internal sealed class AppController : IDisposable
     {
         var fg=Native.GetForegroundWindow();long now=Environment.TickCount64;
         bool voice=bridge.VoiceOn;
-        if(!voice&&(planner.Started||frameStopped||freshId!=null)){planner.Reset();frameStopped=false;freshId=null;commandsSid=null;}
-        bool frames=config.SendFrames&&voice&&!frameStopped&&now>=frameBackoffUntil;
+        if(!voice&&(planner.Started||commandsSid!=null||freshId!=null)){planner.Reset();freshId=null;commandsSid=null;}
+        bool frames=config.SendFrames&&voice&&now>=frameBackoffUntil;
         bool idsDue=!(fg==lastForeground&&now-capturedAt<config.IntervalMs&&!schedule.RenewalDue(now));
         bool frameDue=frames&&planner.CaptureDue(now,(long)fg,freshId!=null);
         if(busy||!schedule.Ready(now)||!Active||drawings.Count>0||!(idsDue||frameDue))return;
@@ -322,7 +323,7 @@ internal sealed class AppController : IDisposable
         {
             if(pendingClear is {} oldSid){pendingClear=null;await ClearContext(oldSid);if(pendingClear!=null)throw new HttpRequestException();}
             var monitor=System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position).Bounds;
-            using var frame=privacy.Capture(monitor,true,false);
+            using var frame=privacy.Capture(monitor,true,false,out var verified);
             if(frame is null)
             {
                 privacyBlocked=true;ids=[];lastHash=null;bridge.Screen(ids);Notice("Privat · nicht erfasst");
@@ -332,7 +333,7 @@ internal sealed class AppController : IDisposable
             }
             privacyBlocked=false;
             var luma=Luma(frame);ulong hash=DHash.Compute(luma);
-            var windows=privacy.Snapshot(monitor);var window=windows.FirstOrDefault(w=>w.Handle==fg);
+            var window=verified.FirstOrDefault(w=>w.Handle==fg);
             if(lastHash==hash&&hashForeground==fg)
             {
                 if(schedule.RenewalDue(Environment.TickCount64))
@@ -356,7 +357,7 @@ internal sealed class AppController : IDisposable
                 if(changed)telemetry.Event("screen.ids",new(){["ids"]=confirmed,["count"]=confirmed.Length,["process"]=window.Process});
                 if(terms.Length==0)terms=await client.Dictionary(ct);
             }
-            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,windows,window,fg,hash,sid,ct);
+            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,monitor,verified,window,fg,hash,sid,ct);
         }
         catch(OperationCanceledException){}
         catch{schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",new(){["where"]="watch"});await ClearContext(sid);Notice("Desk/Registry nicht erreichbar",Level.Warn);}
@@ -364,7 +365,7 @@ internal sealed class AppController : IDisposable
     }
     // One screenshot to the vision model. Order of the fences: blocked window (never captured), dedupe, Earnings app (ids only, no image),
     // then black rectangles over every blocked or ids-only window still visible, then encode in memory and send.
-    async Task SendFrame(Bitmap frame,List<WindowInfo> windows,WindowInfo? window,IntPtr fg,ulong hash,string sid,CancellationToken ct)
+    async Task SendFrame(Bitmap frame,Rectangle monitor,List<WindowInfo> windows,WindowInfo? window,IntPtr fg,ulong hash,string sid,CancellationToken ct)
     {
         string? command=freshId;bool fresh=command!=null;long now=Environment.TickCount64;
         if(window is null||window.Blocked){freshId=null;telemetry.Event("screen.frame",new(){["decision"]="masked",["why"]="foreground-blocked"});return;}
@@ -376,9 +377,9 @@ internal sealed class AppController : IDisposable
             // The Earnings app: ids only, never an image of it. The ids already went out through /screen.
             freshId=null;planner.Sent(now,hash,(long)fg);
             telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="ids-only-window",["reason"]=decision.Reason.ToString().ToLowerInvariant(),["process"]=window.Process});
+            using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>(),ct); // the agent must not keep describing the previous window
             return;
         }
-        var monitor=System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position).Bounds;
         int masked=0;
         using(var g=Graphics.FromImage(frame))
             foreach(var w in windows.Where(w=>w.Handle!=fg&&(w.Blocked||w.IdsOnly)))
@@ -407,8 +408,8 @@ internal sealed class AppController : IDisposable
             if(reply.Json is {} r2&&r2.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.Object&&f.TryGetProperty("id",out var fid)&&fid.ValueKind==System.Text.Json.JsonValueKind.String)freshId=fid.GetString();
             return;
         }
-        // 409 no-session: the voice dialog is gone, stop for good until the next one. stale-frame: drop it and carry on.
-        if(reply.Status==409&&(reply.Stop||reply.Code=="no-session")){frameStopped=true;telemetry.Event("screen.stop",new(){["why"]="no-session",["via"]="frame"});return;}
+        // 409 no-session: the gateway has no session yet or any more; nothing is sent until it does. stale-frame: drop it and carry on.
+        if(reply.Status==409&&(reply.Stop||reply.Code=="no-session")){frameBackoffUntil=Environment.TickCount64+3000;telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="frame"});return;}
         if(reply.Status==429){frameBackoffUntil=Environment.TickCount64+Math.Clamp(reply.RetryAfter,2,60)*1000L;}
         telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="rejected",["status"]=reply.Status,["code"]=reply.Code??"",["bytes"]=jpeg.Length});
     }
