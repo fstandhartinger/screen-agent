@@ -1,6 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Json;
 namespace ScreenAgent;
 // Windows CI selftests for the first-run findings (hotkey pass-through, Desk window, status toast).
 // Exit codes: 0 passed, 1 failed, 2 skipped because the runner cannot provide the precondition (documented in the output).
@@ -96,6 +99,33 @@ internal static class Selftests
         Console.WriteLine(JsonSerializer.Serialize(new{test="hotkeys",status=failed?"failed":"passed",results}));
         return failed?1:0;
     }
+    sealed class PairingHandler : HttpMessageHandler
+    {
+        public readonly string PairId=new('p',43),PollToken=new('q',43),DeviceToken=new('t',43);
+        public readonly string DeviceId=Guid.NewGuid().ToString();
+        public int Polls;public bool BodyOnly=true,AuthorizationOk=true;
+        public readonly long Expiry=DateTimeOffset.UtcNow.AddDays(90).ToUnixTimeMilliseconds();
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
+        {
+            BodyOnly&=request.RequestUri!.Query.Length==0&&!request.RequestUri.AbsoluteUri.Contains(DeviceToken);
+            object value;HttpStatusCode status=HttpStatusCode.OK;
+            switch(request.RequestUri.AbsolutePath)
+            {
+                case "/api/device/pairing/start":value=new{pairId=PairId,pollToken=PollToken,browserUrl="https://example.com/device?pair="+PairId,expiresAt=DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds()};break;
+                case "/api/device/pairing/poll":
+                    using(var body=JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)))
+                        AuthorizationOk&=body.RootElement.GetProperty("pairId").GetString()==PairId&&body.RootElement.GetProperty("pollToken").GetString()==PollToken;
+                    if(++Polls==1){status=HttpStatusCode.Accepted;value=new{status="pending"};}
+                    else value=new{token=DeviceToken,deviceId=DeviceId,expiresAt=Expiry};
+                    break;
+                case "/api/device/web-session":
+                    AuthorizationOk&=request.Headers.Authorization?.Scheme=="Bearer"&&request.Headers.Authorization.Parameter==DeviceToken;
+                    value=new{cookie="synthetic-ci-cookie",expiresAt=DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeMilliseconds()};break;
+                default:throw new InvalidOperationException("Unexpected synthetic request");
+            }
+            return new HttpResponseMessage(status){Content=JsonContent.Create(value)};
+        }
+    }
     public static int Windows()
     {
         var results=new List<object>();bool failed=false,skipped=false;
@@ -107,7 +137,20 @@ internal static class Selftests
             {
                 string? runtime=null;try{runtime=Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();}catch{}
                 var config=AppConfig.Parse("{\"deskUrl\":\"https://example.com\"}");
-                using var client=new DeviceClient(config);
+                string temp=Path.Combine(Path.GetTempPath(),"ScreenAgent-selftest-"+Guid.NewGuid());Directory.CreateDirectory(temp);
+                string tokenFile=Path.Combine(temp,"device.bin");var handler=new PairingHandler();
+                using var client=new DeviceClient(config,handler,tokenFile);
+                var start=await client.StartPairing(CancellationToken.None);
+                Case("pairing-start-receives-separate-proof",start.pairId!=start.pollToken&&start.browserUrl.EndsWith("?pair="+start.pairId));
+                var pending=await client.PollPairing(start.pairId,start.pollToken,CancellationToken.None);
+                var paired=await client.PollPairing(start.pairId,start.pollToken,CancellationToken.None);
+                Case("pairing-polls-until-browser-approval",pending is null&&paired?.deviceId==handler.DeviceId);
+                client.Pair(paired!);
+                var protectedBytes=File.ReadAllBytes(tokenFile);
+                Case("device-token-persisted-encrypted",client.Paired&&!System.Text.Encoding.UTF8.GetString(protectedBytes).Contains(handler.DeviceToken));
+                using(var restarted=new DeviceClient(config,new PairingHandler(),tokenFile))Case("device-token-restores-after-restart",restarted.Paired);
+                // The browser starts unpaired so its initialization cannot bootstrap until the explicit test below.
+                client.Disconnect();
                 var work=StatusToast.Px(System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea);
                 try{File.Delete(AgentBridge.StateFile);}catch{}
                 var bridge=new AgentBridge(config,client);
@@ -129,7 +172,7 @@ internal static class Selftests
                 else
                 {
                     for(int i=0;i<400&&!bridge.BrowserReady;i++)await Task.Delay(100);
-                    Case("page-starts-while-hidden",bridge.BrowserReady,new{runtime,readyMs=bridge.ReadyMs,fallbackUsed=bridge.FallbackUsed});
+                    Case("page-starts-while-hidden",bridge.BrowserReady,new{runtime,readyMs=bridge.ReadyMs});
                     // The window must settle hidden on its own, and must never have been on screen on the way.
                     for(int i=0;i<250&&bridge.IsVisible;i++)await Task.Delay(100);
                     Case("desk-settles-hidden-never-seen",!bridge.IsVisible&&!shownOnScreen,new{visibleNow=bridge.IsVisible,shownOnScreen});
@@ -155,6 +198,35 @@ internal static class Selftests
                 Case("desk-minimises",bridge.WindowState==WindowState.Minimized&&!bridge.DeskOpen);
                 bridge.ShowDesk();await Task.Delay(300);
                 Case("desk-restores",bridge.WindowState==WindowState.Normal&&bridge.DeskOpen);
+                if(bridge.BrowserReady)
+                {
+                    // Exercise the actual native WebView rasterization at 100/125/150%, including resize and reopen.
+                    // This is controller DPI coverage, not a claim that CI changed its Windows monitor setting.
+                    Directory.CreateDirectory("artifacts");
+                    bridge.TestPage("<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0f1317;color:#fff;font:18px Segoe UI}main{height:100%;border:6px solid #63d297;padding:28px}button{background:#63d297;border:0;border-radius:10px;padding:16px;font:inherit}small{position:fixed;bottom:20px;right:20px}</style></head><body><main><h1>Screen Agent · Desk</h1><p>Verbinde Screen Agent mit Agent Desk.</p><button>Im Browser verbinden</button><p>Bestätige die Verbindung im Browser. Desk öffnet sich hier automatisch.</p><small>Viewport · alle vier grünen Ränder müssen sichtbar sein</small></main></body></html>");
+                    await Task.Delay(600);
+                    foreach(double scale in new[]{1.0,1.25,1.5})
+                    {
+                        bridge.SetTestScale(scale);
+                        Native.SetWindowPos(h,IntPtr.Zero,box.X,box.Y,(int)(800*scale),(int)(600*scale),0x14);await Task.Delay(400);
+                        for(int reopen=0;reopen<2;reopen++)
+                        {
+                            if(reopen==1){bridge.HideDesk();bridge.ShowDesk();await Task.Delay(300);}
+                            Native.GetClientRect(h,out var cr);var bb=bridge.BrowserBounds;
+                            using var viewport=JsonDocument.Parse((await bridge.Eval("JSON.stringify({w:innerWidth,h:innerHeight,dpr:devicePixelRatio})"))!);
+                            using var dimensions=JsonDocument.Parse(viewport.RootElement.GetString()!);var d=dimensions.RootElement;
+                            double dpr=d.GetProperty("dpr").GetDouble(),vw=d.GetProperty("w").GetDouble(),vh=d.GetProperty("h").GetDouble();
+                            Case($"webview-fills-client-{scale*100:0}-reopen-{reopen}",bb.X==0&&bb.Y==0&&bb.Width==cr.Right&&bb.Height==cr.Bottom&&Math.Abs(vw*dpr-cr.Right)<=2&&Math.Abs(vh*dpr-cr.Bottom)<=2&&Math.Abs(dpr-scale)<0.01,new{scale,dpr,vw,vh,client=new{w=cr.Right,h=cr.Bottom},browser=new{bb.X,bb.Y,bb.Width,bb.Height}});
+                        }
+                        await bridge.CaptureBrowser($"artifacts/desk-controller-{scale*100:0}.png");
+                    }
+                    bridge.SetTestScale(1);client.Pair(paired!);
+                    await bridge.TestConnect(CancellationToken.None);
+                    var cookies=await bridge.TestCookies();
+                    Case("native-cookie-installed-in-separate-webview-store",cookies.Any(c=>c.Name=="desk_s"&&c.Value=="synthetic-ci-cookie"&&c.IsHttpOnly&&c.IsSecure&&c.SameSite==Microsoft.Web.WebView2.Core.CoreWebView2CookieSameSiteKind.Strict));
+                    Case("pairing-credentials-stay-out-of-request-urls",handler.BodyOnly&&handler.AuthorizationOk);
+                    bridge.Disconnect();client.Disconnect();Directory.Delete(temp,true);
+                }
                 // Remembers its size: resize, hide, open again.
                 int w=Math.Min(Math.Max(box.W-40,WindowPlacement.DeskMinWidthDip+40),work.W-40),hh=Math.Min(Math.Max(box.H-60,WindowPlacement.DeskMinHeightDip+60),work.H-40);
                 Native.SetWindowPos(h,IntPtr.Zero,box.X,box.Y,w,hh,0x14);await Task.Delay(300);
