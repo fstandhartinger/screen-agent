@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 namespace ScreenAgent;
 internal sealed record PromptResult(string Code,bool? Landed,int Chars,string Route,int Windows,bool Wsl,long Ms,IntPtr Window);
 // Types a prompt into the Claude Code message box of VS Code Insiders. Hard rules: the text goes into that box and nowhere else, is never submitted (the only
@@ -280,6 +281,40 @@ internal sealed class MainAgentPrompt
             return $"value={Head(value)} text={Head(text)} help={Head(el.Current.HelpText)}";
         }
         catch(Exception ex){return "describe failed: "+ex.GetType().Name;}
+    }
+    // Selftest diagnostics: the element, its children, ARIA properties and the text before the caret, to find out how an empty box differs from one with text.
+    internal static string DescribeDeep(AutomationElement el)
+    {
+        var sb=new StringBuilder();
+        void One(AutomationElement e,int depth)
+        {
+            try
+            {
+                var c=e.Current;string name=c.Name??"";if(name.Length>30)name=name[..30];
+                string aria="";
+                sb.Append(new string(' ',depth*2)).Append(c.ControlType.ProgrammaticName.Replace("ControlType.","")).Append(" name='").Append(name).Append("' class='").Append(c.ClassName).Append("' content=").Append(c.IsContentElement).Append(" offscreen=").Append(c.IsOffscreen).Append(" rect=").Append(c.BoundingRectangle).Append(" aria='").Append(aria).Append("' status='").Append(c.ItemStatus).Append("'\n");
+                if(depth<3)for(var ch=TreeWalker.RawViewWalker.GetFirstChild(e);ch is not null;ch=TreeWalker.RawViewWalker.GetNextSibling(ch))One(ch,depth+1);
+            }
+            catch(Exception ex){sb.Append("  (").Append(ex.GetType().Name).Append(")\n");}
+        }
+        One(el,0);
+        try
+        {
+            if(el.TryGetCurrentPattern(TextPattern.Pattern,out var t))
+            {
+                var tp=(TextPattern)t;var sel=tp.GetSelection();
+                sb.Append("selections=").Append(sel.Length);
+                if(sel.Length>0)
+                {
+                    var before=tp.DocumentRange.Clone();before.MoveEndpointByRange(TextPatternRangeEndpoint.End,sel[0],TextPatternRangeEndpoint.Start);
+                    var after=tp.DocumentRange.Clone();after.MoveEndpointByRange(TextPatternRangeEndpoint.Start,sel[0],TextPatternRangeEndpoint.End);
+                    sb.Append(" beforeCaret='").Append(before.GetText(40)).Append("' afterCaret='").Append(after.GetText(40)).Append('\'');
+                }
+                sb.Append('\n');
+            }
+        }
+        catch(Exception ex){sb.Append("caret probe failed: ").Append(ex.GetType().Name).Append('\n');}
+        return sb.ToString();
     }
     // What the box shows now: the longer of ValuePattern and TextPattern; null when the element offers neither.
     internal static string? ReadBox(AutomationElement el)
