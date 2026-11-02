@@ -109,6 +109,7 @@ internal static class Selftests
                 var config=AppConfig.Parse("{\"deskUrl\":\"https://example.com\"}");
                 using var client=new DeviceClient(config);
                 var work=StatusToast.Px(System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea);
+                try{File.Delete(AgentBridge.StateFile);}catch{}
                 var bridge=new AgentBridge(config,client);
                 var ex=0L;
                 Case("desk-is-ordinary-window",!bridge.Topmost&&bridge.ShowInTaskbar&&bridge.ResizeMode==ResizeMode.CanResize&&bridge.WindowStyle==WindowStyle.SingleBorderWindow,new{bridge.Topmost,bridge.ShowInTaskbar,bridge.ResizeMode,bridge.WindowStyle});
@@ -140,7 +141,8 @@ internal static class Selftests
                 Native.GetWindowRect(h,out var r);var box=new PxRect(r.Left,r.Top,r.Right-r.Left,r.Bottom-r.Top);
                 Case("desk-opens-on-request",bridge.IsVisible&&bridge.DeskOpen);
                 Case("desk-not-always-on-top",(ex&0x8)==0,new{ex});
-                Case("desk-fits-work-area",work.Contains(box)&&box.W>=300&&box.H>=300,new{work,box});
+                var expected=WindowPlacement.Desk(work,Native.ScaleAt(work.X+work.W/2,work.Y+work.H/2),null,[work]);
+                Case("desk-fits-work-area-at-default-size",work.Contains(box)&&Math.Abs(box.W-expected.W)<=2&&Math.Abs(box.H-expected.H)<=2&&Math.Abs(box.X-expected.X)<=2,new{work,box,expected});
                 bridge.WindowState=WindowState.Minimized;await Task.Delay(300);
                 Case("desk-minimises",bridge.WindowState==WindowState.Minimized&&!bridge.DeskOpen);
                 bridge.ShowDesk();await Task.Delay(300);

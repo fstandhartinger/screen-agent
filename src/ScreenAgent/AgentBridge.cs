@@ -159,8 +159,8 @@ internal sealed class AgentBridge : Window
     {
         try
         {
-            if(!IsVisible||WindowState!=WindowState.Normal)return;
-            var b=Bounds(new System.Windows.Interop.WindowInteropHelper(this).Handle);if(b.W<=0||b.H<=0)return;
+            if(!IsVisible||offscreen||WindowState!=WindowState.Normal)return;   // never remember the hidden start-up position
+            var b=Bounds(new System.Windows.Interop.WindowInteropHelper(this).Handle);if(b.W<=0||b.H<=0||b.X<-10000)return;
             Directory.CreateDirectory(Path.GetDirectoryName(StateFile)!);File.WriteAllText(StateFile,System.Text.Json.JsonSerializer.Serialize(new[]{b.X,b.Y,b.W,b.H}));
         }
         catch{ /* remembering the size is a convenience */ }
