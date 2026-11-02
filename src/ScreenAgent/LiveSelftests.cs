@@ -39,6 +39,9 @@ internal static class LiveSelftests
             try
             {
                 Directory.CreateDirectory("e2e-shots");
+                bridge.StartHidden();bridge.ShowDesk();
+                for(int i=0;i<600&&bridge.SessionId is null;i++)await Task.Delay(100);
+                Step($"session {bridge.SessionId is not null} stage {bridge.InitStage}");report["stage"]=bridge.InitStage;bridge.Hide();
                 string folder=Path.Combine(workDir,"ws-live");Directory.CreateDirectory(folder);string file=Path.Combine(folder,"notes.txt");File.WriteAllText(file,"Zeile eins\n");
                 var psi=new System.Diagnostics.ProcessStartInfo(Path.Combine(vscodeDir,"Code - Insiders.exe")){UseShellExecute=false,WorkingDirectory=folder};
                 foreach(var a in new[]{"--new-window","--disable-workspace-trust","--skip-release-notes","--skip-welcome","--disable-gpu",folder,file})psi.ArgumentList.Add(a);
@@ -51,9 +54,6 @@ internal static class LiveSelftests
                     if(hit.Handle!=0){code=(IntPtr)hit.Handle;box=await Task.Run(()=>prompt.FindInput(code,500));}
                 }
                 report["boxFoundBefore"]=box is not null;Step($"vscode box {box is not null}");
-                bridge.StartHidden();bridge.ShowDesk();
-                for(int i=0;i<600&&bridge.SessionId is null;i++)await Task.Delay(100);
-                Step($"session {bridge.SessionId is not null}");bridge.Hide();
                 // A browser in front: what he talks about is not VS Code, which sits behind it.
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("msedge",$"--no-first-run {page}"){UseShellExecute=true});
                 await Task.Delay(6000);Shot("1-browser-in-front");
