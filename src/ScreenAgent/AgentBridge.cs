@@ -26,9 +26,11 @@ internal sealed class AgentBridge : Window
     bool Trusted(string url)=>Uri.TryCreate(url,UriKind.Absolute,out var u)&&u.GetLeftPart(UriPartial.Authority)==origin.GetLeftPart(UriPartial.Authority);
     readonly AppConfig config;
     readonly System.Windows.Threading.DispatcherTimer saveTimer=new(){Interval=TimeSpan.FromMilliseconds(600)};
-    bool initStarted,testPage,offscreen;
+    bool initStarted,offscreen;
+    string? testResponse;
     Task initTask=Task.CompletedTask;
     DispatcherTimer? startupFallback;
+    long? offscreenStyle;
     (string state,string text)? pairStatus;
     readonly System.Diagnostics.Stopwatch startup=new();
     public long ReadyMs {get;private set;}
@@ -81,9 +83,18 @@ internal sealed class AgentBridge : Window
             controller.DefaultBackgroundColor=System.Drawing.Color.FromArgb(255,15,19,23);
             controller.RasterizationScaleChanged+=(_,_)=>ResizeBrowser();
             browser=controller.CoreWebView2;
+            // Installed only by the CI helper before startup. No selftest navigation can escape to the network,
+            // including the initial /device request that otherwise races a later synthetic fixture navigation.
+            if(testResponse is not null)
+            {
+                browser.AddWebResourceRequestedFilter("*",CoreWebView2WebResourceContext.All);
+                browser.WebResourceRequested+=(_,e)=>e.Response=env.CreateWebResourceResponse(
+                    new MemoryStream(System.Text.Encoding.UTF8.GetBytes(testResponse)),200,"OK",
+                    "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\n");
+            }
             ResizeBrowser();
             ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";
-            browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri)&&!(testPage&&e.Uri=="about:blank"))e.Cancel=true;else{SessionId=null;SessionChanged?.Invoke();}};
+            browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri))e.Cancel=true;else{SessionId=null;SessionChanged?.Invoke();}};
             browser.WebMessageReceived+=(_,e)=>
             {
                 if(!Trusted(e.Source))return;
@@ -144,24 +155,48 @@ internal sealed class AgentBridge : Window
         startupFallback.Tick+=async (_,_)=>
         {
             startupFallback.Stop();
-            if(BrowserReady||IsVisible||lifetime.IsCancellationRequested)return;
-            FallbackUsed=true;offscreen=true;
-            var h=new WindowInteropHelper(this).Handle;
-            Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()|0x80L));
-            // Set WPF's remembered position as well as the HWND before the first Show, preventing a visible flash.
-            Left=-32000;Top=-32000;ShowActivated=false;
-            Native.SetWindowPos(h,IntPtr.Zero,-32000,-32000,900,800,0x14);
-            Show();ResizeBrowser();
-            await Task.WhenAny(initTask,Task.Delay(15000,lifetime.Token));
-            if(lifetime.IsCancellationRequested)return;
-            if(offscreen)
+            try
             {
-                Hide();offscreen=false;RestoreOrdinaryStyle(h);
+                if(BrowserReady||IsVisible||lifetime.IsCancellationRequested)return;
+                FallbackUsed=true;ShowOffscreenForStartup();
+                await Task.WhenAny(initTask,Task.Delay(15000,lifetime.Token));
+                if(lifetime.IsCancellationRequested)return;
+                if(offscreen)
+                {
+                    Hide();offscreen=false;RestoreOrdinaryStyle(new WindowInteropHelper(this).Handle);
+                }
+            }
+            catch(Exception ex)
+            {
+                if(lifetime.IsCancellationRequested)return;
+                InitErrorType=ex.GetType().Name;InitErrorHResult=ex.HResult;InitStage="fallback-failed";
+                // A DispatcherTimer's async-void handler must not surface an unhandled startup exception.
+                try
+                {
+                    if(offscreen){offscreen=false;Hide();RestoreOrdinaryStyle(new WindowInteropHelper(this).Handle);}
+                    Content=new System.Windows.Controls.TextBlock{Text="Desk konnte nicht geöffnet werden. Bitte starte Screen Agent erneut.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(12)};
+                    ShowDesk();
+                }
+                catch{ /* The sanitized initialization diagnostics remain available to CI. */ }
             }
         };
         startupFallback.Start();
     }
-    static void RestoreOrdinaryStyle(IntPtr h)=>Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()&~0x80L));
+    void ShowOffscreenForStartup()
+    {
+        offscreen=true;var h=new WindowInteropHelper(this).Handle;
+        offscreenStyle=Native.GetWindowLongPtr(h,-20).ToInt64();
+        Native.SetWindowLongPtr(h,-20,(IntPtr)((offscreenStyle.Value|0x80L)&~0x40000L));
+        // Set WPF's remembered position as well as the HWND before the first Show, preventing a visible flash.
+        Left=-32000;Top=-32000;ShowActivated=false;
+        Native.SetWindowPos(h,IntPtr.Zero,-32000,-32000,900,800,0x14);
+        Show();ResizeBrowser();
+    }
+    void RestoreOrdinaryStyle(IntPtr h)
+    {
+        if(offscreenStyle is not {} saved)return;
+        Native.SetWindowLongPtr(h,-20,(IntPtr)saved);offscreenStyle=null;
+    }
     IntPtr WindowMessage(IntPtr hwnd,int msg,IntPtr wParam,IntPtr lParam,ref bool handled)
     {
         if(msg is 0x0005 or 0x02e0) // WM_SIZE / WM_DPICHANGED: let WPF finish the native size change first.
@@ -240,7 +275,7 @@ internal sealed class AgentBridge : Window
         var h=new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
         if(!IsVisible||offscreen)
         {
-            if(offscreen){offscreen=false;RestoreOrdinaryStyle(h);}
+            if(offscreen){offscreen=false;Hide();RestoreOrdinaryStyle(h);}
             ApplyPlacement(h);ShowActivated=true;
             if(!IsVisible)Show();
             ApplyPlacement(h); // WPF applies its own first-show position; set ours again
@@ -311,6 +346,7 @@ internal sealed class AgentBridge : Window
         browser?.CookieManager.DeleteCookies("desk_s",origin.AbsoluteUri);OpenPairing();SessionChanged?.Invoke();
     }
     // CI uses the real native controller at each rasterization scale; never enabled by the product path.
+    internal void TestStartupPresentation(){Hide();ShowOffscreenForStartup();}
     internal Task TestConnect(CancellationToken ct)=>OpenSignedIn(ct);
     internal Task<List<CoreWebView2Cookie>> TestCookies()=>browser!.CookieManager.GetCookiesAsync(origin.AbsoluteUri);
     internal void SetTestScale(double scale)
@@ -324,5 +360,25 @@ internal sealed class AgentBridge : Window
         if(browser is null)throw new InvalidOperationException("Browser not ready");
         using var output=File.Create(path);await browser.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,output);
     }
-    internal void TestPage(string html){testPage=true;browser?.NavigateToString(html);}
+    internal void TestOriginResponses(string html)
+    {
+        if(initStarted)throw new InvalidOperationException("Test responses must be configured before startup");
+        testResponse=html;
+    }
+    internal async Task TestPage()
+    {
+        if(browser is null||testResponse is null)throw new InvalidOperationException("Test browser not configured");
+        browser.Stop();
+        string target=new Uri(origin,"/__screen-agent-ci-fixture").AbsoluteUri;
+        var completed=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);ulong navigation=0;
+        void Started(object? sender,CoreWebView2NavigationStartingEventArgs e){if(e.Uri==target)navigation=e.NavigationId;}
+        void Completed(object? sender,CoreWebView2NavigationCompletedEventArgs e){if(navigation!=0&&e.NavigationId==navigation)completed.TrySetResult(e.IsSuccess);}
+        browser.NavigationStarting+=Started;browser.NavigationCompleted+=Completed;
+        try
+        {
+            browser.Navigate(target);
+            if(!await completed.Task.WaitAsync(TimeSpan.FromSeconds(15)))throw new InvalidOperationException("CI fixture navigation failed");
+        }
+        finally{browser.NavigationStarting-=Started;browser.NavigationCompleted-=Completed;}
+    }
 }

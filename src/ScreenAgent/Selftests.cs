@@ -173,6 +173,8 @@ internal static class Selftests
                 var work=StatusToast.Px(System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea);
                 try{File.Delete(AgentBridge.StateFile);}catch{}
                 var bridge=new AgentBridge(config,client);
+                const string fixture="<html><head><title>Screen Agent native DPI fixture v0.1.3</title><meta name='viewport' content='width=device-width, initial-scale=1'><style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0f1317;color:#fff;font:18px Segoe UI}main{height:100%;border:6px solid #63d297;padding:28px}button{background:#63d297;border:0;border-radius:10px;padding:16px;font:inherit}small{position:fixed;bottom:20px;right:20px}</style></head><body><main id='screen-agent-ci-fixture' data-fixture='native-dpi-v013'><h1>Screen Agent · Desk</h1><p>Verbinde Screen Agent mit Agent Desk.</p><button>Im Browser verbinden</button><p>Bestätige die Verbindung im Browser. Desk öffnet sich hier automatisch.</p><small>Viewport · alle vier grünen Ränder müssen sichtbar sein</small></main></body></html>";
+                bridge.TestOriginResponses(fixture);
                 var ex=0L;
                 Case("desk-is-ordinary-window",!bridge.Topmost&&bridge.ShowInTaskbar&&bridge.ResizeMode==ResizeMode.CanResize&&bridge.WindowStyle==WindowStyle.SingleBorderWindow,new{bridge.Topmost,bridge.ShowInTaskbar,bridge.ResizeMode,bridge.WindowStyle});
                 bool shownOnScreen=false;
@@ -217,13 +219,21 @@ internal static class Selftests
                 Case("desk-minimises",bridge.WindowState==WindowState.Minimized&&!bridge.DeskOpen);
                 bridge.ShowDesk();await Task.Delay(300);
                 Case("desk-restores",bridge.WindowState==WindowState.Normal&&bridge.DeskOpen);
+                // Use the same presentation path as a runtime waiting for a shown parent, then imitate a tray open
+                // during that presentation. Hide before restoring styles so Windows refreshes the taskbar/frame.
+                long ordinaryStyle=Native.GetWindowLongPtr(h,-20).ToInt64();
+                bridge.TestStartupPresentation();await Task.Delay(100);
+                long startupStyle=Native.GetWindowLongPtr(h,-20).ToInt64();Native.GetWindowRect(h,out var startupRect);
+                Case("startup-presentation-offscreen-tool-window",startupRect.Left<-1000&&(startupStyle&0x80)!=0&&(startupStyle&0x40000)==0);
+                bridge.ShowDesk();await Task.Delay(200);
+                long restoredStyle=Native.GetWindowLongPtr(h,-20).ToInt64();Native.GetWindowRect(h,out var openedRect);
+                Case("tray-open-during-startup-restores-taskbar-window",bridge.DeskOpen&&openedRect.Left>=0&&(restoredStyle&0x40080)==(ordinaryStyle&0x40080));
                 if(bridge.BrowserReady)
                 {
                     // Exercise the actual native WebView rasterization at 100/125/150%, including resize and reopen.
                     // This is controller DPI coverage, not a claim that CI changed its Windows monitor setting.
                     Directory.CreateDirectory("artifacts");
-                    bridge.TestPage("<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0f1317;color:#fff;font:18px Segoe UI}main{height:100%;border:6px solid #63d297;padding:28px}button{background:#63d297;border:0;border-radius:10px;padding:16px;font:inherit}small{position:fixed;bottom:20px;right:20px}</style></head><body><main><h1>Screen Agent · Desk</h1><p>Verbinde Screen Agent mit Agent Desk.</p><button>Im Browser verbinden</button><p>Bestätige die Verbindung im Browser. Desk öffnet sich hier automatisch.</p><small>Viewport · alle vier grünen Ränder müssen sichtbar sein</small></main></body></html>");
-                    await Task.Delay(600);
+                    await bridge.TestPage();
                     foreach(double scale in new[]{1.0,1.25,1.5})
                     {
                         bridge.SetTestScale(scale);
@@ -237,7 +247,16 @@ internal static class Selftests
                             double dpr=d.GetProperty("dpr").GetDouble(),vw=d.GetProperty("w").GetDouble(),vh=d.GetProperty("h").GetDouble();
                             Case($"webview-fills-client-{scale*100:0}-reopen-{reopen}",bb.X==0&&bb.Y==0&&bb.Width==cr.Right&&bb.Height==cr.Bottom&&Math.Abs(vw*dpr-cr.Right)<=2&&Math.Abs(vh*dpr-cr.Bottom)<=2&&Math.Abs(dpr-scale)<0.01,new{scale,dpr,vw,vh,client=new{w=cr.Right,h=cr.Bottom},browser=new{bb.X,bb.Y,bb.Width,bb.Height}});
                         }
-                        await bridge.CaptureBrowser($"artifacts/desk-controller-{scale*100:0}.png");
+                        bool fixtureVisible=await bridge.Eval("(()=>{const m=document.getElementById('screen-agent-ci-fixture');if(!m||document.title!=='Screen Agent native DPI fixture v0.1.3'||m.dataset.fixture!=='native-dpi-v013')return false;const r=m.getBoundingClientRect(),s=getComputedStyle(m);return r.x===0&&r.y===0&&Math.abs(r.width-innerWidth)<=1&&Math.abs(r.height-innerHeight)<=1&&s.borderTopWidth==='6px'&&s.borderTopColor==='rgb(99, 210, 151)'})()") == "true";
+                        Case($"correct-desk-fixture-before-capture-{scale*100:0}",fixtureVisible);
+                        if(!fixtureVisible)throw new InvalidOperationException("Screenshot fixture marker or full viewport border is missing");
+                        string screenshot=$"artifacts/desk-controller-{scale*100:0}.png";
+                        await bridge.CaptureBrowser(screenshot);
+                        using(var pixels=new System.Drawing.Bitmap(screenshot))
+                        {
+                            bool Green(int x,int y){var c=pixels.GetPixel(x,y);return Math.Abs(c.R-99)<=2&&Math.Abs(c.G-210)<=2&&Math.Abs(c.B-151)<=2;}
+                            Case($"screenshot-has-all-four-fixture-edges-{scale*100:0}",Green(1,pixels.Height/2)&&Green(pixels.Width-2,pixels.Height/2)&&Green(pixels.Width/2,1)&&Green(pixels.Width/2,pixels.Height-2),new{pixels.Width,pixels.Height});
+                        }
                     }
                     bridge.SetTestScale(1);client.Pair(paired!);
                     await bridge.TestConnect(CancellationToken.None);
