@@ -33,7 +33,7 @@ jobs:
           New-Item -ItemType Directory -Force artifacts | Out-Null
           Invoke-SA --selftest-canvas-panel | Tee-Object artifacts/canvas-panel.json
           if ($LASTEXITCODE -ne 0) { throw 'Drawing panel selftest failed' }
-      - name: Command channel selftest (fake Desk: received first, one result, repeats ignored, busy, no text back)
+      - name: Command channel selftest (fake Desk, received first, one result, repeats ignored, busy, no text back)
         shell: pwsh
         run: |
           . ./ci/invoke-sa.ps1
