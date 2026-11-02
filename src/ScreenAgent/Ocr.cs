@@ -71,13 +71,10 @@ internal static class Ocr
         var hash=new HashCode();hash.AddBytes(raw);long key=hash.ToHashCode();
         lock(TileCache)if(TileCache.TryGetValue(key,out var known))return known;
         var ids=new List<string>();
-        foreach(var pass in (Environment.GetEnvironmentVariable("SCREENAGENT_OCR_PASSES")??"3:110").Split(',').Select(x=>x.Split(':')).Select(x=>OcrTiles.Flatten(raw,stride,tile.Width,tile.Height,int.Parse(x[0]),int.Parse(x[1]))))
-        {
-            using var bitmap=Windows.Graphics.Imaging.SoftwareBitmap.CreateCopyFromBuffer(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(pass.Bgra),BitmapPixelFormat.Bgra8,pass.W,pass.H,BitmapAlphaMode.Premultiplied);
-            var result=await engine.RecognizeAsync(bitmap);
-            ids.AddRange(ArtifactMatcher.FindLoose(string.Join("\n",result.Lines.Select(l=>l.Text))));
-            if(Environment.GetEnvironmentVariable("SCREENAGENT_OCR_DEBUG")!=null)foreach(var l in result.Lines.Select(l=>l.Text).Where(l=>l.Length<30&&System.Text.RegularExpressions.Regex.IsMatch(l,@"^.{0,3}[#*+%HfFtT4].{4,9}$")))Console.Error.WriteLine("RAW "+l);
-        }
+        var pass=OcrTiles.Flatten(raw,stride,tile.Width,tile.Height,3,110); // measured on the real pages, ci/ocr-screens.ps1: 3x and 110 levels read every id at 100-200 %
+        using var bitmap=Windows.Graphics.Imaging.SoftwareBitmap.CreateCopyFromBuffer(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(pass.Bgra),BitmapPixelFormat.Bgra8,pass.W,pass.H,BitmapAlphaMode.Premultiplied);
+        var result=await engine.RecognizeAsync(bitmap);
+        ids.AddRange(ArtifactMatcher.FindLoose(string.Join("\n",result.Lines.Select(l=>l.Text))));
         var value=ids.Distinct(StringComparer.Ordinal).ToArray();
         lock(TileCache){if(TileCache.Count>=128)TileCache.Clear();TileCache[key]=value;}
         return value;

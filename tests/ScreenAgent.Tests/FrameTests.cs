@@ -94,3 +94,37 @@ public class FrameTests
         finally{try{Directory.Delete(dir,true);}catch{}}
     }
 }
+public class OcrTileTests
+{
+    [Fact] public void GridCoversEveryPixelAndABadgeOnABorderIsWholeInOneTile()
+    {
+        foreach(var (w,h) in new[]{(1920,1080),(2560,1440),(3840,2160),(800,450),(1366,768)})
+        {
+            var tiles=ScreenAgent.Core.OcrTiles.Grid(w,h).ToArray();
+            for(int y=0;y<h;y+=7)for(int x=0;x<w;x+=11)
+            {
+                Assert.Contains(tiles,t=>x>=t.X&&x<t.X+t.W&&y>=t.Y&&y<t.Y+t.H);
+                // 60 px overlap: a 56x20 badge starting anywhere fits one tile
+                int bx=Math.Min(x,w-56),by=Math.Min(y,h-20);
+                Assert.Contains(tiles,t=>bx>=t.X&&bx+56<=t.X+t.W&&by>=t.Y&&by+20<=t.Y+t.H);
+            }
+        }
+    }
+    [Theory,InlineData(15,70),InlineData(240,180),InlineData(30,255)] public void FaintTextOnAnyBackgroundComesOutDark(int background,int text)
+    {
+        const int W=20,H=20;var bgra=new byte[W*H*4];
+        for(int i=0;i<W*H;i++){byte v=(byte)(i%W==10?text:background);bgra[i*4]=v;bgra[i*4+1]=v;bgra[i*4+2]=v;bgra[i*4+3]=255;}
+        var o=ScreenAgent.Core.OcrTiles.Flatten(bgra,W*4,W,H,3,110);
+        Assert.Equal((60,60),(o.W,o.H));
+        Assert.True(o.Bgra[(5*60+2)*4]>=250,"background is white");
+        Assert.True(o.Bgra[(5*60+30)*4]<=255-Math.Min(255,Math.Abs(text-background)*255/110)+60,"text is dark");
+    }
+    [Theory]
+    [InlineData("a#e0b59c","a#e0b59c")]
+    [InlineData("a #e0b59c","a#e0b59c")]
+    [InlineData("a*e0b59c","a#e0b59c")]
+    [InlineData("aff e0b59c","a#e0b59c")]
+    [InlineData("a#e0b 59c","a#e0b59c")]
+    public void LooseFindsWhatFaintBadgesTurnInto(string text,string id)=>Assert.Contains(id,ScreenAgent.Core.ArtifactMatcher.FindLoose(text));
+    [Theory,InlineData("Das kostet 12345 Euro"),InlineData("a#12345"),InlineData("data#abcdef")] public void LooseStaysAnIdShape(string text)=>Assert.Empty(ScreenAgent.Core.ArtifactMatcher.FindLoose(text));
+}
