@@ -13,6 +13,14 @@ public sealed class Hotkeys
     public bool Drawing => drawing;
     public bool SwallowCaps => capsOwned || Session;
     public bool Masking => down.Contains(Key.Win) && down.Contains(Key.Ctrl);
+    // Tray menu and tests flip the session without a chord; same effects as the chord's SessionToggle.
+    public IReadOnlyList<ActionKind> SetSession(bool on)
+    {
+        if(Session==on)return [];
+        List<ActionKind> result=[];Session=on;Paused=false;result.Add(ActionKind.SessionToggle);
+        if(drawing){drawing=false;result.Add(ActionKind.DrawStop);}
+        return result;
+    }
     public IReadOnlyList<ActionKind> Tick(long ms)
     {
         List<ActionKind> result = [];

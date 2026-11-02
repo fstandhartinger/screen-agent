@@ -74,7 +74,7 @@ public class AppTests
         Assert.Equal(Key.Caps,map.Role(0x78));Assert.Equal(Key.Space,map.Role(0x77));Assert.Equal(Key.P,map.Role(0x51));
         Assert.True(map.Feed(0xa2,true,out var key));Assert.Equal(Key.Ctrl,key);
         Assert.False(map.Feed(0xa3,true,out _));Assert.False(map.Feed(0xa2,false,out _));
-        Assert.True(map.Feed(0xa4,true,out key));Assert.Equal(Key.Win,key);Assert.True(map.CtrlWin);Assert.False(map.PhysicalWin);
+        Assert.True(map.Feed(0xa4,true,out key));Assert.Equal(Key.Win,key);Assert.True(map.CtrlWin);Assert.True(map.MaskNow);
         Assert.True(map.Feed(0xa3,false,out _));Assert.False(map.CtrlWin);
     }
     [Fact]public void WireUsesBareHexAndShortBoundingKeys()

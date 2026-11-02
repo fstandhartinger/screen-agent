@@ -38,11 +38,22 @@ public sealed class HotkeyBindings
         return mod==Primary?Key.Ctrl:mod==Secondary?Key.Win:mod=="Shift"?Key.Shift:vk==DrawVk?Key.Caps:vk==pauseVk?Key.P:vk==spaceVk?Key.Space:Key.Other;
     }
     public bool CtrlWin=>held.Any(k=>Role(k)==Key.Ctrl)&&held.Any(k=>Role(k)==Key.Win);
-    public bool PhysicalWin=>held.Any(k=>k is 0x5b or 0x5c);
+    // Ctrl+Win is Wispr Flow's dictation chord; binding it here makes both tools fight over the same keys.
+    public bool CollidesWithWispr=>(Primary,Secondary) is ("Ctrl","Win") or ("Win","Ctrl");
+    // A modifier that is not part of our chord (for example Ctrl while the chord is Alt+Win) means the user is
+    // typing somebody else's shortcut: never react to it and never inject into it.
+    public bool ForeignModifierHeld=>held.Any(k=>Modifier(k) is {} m&&m!=Primary&&m!=Secondary&&m!="Shift");
+    bool armed;
+    // True for exactly one Feed call per chord: the moment both chord modifiers are held. The caller injects the
+    // unassigned-key mask then, while the modifiers are still down, so Win-up does not open Start and Alt-up does
+    // not focus the menu bar. Never true when a foreign modifier is held, so other tools' chords stay untouched.
+    public bool MaskNow {get;private set;}
     public bool Feed(int vk,bool down,out Key key)
     {
-        key=Role(vk);var role=key;bool was=held.Any(k=>Role(k)==role);
+        key=Role(vk);var role=key;bool was=held.Any(k=>Role(k)==role);MaskNow=false;
         if(down)held.Add(vk);else held.Remove(vk);
+        if(!CtrlWin)armed=false;
+        else if(down&&!armed&&role is Key.Ctrl or Key.Win&&!ForeignModifierHeld){armed=true;MaskNow=true;}
         if(key is not (Key.Ctrl or Key.Win or Key.Shift))return true;
         return was!=held.Any(k=>Role(k)==role); // left+right copies remain logically held
     }

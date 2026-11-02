@@ -7,6 +7,13 @@ internal static class ScreenConfig
     {
         Directory.CreateDirectory(Folder);string file=Path.Combine(Folder,"config.json");
         if(!File.Exists(file))File.WriteAllText(file,JsonSerializer.Serialize(new AppConfig(),new JsonSerializerOptions{WriteIndented=true}));
-        return AppConfig.Parse(File.ReadAllText(file));
+        string text=File.ReadAllText(file);var config=AppConfig.Parse(text);
+        if(config.HotkeysMigrated)
+        {
+            // v0.1.1 wrote Ctrl+Win defaults that fight with Wispr. Keep the old file once, then store the new defaults.
+            string backup=file+".v0.1.1.bak";if(!File.Exists(backup))File.WriteAllText(backup,text);
+            File.WriteAllText(file,JsonSerializer.Serialize(config,new JsonSerializerOptions{WriteIndented=true}));
+        }
+        return config;
     }
 }

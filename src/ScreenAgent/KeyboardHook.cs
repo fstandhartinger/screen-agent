@@ -15,6 +15,10 @@ internal sealed class KeyboardHook : IDisposable
     volatile bool swallowCaps,baseline,disposed,healthy;
     bool capsOwned;
     readonly System.Threading.Timer watchdog;
+    readonly ConcurrentQueue<Func<IReadOnlyList<ActionKind>>> commands=new();
+    // Selftests drive the hook with SendInput, which Windows flags as injected. Production ignores injected keys
+    // (other tools, remote desktop) and only ever accepts physical ones.
+    public static volatile bool AcceptInjectedForTests;
     public event System.Action<ActionKind>? Action;
     public event System.Action<IntPtr>? BindTarget;
     public event System.Action<IntPtr>? BindDrawing;
@@ -35,6 +39,8 @@ internal sealed class KeyboardHook : IDisposable
         // Reinstall proactively: Windows silently removes timed-out LL hooks, with no query API.
         watchdog=new System.Threading.Timer(_=>{if(threadId!=0)Native.PostThreadMessage(threadId,0x8001,UIntPtr.Zero,IntPtr.Zero);},null,30000,30000);
     }
+    // Tray menu: start or stop the session without the chord. Runs on the consumer thread, like key events.
+    public void SetSession(bool on)=>commands.Enqueue(()=>state.SetSession(on));
     void Run()
     {
         threadId=Native.GetCurrentThreadId(); Install();
@@ -53,12 +59,13 @@ internal sealed class KeyboardHook : IDisposable
     {
         if(code<0)return Native.CallNextHookEx(hook,code,w,l);
         var k=Marshal.PtrToStructure<Native.Kbd>(l);
-        if((k.flags&0x10)!=0)return Native.CallNextHookEx(hook,code,w,l); // ignore our synthetic events
+        if(k.extra==Native.Marker)return Native.CallNextHookEx(hook,code,w,l); // our own mask key
+        if((k.flags&0x10)!=0&&!AcceptInjectedForTests)return Native.CallNextHookEx(hook,code,w,l); // other tools' synthetic keys
         bool down=w.ToInt64() is 0x100 or 0x104;
         bool transition=bindings.Feed((int)k.vk,down,out var key);
-        // Bounded native-only mask before Win can be released; no UI/OCR/network in this callback.
-        if(down && bindings.CtrlWin && bindings.PhysicalWin && (key is Core.Key.Ctrl or Core.Key.Win))
-            Native.SendInput(2,new[]{Native.Key(0xe8),Native.Key(0xe8,true)},Marshal.SizeOf<Native.Input>());
+        // One bounded native-only mask when OUR chord completes; never for foreign chords such as Ctrl+Win (Wispr).
+        // No UI/OCR/network in this callback.
+        if(bindings.MaskNow)Native.Mask();
         if(transition)queue.Enqueue((new(key,down,Environment.TickCount64),Native.GetForegroundWindow()));
         if(key==Core.Key.Caps)
         {
@@ -72,6 +79,7 @@ internal sealed class KeyboardHook : IDisposable
     // Dedicated lightweight consumer: UIA/OCR never delay hotkey state processing.
     void Drain()
     {
+        while(commands.TryDequeue(out var c))Apply(c());
         while(queue.TryDequeue(out var e))Apply(state.Feed(e.Event),e.Window);
         Apply(state.Tick(Environment.TickCount64));swallowCaps=state.SwallowCaps;
     }
