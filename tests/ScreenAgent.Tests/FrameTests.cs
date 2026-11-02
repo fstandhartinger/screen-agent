@@ -216,6 +216,7 @@ public class OcrTileTests
     [InlineData("a#e0b 59c","a#e0b59c")]
     public void LooseFindsWhatFaintBadgesTurnInto(string text,string id)=>Assert.Contains(id,ScreenAgent.Core.ArtifactMatcher.FindLoose(text));
     [Theory,InlineData("Das kostet 12345 Euro"),InlineData("a#12345"),InlineData("data#abcdef")] public void LooseStaysAnIdShape(string text)=>Assert.Empty(ScreenAgent.Core.ArtifactMatcher.FindLoose(text));
+}
 
 public class ReportingTests
 {
