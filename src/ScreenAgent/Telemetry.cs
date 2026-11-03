@@ -52,7 +52,7 @@ internal sealed class Telemetry : IDisposable
                     // No session, or the gateway does not know ours (yet): the device log.
                     if(!taken&&Environment.TickCount64>=deviceRetryAt)
                     {
-                        using var reply=await client.Raw(HttpMethod.Post,"api/device/trace",body,cts.Token);
+                        using var reply=await client.Raw(HttpMethod.Post,"api/device/log",body,cts.Token);
                         taken=reply.Ok;
                         if(!reply.Ok){deviceRetryAt=Environment.TickCount64+60000;if(reply.Status is 400 or 413){queue.Remove(batch.Count);continue;}}
                     }

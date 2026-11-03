@@ -52,6 +52,7 @@ internal sealed class AppController : IDisposable
     string? freshId,commandsSid;
     readonly MainAgentPrompt prompts;
     readonly PromptChannel promptChannel;
+    readonly BriefingCollector briefing;
     CanvasPanel? canvas;
     readonly InputGate inputGate=new();
     (bool ByUser,string Why)? panelQueued;
@@ -70,6 +71,7 @@ internal sealed class AppController : IDisposable
         captions=new(config,client,telemetry,bridge.Dispatcher,()=>(ids.ToArray(),terms.Take(30).ToArray()));
         dictation=new(config,client,telemetry,captions,bridge.Dispatcher,(text,level)=>{if(bridge.Dispatcher.CheckAccess())Notice(text,level);else bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,level)));},text=>Balloon(text),
             (proc,field)=>new DictationContext(proc,field.Length<=500?field:field[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray()),InjectRetry);
+        briefing=new(config,client,Trace,()=>bridge.SessionId);
         if(config.ActivityOverlay)activity=new ActivityOverlay(()=>toast.IsVisible?(int)Math.Ceiling(toast.ActualHeight*System.Windows.Media.VisualTreeHelper.GetDpi(toast).DpiScaleY)+6:0);
         bridge.Activity+=e=>OnActivity(e,false);bridge.ActivityRejected+=why=>telemetry.Event("activity.invalid",new(){["reason"]=why});
         bridge.Milestone+=(name,ms)=>telemetry.Event("session.startup",new(){["phase"]="app-"+name,["ms"]=ms});   // before any session: it reaches the trace with the first one
@@ -224,7 +226,7 @@ internal sealed class AppController : IDisposable
         finally{clearing=false;}
     }
     string? pendingClear,pendingWhy;
-    void ForgetLocal(){ids=ocrIds=visionIds=[];ocrGrid=null;planner.Reset();bridge.Screen([]);}
+    void ForgetLocal(){ids=ocrIds=visionIds=[];ocrGrid=null;planner.Reset();bridge.Screen([]);briefing.NoteScreenText(null);}
     async Task Unmute()
     {
         if(unmuting)return;
@@ -398,6 +400,7 @@ internal sealed class AppController : IDisposable
                 using var reply=await client.Raw(HttpMethod.Get,"api/device/session/"+Uri.EscapeDataString(sid)+"/commands",null,ct);
                 // The page says voice is on before the gateway has its session (connecting), and a dialog can end: wait, the loop ends with VoiceOn.
                 if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="commands"});await Task.Delay(3000,ct);continue;}
+                if(reply.Ok&&reply.Json is {} bj&&BriefingCommand.Parse(bj.RootElement) is {} briefingId)_=briefing.Request(sid,briefingId,ct);   // answered by a POST of its own, next to whatever else the reply carries
                 if(reply.Ok&&reply.Json is {} pj&&PromptCommand.Parse(pj.RootElement) is {} request)_=promptChannel.Handle(sid,request,ct);   // typing runs on its own; the long poll is parked again at once
                 else if(reply.Ok&&reply.Json is {} j&&j.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.True&&j.RootElement.TryGetProperty("id",out var id)&&id.ValueKind==System.Text.Json.JsonValueKind.String)
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
@@ -440,7 +443,7 @@ internal sealed class AppController : IDisposable
         if(busy||!schedule.Ready(now)||!Active||drawings.Count>0||!(idsDue||frameDue))return;
         busy=true;capturedAt=now;lastForeground=fg;planner.Captured(now,(long)fg);
         var ct=epoch.Token;string sid=bridge.SessionId!;contextSid=sid;
-        if(voice&&commandsSid!=sid){commandsSid=sid;_=CommandLoop(sid,ct);}   // also without frames: prompts for the Main Agent arrive on this channel
+        if(voice&&commandsSid!=sid){commandsSid=sid;_=CommandLoop(sid,ct);_=briefing.Start(sid,ct);}   // also without frames: prompts for the Main Agent arrive on this channel
         try
         {
             if(pendingClear is {} oldSid){pendingClear=null;await ClearContext(oldSid,pendingWhy??"stop");if(pendingClear!=null)throw new HttpRequestException();}
@@ -497,6 +500,7 @@ internal sealed class AppController : IDisposable
             {
                 var clock=System.Diagnostics.Stopwatch.StartNew();
                 var found=await Task.Run(()=>Ocr.FindIds(copy,ct),ct);long ms=clock.ElapsedMilliseconds;
+                briefing.NoteScreenText(found.Text);   // kept in memory for the start briefing; cleared with the picture
                 var confirmed=await client.Exists(found.Ids,ct);
                 if(gen!=ocrGen||!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg){ocrGrid=null;return;}   // the picture moved on: look again
                 ocrIds=confirmed;var merged=DevicePayloads.Merge(ocrIds,visionIds);

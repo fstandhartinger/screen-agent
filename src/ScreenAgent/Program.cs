@@ -41,6 +41,7 @@ internal static class Program
             if(args.FirstOrDefault()=="--selftest-feedback")return UiSelftests.Feedback();
             if(args.FirstOrDefault()=="--selftest-startup")return UiSelftests.Startup(args.Skip(1).ToArray());
             if(args.FirstOrDefault()=="--selftest-prompt-channel")return ChannelSelftest.Run();
+            if(args.FirstOrDefault()=="--selftest-briefing")return BriefingSelftest.Run();
             if(args.FirstOrDefault()=="--selftest-main-agent")return MainAgentSelftests.Run(args.Skip(1).ToArray());
             if(args.FirstOrDefault()=="--selftest-live-actions")return LiveSelftests.Actions(args[1],args[2],args[3],args[4]);
             if(args.FirstOrDefault()=="--selftest-live")return LiveSelftests.Run(args[1],args[2],args[3]);
