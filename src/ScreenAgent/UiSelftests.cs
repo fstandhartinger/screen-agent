@@ -141,8 +141,9 @@ internal static class UiSelftests
         finally{try{overlay?.Close();under.Close();}catch{ }}
     });
     // How long the app-owned part of a cold start takes on this runner: WebView2 environment, controller, first page. Not a pass/fail on speed, only on "it starts".
-    public static int Startup()=>Harness("startup",async Case=>
+    public static int Startup(string[] args)=>Harness("startup",async Case=>
     {
+        if(args.Length>0&&int.TryParse(args[0],out int fallbackMs))AgentBridge.StartupFallbackMs=fallbackMs;
         var config=AppConfig.Parse("{\"deskUrl\":\"https://example.com\"}");
         string temp=Path.Combine(Path.GetTempPath(),"ScreenAgent-startup-"+Guid.NewGuid());Directory.CreateDirectory(temp);
         using var client=new DeviceClient(config,null,Path.Combine(temp,"device.bin"));
@@ -153,8 +154,8 @@ internal static class UiSelftests
         {
             bridge.StartHidden();
             for(int i=0;i<300&&!marks.ContainsKey("page");i++)await Task.Delay(100);
-            Case("webview2-environment-controller-and-page-came-up",marks.ContainsKey("environment")&&marks.ContainsKey("controller")&&marks.ContainsKey("page"),new{marks});
-            Case("milestones-are-in-order",marks.GetValueOrDefault("environment")<=marks.GetValueOrDefault("controller")&&marks.GetValueOrDefault("controller")<=marks.GetValueOrDefault("page"),new{marks});
+            Case("webview2-environment-controller-and-page-came-up",marks.ContainsKey("environment")&&marks.ContainsKey("controller")&&marks.ContainsKey("page"),new{marks,fallbackMs=AgentBridge.StartupFallbackMs,fallbackUsed=bridge.FallbackUsed});
+            Case("milestones-are-in-order",marks.GetValueOrDefault("environment")<=marks.GetValueOrDefault("controller")&&marks.GetValueOrDefault("controller")<=marks.GetValueOrDefault("page"),new{marks,fallbackMs=AgentBridge.StartupFallbackMs,fallbackUsed=bridge.FallbackUsed,readyMs=bridge.ReadyMs});
             Console.Error.WriteLine("startup ms: "+JsonSerializer.Serialize(marks));
         }
         finally{bridge.AllowClose=true;bridge.Close();}

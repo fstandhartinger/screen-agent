@@ -21,6 +21,8 @@ internal sealed class AgentBridge : Window
     public bool VoiceOn {get;private set;}
     public static volatile bool AllowMicForTests;
     public static string TestBrowserArgs="";
+    // How long WebView2 gets to start with the window hidden before it is shown off-screen (see StartHidden). The start-up probe varies it.
+    public static int StartupFallbackMs=6000;
     readonly SemaphoreSlim muteGate=new(1,1);
     public bool AllowClose {get;set;}
     public string? SessionId {get;private set;}
@@ -169,7 +171,7 @@ internal sealed class AgentBridge : Window
     public void StartHidden()
     {
         startup.Restart();new WindowInteropHelper(this).EnsureHandle();Begin();
-        startupFallback=new DispatcherTimer{Interval=TimeSpan.FromSeconds(6)};
+        startupFallback=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(StartupFallbackMs)};
         startupFallback.Tick+=async (_,_)=>
         {
             startupFallback.Stop();
