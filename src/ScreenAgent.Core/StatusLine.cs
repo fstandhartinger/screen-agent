@@ -18,9 +18,9 @@ public static class StatusLine
         if(!s.DeskLoggedIn)return new("Sitzung wartet · Desk nicht angemeldet · Tray → Desk öffnen",Level.Warn,true);
         if(s.Paused)return new("Pausiert",Level.Paused,true);
         if(s.Muted)return new($"Mikro stumm{(s.MuteHotkey==""?"":" · "+s.MuteHotkey+" hebt auf")}",Level.Muted,true);
-        if(s.VoiceFailed)return new("Desk-Stimme startet nicht · Tray → Desk öffnen, Mikrofon erlauben",Level.Warn,true);
         // The first session after launch can take seconds (WebView2, page, microphone): say so at once, then count.
         if(s.Starting)return new(s.StartingSeconds>=3?$"Sitzung startet … {s.StartingSeconds} s":"Sitzung startet …",Level.Busy,true);
+        if(s.VoiceFailed)return new("Desk-Stimme startet nicht · Tray → Desk öffnen, Mikrofon erlauben",Level.Warn,true);
         if(s.NeedsUnmute)return new("Desk-Mikro stumm · Tray → Desk öffnen",Level.Warn,true);
         if(!s.ServicesReachable)return new("Desk/Registry nicht erreichbar",Level.Warn,true);
         if(s.Locked)return new("Bildschirm gesperrt",Level.Active,true);

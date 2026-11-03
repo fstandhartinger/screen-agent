@@ -5,7 +5,7 @@ namespace ScreenAgent.Tests;
 // v0.1.7 app-ui: live activity rows, screenshot feedback rules, drawing window policy, session start text.
 public class UiFeedbackTests
 {
-    static ActivityEvent Ev(string phase,string id="t1",string label="",string tool="",long ms=0,string reason="")=>new(id,phase,label,tool,ms,reason);
+    static ActivityNote Ev(string phase,string id="t1",string label="",string tool="",long ms=0,string reason="")=>new(id,phase,label,tool,ms,reason);
     static string[] Texts(ActivityBoard b,long now)=>b.View(now).Select(r=>r.Text).ToArray();
 
     // ---- activity rows
@@ -63,7 +63,7 @@ public class UiFeedbackTests
     {
         using var ok=JsonDocument.Parse("{\"type\":\"activity\",\"id\":\"c1\",\"phase\":\"START\",\"label\":\"Suche\\n in Registry\",\"tool\":\"artifact_search\",\"ms\":123}");
         Assert.True(ActivityParse.TryParse(ok.RootElement,out var ev,out _));
-        Assert.Equal(new ActivityEvent("c1","start","Suche in Registry","artifact_search",123,""),ev);
+        Assert.Equal(new ActivityNote("c1","start","Suche in Registry","artifact_search",123,""),ev);
         using var noId=JsonDocument.Parse("{\"phase\":\"done\"}");
         Assert.False(ActivityParse.TryParse(noId.RootElement,out _,out var why));Assert.Equal("id",why);
         using var bad=JsonDocument.Parse("{\"phase\":\"dance\",\"id\":\"x\"}");
@@ -162,13 +162,23 @@ public class UiFeedbackTests
     }
     [Fact]public void ManualModeNeverOpensByItself()=>Assert.Equal(new PanelDecision(PanelAct.None,"manual"),new CanvasPolicy(true).Pending());
 
+    [Fact]public void StartupTimelineReportsEachPhaseOnceFromTheHotkey()
+    {
+        var t=new StartupTimeline();Assert.Null(t.Mark("x",5));Assert.False(t.Starting(5));
+        t.Begin(1000);Assert.True(t.Starting(1000));Assert.Equal(0L,t.Mark("hotkey",1000));Assert.Null(t.Mark("hotkey",1500));
+        Assert.Equal(10_500L,t.Mark("voice-on",11_500));Assert.Equal(10,t.Seconds(11_500));
+        Assert.True(t.Starting(15_999));Assert.False(t.Starting(16_000));
+        t.End();Assert.False(t.Active);t.Begin(2000);Assert.Equal(0L,t.Mark("hotkey",2000));
+    }
+
     // ---- session start
     [Fact]public void StartingSessionSaysSoAndCounts()
     {
         StatusInputs I(bool starting,int s=0,bool failed=false)=>new(true,true,true,true,false,failed,false,true,false,false,false,0,"Ctrl+Win+Shift",Starting:starting,StartingSeconds:s);
         var a=StatusLine.Compute(I(true));Assert.Equal("Sitzung startet …",a.Text);Assert.True(a.ShowToast);Assert.Equal(Level.Busy,a.Level);
         Assert.Equal("Sitzung startet … 5 s",StatusLine.Compute(I(true,5)).Text);
-        Assert.Contains("Stimme",StatusLine.Compute(I(true,5,true)).Text);   // a failure still wins
+        Assert.Equal("Sitzung startet … 5 s",StatusLine.Compute(I(true,5,true)).Text);   // a slow first start is not a failure yet
+        Assert.Contains("Stimme",StatusLine.Compute(I(false,0,true)).Text);   // after the window the failure text takes over
         Assert.Equal("Sitzung · 0 IDs",StatusLine.Compute(I(false)).Text);
     }
 }

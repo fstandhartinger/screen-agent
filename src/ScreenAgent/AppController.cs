@@ -54,16 +54,22 @@ internal sealed class AppController : IDisposable
     readonly InputGate inputGate=new();
     (bool ByUser,string Why)? panelQueued;
     internal CanvasPanel? CanvasForTests=>canvas;
-    bool canvasClosed,canvasNoted;
+    bool canvasNoted;
+    readonly ActivityOverlay? activity;
+    readonly FeedbackGate feedback;
+    readonly StartupTimeline startupTimeline=new();
     bool micMuted,manualSession,prevVoice,prevActive;
     long frameBackoffUntil,mutePollAt;
     public AppController(AppConfig config,DeviceClient client,AgentBridge bridge,KeyboardHook hook,StatusToast toast)
     {
         this.config=config;this.client=client;this.bridge=bridge;this.hook=hook;this.toast=toast;
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
-        telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);
-        prompts=new(config.MainAgentInputNames,(type,data)=>telemetry.Event(type,data),config.MainAgentAllowStableCode);
-        promptChannel=new(client,prompts.Run,(type,data)=>telemetry.Event(type,data),
+        telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);feedback=new(config.ScreenshotFeedback);
+        if(config.ActivityOverlay)activity=new ActivityOverlay(()=>toast.IsVisible?(int)Math.Ceiling(toast.ActualHeight*System.Windows.Media.VisualTreeHelper.GetDpi(toast).DpiScaleY)+6:0);
+        bridge.Activity+=e=>OnActivity(e,false);bridge.ActivityRejected+=why=>telemetry.Event("activity.invalid",new(){["reason"]=why});
+        bridge.Milestone+=(name,ms)=>telemetry.Event("session.startup",new(){["phase"]="app-"+name,["ms"]=ms});   // before any session: it reaches the trace with the first one
+        prompts=new(config.MainAgentInputNames,Trace,config.MainAgentAllowStableCode);
+        promptChannel=new(client,prompts.Run,Trace,
             (code,text,chars)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,text,chars);}catch{ /* the result still tells */ }})),
             sid=>bridge.SessionId==sid&&bridge.VoiceOn,inputGate);
         // The drawing panel waits while a prompt is typed (it could take the focus back), and opens when the prompt is over.
@@ -83,6 +89,7 @@ internal sealed class AppController : IDisposable
         {
             try
             {
+                activity?.Tick();
                 if(pendingClear is {} pending&&!clearing&&clearRetry.Ready(Environment.TickCount64))_=ClearContext(pending,pendingWhy??"stop");
                 if(needsUnmute&&audio is null&&!unmuting&&audioQueue.IsCompleted&&Environment.TickCount64>=unmuteRetryAt){unmuteRetryAt=Environment.TickCount64+2000;_=Unmute();}
                 if(!hook.Healthy){if(ids.Length>0||audio!=null)Reset("error");await SyncVoice();UpdateStatus();return;}
@@ -133,7 +140,8 @@ internal sealed class AppController : IDisposable
     ];
     void Balloon(string text){tray.BalloonTipTitle="Screen Agent";tray.BalloonTipText=text;tray.BalloonTipIcon=System.Windows.Forms.ToolTipIcon.Info;tray.ShowBalloonTip(8000);}
     Status Current()=>StatusLine.Compute(new(hook.Healthy,client.Paired,bridge.SessionId is not null,hook.Session,paused||hook.Paused,voiceFailed,needsUnmute,
-        schedule.Ready(Environment.TickCount64),locked,audio!=null,drawings.Count>0,ids.Length,KeyNames.Display(config.Hotkeys["session"]),micMuted&&bridge.VoiceOn,KeyNames.Display(config.Hotkeys["mute"]),excluded));
+        schedule.Ready(Environment.TickCount64),locked,audio!=null,drawings.Count>0,ids.Length,KeyNames.Display(config.Hotkeys["session"]),micMuted&&bridge.VoiceOn,KeyNames.Display(config.Hotkeys["mute"]),excluded,
+        hook.Session&&!bridge.VoiceOn&&startupTimeline.Active&&startupTimeline.Starting(Environment.TickCount64),startupTimeline.Seconds(Environment.TickCount64)));
     // The single place that touches the visible state: tray icon, tray tooltip, and the toast.
     void UpdateStatus()
     {
@@ -150,6 +158,24 @@ internal sealed class AppController : IDisposable
     }
     bool Active=>!disposed&&client.Paired&&bridge.SessionId is not null&&hook.Healthy&&hook.Session&&!hook.Paused&&!paused;
     void Notice(string text,Level level=Level.Active){noticeUntil=Environment.TickCount64+2200;toastText=null;toast.Present(text,level);}
+    // session.startup {phase, ms since the hotkey}: each phase once per start.
+    void StartMark(string phase,Dictionary<string,object?>? extra=null)
+    {
+        if(startupTimeline.Mark(phase,Environment.TickCount64) is not {} ms)return;
+        extra??=new();extra["phase"]=phase;extra["ms"]=ms;telemetry.Event("session.startup",extra);
+    }
+    // Trace events of the Main Agent prompt: logged, and shown as one live row. Raised on a worker thread, drawn on the UI thread.
+    void Trace(string type,Dictionary<string,object?> data)
+    {
+        telemetry.Event(type,data);
+        if(activity is not null&&ActivityLocal.FromTrace(type,data) is {} e)bridge.Dispatcher.BeginInvoke(new System.Action(()=>OnActivity(e,true)));
+    }
+    void OnActivity(ActivityNote e,bool local)
+    {
+        if(activity is null||disposed)return;
+        try{if(activity.Present(e))telemetry.Event("activity.shown",new(){["phase"]=e.Phase,["tool"]=e.Tool,["local"]=local});}
+        catch(Exception ex){telemetry.Event("activity.error",new(){["type"]=ex.GetType().Name});}
+    }
     // Desk voice follows the session; see VoiceSync for why a stop is only sent after a start.
     async Task SyncVoice()
     {
@@ -157,12 +183,14 @@ internal sealed class AppController : IDisposable
         voiceFailed=voice.Failed;
         if(step==VoiceStep.None)return;
         voiceSyncing=true;
+        if(step==VoiceStep.Start)StartMark("voice-request");
         try
         {
             await lifecycle.Enqueue(async ()=>
             {
                 bool ok=await bridge.Voice(step==VoiceStep.Start,config.VoiceProvider);
                 voice.Result(step==VoiceStep.Start,ok,Environment.TickCount64);voiceFailed=voice.Failed;
+                if(step==VoiceStep.Start&&!ok)StartMark("voice-unacked");
             });
         }
         finally{voiceSyncing=false;}
@@ -223,8 +251,10 @@ internal sealed class AppController : IDisposable
             if(action==ActionKind.SessionToggle)
             {
                 // Say what the key did and, if the session cannot work yet, what is missing: never a bare green "an".
-                var st=Current();
-                if(hook.Session)Notice(st.Level==Level.Warn?st.Text:"Sitzung an",st.Level==Level.Warn?Level.Warn:Level.Active);else Notice("Sitzung aus",Level.Idle);
+                if(hook.Session&&!bridge.VoiceOn){startupTimeline.Begin(Environment.TickCount64);StartMark("hotkey",new(){["browser"]=bridge.BrowserReady,["page"]=bridge.SessionId is not null});}
+                else startupTimeline.End();
+                var st=Current();bool say=st.Level is Level.Warn or Level.Busy;   // "Sitzung startet …" at once, not a bare "an" and then seconds of nothing
+                if(hook.Session)Notice(say?st.Text:"Sitzung an",say?st.Level:Level.Active);else Notice("Sitzung aus",Level.Idle);
             }
             else Notice(hook.Paused?"Pausiert":"Fortgesetzt",hook.Paused?Level.Paused:Level.Active);
             return;
@@ -285,13 +315,21 @@ internal sealed class AppController : IDisposable
     async Task Lifecycle()
     {
         bool voice=bridge.VoiceOn,active=Active;
+        if(startupTimeline.Active)
+        {
+            if(bridge.BrowserReady)StartMark("browser-ready");
+            if(bridge.SessionId is not null)StartMark("page-session");
+            if(voice){StartMark("voice-on");startupTimeline.End();}
+            else if(!hook.Session)startupTimeline.End();
+            else if(!startupTimeline.Starting(Environment.TickCount64))StartMark("gave-up-waiting");
+        }
         // A dialog started with the purple button in the Desk window is a session too: same indicator, same screen context.
         if(voice&&!prevVoice&&!hook.Session&&!paused&&client.Paired){manualSession=true;hook.SetSession(true);}
         if(!voice&&prevVoice&&manualSession){manualSession=false;hook.SetSession(false);}
         if(voice!=prevVoice)
         {
             telemetry.Event("client.voice",new(){["on"]=voice,["manual"]=manualSession});prevVoice=voice;if(!voice)micMuted=false;
-            if(voice)canvasClosed=false;else canvas?.HidePanel(false);   // a closed panel stays closed until the next voice session; at the end of a session it goes away
+            if(voice)canvas?.SessionStarted();else{canvas?.HidePanel(false);activity?.Clear();}   // a closed panel stays closed until the next voice session; at the end of a session it goes away
         }
         if(active!=prevActive)
         {
@@ -335,7 +373,7 @@ internal sealed class AppController : IDisposable
         }
     }
     // Drawing panel. Auto-open only when allowed (config, not closed by him this session) and only with the capture exclusion confirmed.
-    CanvasPanel Panel(){if(canvas is null){canvas=new CanvasPanel(bridge);canvas.ClosedByUser+=()=>canvasClosed=true;}return canvas;}
+    CanvasPanel Panel()=>canvas??=new CanvasPanel(bridge,config.CanvasPanel=="manual",(type,data)=>telemetry.Event(type,data));
     async Task ShowCanvas(bool byUser,string why)
     {
         try
@@ -347,16 +385,15 @@ internal sealed class AppController : IDisposable
                 if(!canvasNoted){canvasNoted=true;telemetry.Event("canvas.unavailable",new(){["why"]="affinity"});Notice("Zeichnung nicht verfügbar · Windows nimmt das Fenster nicht aus der Aufnahme",Level.Warn);}
                 return;
             }
-            if(byUser)canvasClosed=false;
-            else if(canvasClosed||config.CanvasPanel=="manual")return;
-            bool opened=await panel.Open();
-            telemetry.Event("canvas.open",new(){["why"]=why,["ok"]=opened,["restores"]=panel.ForegroundRestores});
+            // CanvasPolicy decides (first diagram: to the front; minimised: stays minimised; closed: stays closed) and logs canvas.panel.
+            bool opened=byUser?await panel.UserShow(why):await panel.Pending();
+            if(opened)telemetry.Event("canvas.open",new(){["why"]=why,["ok"]=true,["restores"]=panel.ForegroundRestores});
         }
         catch(Exception ex){telemetry.Event("canvas.error",new(){["type"]=ex.GetType().Name});}
     }
-    void OnCanvasPending(){if(!bridge.VoiceOn||canvas is {IsOpen:true})return;   // a drawing from the text chat, or one replayed at page load, opens nothing
+    void OnCanvasPending(){if(!bridge.VoiceOn)return;   // a drawing from the text chat, or one replayed at page load, opens nothing
         _=ShowCanvas(false,"pending");}
-    void ToggleCanvas(){if(canvas is {IsOpen:true} open)open.HidePanel(true);else _=ShowCanvas(true,"toggle");}
+    void ToggleCanvas(){if(canvas is {PanelState:PanelState.Open} open)open.HidePanel(true);else _=ShowCanvas(true,"toggle");}
     async Task Watch()
     {
         var fg=Native.GetForegroundWindow();long now=Environment.TickCount64;
@@ -387,7 +424,7 @@ internal sealed class AppController : IDisposable
                 await PostScreen(sid,DevicePayloads.Screen(ids,window.Process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
                 schedule.Success(Environment.TickCount64);
             }
-            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,info,fg,grid,sid,ct);
+            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,info,fg,grid,monitor,sid,ct);
         }
         catch(OperationCanceledException){}
         catch{schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",new(){["where"]="watch"});await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn);}
@@ -449,7 +486,7 @@ internal sealed class AppController : IDisposable
         if(changed)telemetry.Event("screen.ids",new(){["ids"]=merged,["count"]=merged.Length,["process"]=process,["source"]=source});
     }
     // One screenshot to the vision model: change test against the last SENT frame, encode in memory, send with the ids known now.
-    async Task SendFrame(Bitmap frame,CaptureInfo info,IntPtr fg,byte[] grid,string sid,CancellationToken ct)
+    async Task SendFrame(Bitmap frame,CaptureInfo info,IntPtr fg,byte[] grid,System.Drawing.Rectangle monitor,string sid,CancellationToken ct)
     {
         string? command=freshId;bool fresh=command!=null;long now=Environment.TickCount64;var window=info.Foreground;
         var decision=planner.Decide(now,grid,(long)fg,fresh);
@@ -459,6 +496,7 @@ internal sealed class AppController : IDisposable
         int masked=info.Windows.Count(w=>w.Blocked);
         var (jpeg,width,height)=await Task.Run(()=>FrameJpeg.Encode(frame),ct);
         if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg&&!fresh)return;
+        await GiveFeedback(frame,monitor,ScreenshotFeedback.Of(decision.Reason));   // after the capture, before the upload: he sees the moment the agent looks
         string? url=window.Url is {} u&&(u.StartsWith("http://")||u.StartsWith("https://"))?(u.Length>300?u[..300]:u):null;
         var body=new Dictionary<string,object?>
         {
@@ -484,6 +522,25 @@ internal sealed class AppController : IDisposable
         if(reply.Status==409&&(reply.Stop||reply.Code=="no-session")){frameBackoffUntil=Environment.TickCount64+3000;telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="frame"});return;}
         if(reply.Status==429){frameBackoffUntil=Environment.TickCount64+Math.Clamp(reply.RetryAfter,2,60)*1000L;}
         telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="rejected",["status"]=reply.Status,["code"]=reply.Code??"",["bytes"]=jpeg.Length});
+    }
+    // Purple flash plus a thumbnail of exactly this picture, on the monitor that was captured. Never throws: feedback must not cost a frame or a highlight.
+    async Task GiveFeedback(Bitmap shot,System.Drawing.Rectangle monitor,ShotReason reason)
+    {
+        var (show,why)=feedback.Check(reason,Environment.TickCount64);
+        string name=reason.ToString().ToLowerInvariant();
+        if(!show)
+        {
+            if(why=="rate-limit"||why=="not-visible"&&reason!=ShotReason.Interval)telemetry.Event("screen.feedback",new(){["reason"]=name,["shown"]=false,["why"]=why});
+            return;
+        }
+        try
+        {
+            var clock=System.Diagnostics.Stopwatch.StartNew();
+            var thumb=await Task.Run(()=>FeedbackThumb.Make(shot,FeedbackOverlay.ThumbWidthPx));
+            var (shown,problem)=ScreenFlash.Show(monitor,thumb);
+            telemetry.Event("screen.feedback",shown?new(){["reason"]=name,["shown"]=true,["ms"]=clock.ElapsedMilliseconds}:new(){["reason"]=name,["shown"]=false,["why"]=problem});
+        }
+        catch(Exception ex){telemetry.Event("screen.feedback",new(){["reason"]=name,["shown"]=false,["why"]="error:"+ex.GetType().Name});}
     }
     // `ids` in the gateway's reply: a#... the vision model read on the picture and the registry confirmed.
     static string[] VisionIds(RawReply reply)=>reply.Json is {} j&&j.RootElement.ValueKind==System.Text.Json.JsonValueKind.Object&&j.RootElement.TryGetProperty("ids",out var list)&&list.ValueKind==System.Text.Json.JsonValueKind.Array
@@ -525,6 +582,7 @@ internal sealed class AppController : IDisposable
                     var made=HighlightBuilder.Build(d,clean);
                     if(made is null){Trace(false,"offscreen");Notice("Markierung nicht gesendet · außerhalb des Bildschirms",Level.Warn);continue;}
                     foreach(var other in batch)other.Fade();
+                    await GiveFeedback(clean,d.Monitor,ShotReason.Highlight);
                     var body=DevicePayloads.Highlight(made.Png,made.Jpeg,made.Bbox,ids);
                     if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid){Trace(false,"cancelled");break;}
                     using var reply=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/highlight",body,ct);
@@ -549,7 +607,7 @@ internal sealed class AppController : IDisposable
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);
         telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);
-        disposed=true;canvas?.Terminate();timer.Stop();epoch.Cancel();learner.Cancel();audio?.Dispose();audio=null;
+        disposed=true;canvas?.Terminate();activity?.Close();timer.Stop();epoch.Cancel();learner.Cancel();audio?.Dispose();audio=null;
         foreach(var d in drawings)d.Close();drawings.Clear();tray.Visible=false;tray.Dispose();epoch.Dispose();
     }
 }

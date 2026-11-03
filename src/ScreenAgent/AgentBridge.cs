@@ -27,6 +27,13 @@ internal sealed class AgentBridge : Window
     public event System.Action? SessionChanged;
     // Drawing panel requests from the Desk page: "canvas-pending" (the agent has something on the board: open unless manual) and "canvas-panel-toggle" (the page's own button).
     public event System.Action? CanvasPending,CanvasToggle;
+    // Live activity from the Desk page (a tool started, finished, failed; the agent is thinking). Rejected: the message was dropped, the reason names the field.
+    public event System.Action<ActivityNote>? Activity;
+    public event System.Action<string>? ActivityRejected;
+    // Start-up milestones in ms since StartHidden: "environment", "controller", "page" (first page loaded). The app logs them as session.startup.
+    public event System.Action<string,long>? Milestone;
+    bool pageMarked;
+    void Mark(string name){if(startup.IsRunning)Milestone?.Invoke(name,startup.ElapsedMilliseconds);}
     internal CoreWebView2Environment? WebEnvironment {get;private set;}
     internal bool IsTrusted(string url)=>Trusted(url);
     internal Uri DeskOrigin=>origin;
@@ -78,8 +85,11 @@ internal sealed class AgentBridge : Window
             // The page keeps the voice session alive while this window is hidden: no background throttling.
             var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"+TestBrowserArgs);
             InitStage="environment";
+            // The web session cookie is fetched while WebView2 starts (both take a while on a cold start), not after it.
+            Task<WebSession>? prefetch=client.Paired?client.WebSession(lifetime.Token):null;
+            prefetch?.ContinueWith(t=>_=t.Exception,TaskContinuationOptions.OnlyOnFaulted);
             var env=await CoreWebView2Environment.CreateAsync(null,profile,options);
-            WebEnvironment=env;
+            WebEnvironment=env;Mark("environment");
             if(lifetime.IsCancellationRequested)return;
             InitStage="controller";
             // Direct HWND hosting deliberately uses device pixels. WPF's old WebView2 control retained its
@@ -95,7 +105,7 @@ internal sealed class AgentBridge : Window
             // including the initial /device request that otherwise races a later synthetic fixture navigation.
             InstallTestResponses(browser);
             ResizeBrowser();
-            ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";
+            ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";Mark("controller");
             browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri))e.Cancel=true;else{SessionId=null;SessionChanged?.Invoke();}};
             browser.WebMessageReceived+=(_,e)=>
             {
@@ -117,6 +127,9 @@ internal sealed class AgentBridge : Window
                                 else if(m.TryGetProperty("state",out var state)&&state.GetString()=="error")voiceAck?.TrySetResult(false);
                             }
                             break;
+                        case "activity":
+                            if(ActivityParse.TryParse(m,out var activity,out string why))Activity?.Invoke(activity!);else ActivityRejected?.Invoke(why);
+                            break;
                         case "canvas-pending":CanvasPending?.Invoke();break;
                         case "canvas-panel-toggle":CanvasToggle?.Invoke();break;
                         case "mute-ack":if(!m.TryGetProperty("on",out var on)||on.GetBoolean()==requestedMute)muteAck?.TrySetResult(true);break;
@@ -125,7 +138,7 @@ internal sealed class AgentBridge : Window
                 catch{ /* Invalid page message never changes device credentials. */ }
             };
             browser.NewWindowRequested+=(_,e)=>{e.Handled=true;};
-            browser.NavigationCompleted+=(_,_)=>{ResizeBrowser();if(pairStatus is {} status)PairingStatus(status.state,status.text);};
+            browser.NavigationCompleted+=(_,_)=>{ResizeBrowser();if(!pageMarked){pageMarked=true;Mark("page");}if(pairStatus is {} status)PairingStatus(status.state,status.text);};
             browser.PermissionRequested+=(_,e)=>
             {
                 // Explicit prompt for the Desk's own microphone request; WebView2 remembers the answer in its profile.
@@ -136,7 +149,7 @@ internal sealed class AgentBridge : Window
             };
             if(client.Paired)
             {
-                try{await OpenSignedIn(lifetime.Token);}
+                try{await OpenSignedIn(lifetime.Token,prefetch);}
                 catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Unauthorized){client.Disconnect();OpenPairing();}
                 catch{OpenPairing();PairingStatus("error","Desk konnte nicht geladen werden. Bitte erneut verbinden.");}
             }
@@ -222,9 +235,9 @@ internal sealed class AgentBridge : Window
         pairStatus=(state,text);
         browser?.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="pairing-status",state,text}));
     }
-    async Task OpenSignedIn(CancellationToken ct)
+    async Task OpenSignedIn(CancellationToken ct,Task<WebSession>? prefetched=null)
     {
-        var session=await client.WebSession(ct);
+        var session=await (prefetched??client.WebSession(ct));
         pairStatus=null;
         ct.ThrowIfCancellationRequested();
         if(browser is null)return;

@@ -29,7 +29,7 @@ public sealed class CanvasPolicy(bool manual=false)
         return State switch{PanelState.Open=>new(PanelAct.None,"open"),PanelState.Minimized=>new(PanelAct.Restore,"user"),_=>new(PanelAct.ShowFront,"user")};
     }
     public PanelDecision UserToggle()=>State==PanelState.Open?new(PanelAct.Hide,"user"):UserShow();
-    public void Opened(string why){State=PanelState.Open;if(why=="first")FrontDone=true;}
+    public void Opened(string why){State=PanelState.Open;ClosedByUser=false;if(why=="first")FrontDone=true;}   // visible again: the earlier close no longer matters
     public void Minimized(){if(State==PanelState.Open)State=PanelState.Minimized;}
     public void Restored(){if(State==PanelState.Minimized)State=PanelState.Open;}
     public void Hidden(bool byUser){State=PanelState.Hidden;if(byUser)ClosedByUser=true;}

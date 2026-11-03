@@ -1,7 +1,7 @@
 using System.Text.Json;
 namespace ScreenAgent.Core;
 // One line of the live activity overlay, as the Desk page sends it: {"type":"activity","id","phase","label","tool","ms","reason"}.
-public sealed record ActivityEvent(string Id,string Phase,string Label,string Tool,long Ms,string Reason);
+public sealed record ActivityNote(string Id,string Phase,string Label,string Tool,long Ms,string Reason);
 public enum RowKind { Running, Done, Fail }
 public readonly record struct ActivityRowView(string Id,string Text,RowKind Kind,double Opacity);
 public static class ActivityParse
@@ -14,7 +14,7 @@ public static class ActivityParse
         return s.Length<=max?s:s[..max];
     }
     // false: the reason says why the message was dropped (logged as activity.invalid; the page's text itself is not).
-    public static bool TryParse(JsonElement m,out ActivityEvent? ev,out string reason)
+    public static bool TryParse(JsonElement m,out ActivityNote? ev,out string reason)
     {
         ev=null;reason="";
         string phase=Str(m,"phase",16).ToLowerInvariant();
@@ -35,7 +35,7 @@ public sealed class ActivityBoard(int maxRows=4,int doneMs=2500,int failMs=8000,
     readonly List<Row> rows=[];
     public int MaxRows=>maxRows;
     // true when this event made a row appear that was not on screen before (counted as activity.shown).
-    public bool Apply(ActivityEvent e,long now)
+    public bool Apply(ActivityNote e,long now)
     {
         Prune(now);
         if(e.Phase is "thinking" or "heard")
@@ -91,10 +91,10 @@ public sealed class ActivityBoard(int maxRows=4,int doneMs=2500,int failMs=8000,
 public static class ActivityLocal
 {
     public const string MainPrompt="local:main-prompt";
-    public static ActivityEvent? FromTrace(string type,IReadOnlyDictionary<string,object?>? data)
+    public static ActivityNote? FromTrace(string type,IReadOnlyDictionary<string,object?>? data)
     {
         string Step(string label)=>"Main Agent · "+label;
-        ActivityEvent Start(string label)=>new(MainPrompt,"start",Step(label),"",0,"");
+        ActivityNote Start(string label)=>new(MainPrompt,"start",Step(label),"",0,"");
         switch(type)
         {
             case "main.prompt.received":return Start("Prompt kommt an");
