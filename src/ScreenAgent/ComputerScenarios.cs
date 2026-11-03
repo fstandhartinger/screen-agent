@@ -348,7 +348,7 @@ internal static partial class ComputerSelftest
             Ok("start confirmed with the code: the run is armed and acts",Code(arm)==ComputerCodes.Done&&Code(live)==ComputerCodes.Done,Brief(arm)+" · "+Brief(live));
             var ext=await Do(rs,"start",goal:"Übernimm den Rechner und öffne "+U("site.localhost","/fields")+" und öffne auch "+U("mail.localhost","/inbox"),seq:2,extend:true);string ce2=CodeNow();
             bool beforeScope=agent.Run!.Scope.ContainsHost("mail.localhost"),beforeHead=Ui(()=>overlay.Texts[0]).Contains("mail.localhost");
-            var extDone=await Confirm(rs,ext);
+            var extDone=await Confirm(rs,ext);await WaitFor(()=>Ui(()=>overlay.Texts[0]).Contains("mail.localhost"),2000);   // the overlay updates on the UI thread, a moment after the result
             bool afterScope=agent.Run!.Scope.ContainsHost("mail.localhost"),afterHead=Ui(()=>overlay.Texts[0]).Contains("mail.localhost");
             Ok("an extension asks too: scope and goal change only after the code, then the overlay shows the new goal",Code(ext)==ComputerCodes.NeedsConfirm&&Rule(ext)=="run-extend"&&!beforeScope&&!beforeHead&&Code(extDone)==ComputerCodes.Done&&afterScope&&afterHead,Brief(ext)+" · before "+beforeScope+"/"+beforeHead+" after "+afterScope+"/"+afterHead);
             // void: the gateway dropped the ask; the code, the overlay and the chord are dead
