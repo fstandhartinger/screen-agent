@@ -19,7 +19,8 @@ internal sealed class CaptionOverlay : Window
         WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.NoResize;AllowsTransparency=true;Background=Brushes.Transparent;
         Topmost=true;ShowInTaskbar=false;ShowActivated=false;Focusable=false;SizeToContent=SizeToContent.WidthAndHeight;
         Content=new Border{Background=new SolidColorBrush(System.Windows.Media.Color.FromArgb(215,20,20,26)),CornerRadius=new CornerRadius(16),Padding=new Thickness(18,8,18,10),Child=label};
-        SourceInitialized+=(_,_)=>AffinityOk=OverlayStyle.Apply(this,true);
+        new WindowInteropHelper(this).EnsureHandle();
+        AffinityOk=OverlayStyle.Apply(this,true);   // confirmed before the first word: a subtitle that a screenshot could catch is never shown
         SizeChanged+=(_,_)=>Place();
         fade.Tick+=(_,_)=>{if(IsVisible&&Environment.TickCount64-touched>FadeAfterMs)Dismiss();};
     }
@@ -27,6 +28,7 @@ internal sealed class CaptionOverlay : Window
     public void Present(string text)
     {
         if(string.IsNullOrWhiteSpace(text))return;
+        if(!AffinityOk){OverlayStyle.RefusedOnce("caption");return;}
         touched=Environment.TickCount64;label.Text=text;Opacity=1;
         if(!IsVisible){fade.Start();Show();}
         Place();

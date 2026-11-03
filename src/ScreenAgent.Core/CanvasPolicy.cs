@@ -33,5 +33,9 @@ public sealed class CanvasPolicy(bool manual=false)
     public void Minimized(){if(State==PanelState.Open)State=PanelState.Minimized;}
     public void Restored(){if(State==PanelState.Minimized)State=PanelState.Open;}
     public void Hidden(bool byUser){State=PanelState.Hidden;if(byUser)ClosedByUser=true;}
+    // The voice session ended: an open panel goes away, a minimised one stays in the taskbar, minimised, until he restores it (also across sessions).
+    public bool HideAtSessionEnd=>State!=PanelState.Minimized;
+    // The window could not be brought up (no browser): back to what was before, so the next diagram tries again instead of finding "open" and "front done".
+    public void OpenFailed(PanelState before,bool frontBefore){State=before;FrontDone=frontBefore;}
     public void SessionStarted()=>ClosedByUser=false;
 }

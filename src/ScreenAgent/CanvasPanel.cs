@@ -93,6 +93,7 @@ internal sealed class CanvasPanel : Window
         if(!Prepare())return false;
         if(bridge.WebEnvironment is null)return false;
         IntPtr before=Native.GetForegroundWindow();
+        var stateBefore=policy.State;bool frontBefore=policy.FrontDone;
         hiding=false;
         if(!IsVisible)
         {
@@ -104,6 +105,11 @@ internal sealed class CanvasPanel : Window
         ResizeBrowser();
         if(!initStarted){initStarted=true;await InitBrowser();}
         else if(browser is not null&&!PageLoaded&&!navigating)Navigate();   // the page did not load (Desk down, offline): try again. A signed-out Desk page is no failure; it says so itself.
+        if(browser is null&&!initStarted)   // the browser could not be created: no blank window, and the "front" permission is not used up, so the next diagram tries again
+        {
+            hiding=true;Hide();hiding=false;policy.OpenFailed(stateBefore,frontBefore);
+            return false;
+        }
         // A browser that took the focus on creation gives it back.
         var now=Native.GetForegroundWindow();
         if(before!=IntPtr.Zero&&now!=before&&now==Handle){Native.SetForegroundWindow(before);ForegroundRestores++;}
@@ -114,6 +120,7 @@ internal sealed class CanvasPanel : Window
     public void HidePanel(bool byUser)
     {
         if(!IsVisible)return;
+        if(!byUser&&!policy.HideAtSessionEnd){Log("kept-minimized","session-end");return;}   // minimised by him: it stays in the taskbar, minimised, until he restores it
         SaveBounds();hiding=true;Hide();hiding=false;
         policy.Hidden(byUser);Log(byUser?"closed":"hidden",byUser?"user":"session-end");
         if(byUser)ClosedByUser?.Invoke();

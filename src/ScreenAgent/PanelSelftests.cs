@@ -113,6 +113,9 @@ internal static class PanelSelftests
                 Case("pending-while-minimised-changes-nothing",!p1&&!p2&&Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Minimized&&Native.GetForegroundWindow()==fgNow,
                     new{p1,p2,iconic=Native.IsIconic(panel.Hwnd),fg=Native.GetForegroundWindow().ToInt64(),was=fgNow.ToInt64()});
                 Case("ignored-pending-is-logged-with-the-reason",panelLog.Contains("canvas.panel:ignored:pending:minimized"),new{panelLog});
+                // The end of a voice session leaves a minimised panel alone: still in the taskbar, still minimised, and the next session's diagram changes nothing.
+                panel.HidePanel(false);panel.SessionStarted();bool p4=await panel.Pending();await Task.Delay(300);
+                Case("session-end-keeps-a-minimised-panel-minimised",!p4&&panel.IsVisible&&Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Minimized&&panelLog.Contains("canvas.panel:kept-minimized:session-end"),new{p4,visible=panel.IsVisible,iconic=Native.IsIconic(panel.Hwnd),state=panel.PanelState.ToString()});
                 // The taskbar button brings it back (the equivalent here: the window state the click sets).
                 panel.WindowState=WindowState.Normal;await Task.Delay(500);
                 Case("restored-by-the-user-is-open-again",!Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Open&&panelLog.Contains("canvas.panel:restored:user"),new{state=panel.PanelState.ToString(),panelLog});

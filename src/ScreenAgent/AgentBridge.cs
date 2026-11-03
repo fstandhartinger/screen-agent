@@ -29,6 +29,7 @@ internal sealed class AgentBridge : Window
     public event System.Action? SessionChanged;
     // Drawing panel requests from the Desk page: "canvas-pending" (the agent has something on the board: open unless manual) and "canvas-panel-toggle" (the page's own button).
     public event System.Action? CanvasPending,CanvasToggle;
+    public event System.Action<bool>? MicState;   // the page says its mute button changed: muted
     // Live activity from the Desk page (a tool started, finished, failed; the agent is thinking). Rejected: the message was dropped, the reason names the field.
     public event System.Action<ActivityNote>? Activity;
     public event System.Action<string>? ActivityRejected;
@@ -135,6 +136,7 @@ internal sealed class AgentBridge : Window
                             break;
                         case "canvas-pending":CanvasPending?.Invoke();break;
                         case "canvas-panel-toggle":CanvasToggle?.Invoke();break;
+                        case "mic-state":if(m.TryGetProperty("muted",out var micMutedValue)&&micMutedValue.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)MicState?.Invoke(micMutedValue.GetBoolean());break;   // the page's own mute button
                         case "mute-ack":if(!m.TryGetProperty("on",out var on)||on.GetBoolean()==requestedMute)muteAck?.TrySetResult(true);break;
                     }
                 }

@@ -170,18 +170,7 @@ internal sealed class DeviceClient : IDisposable
         using var reply=await RawContent(HttpMethod.Post,"api/device/dictate",form,ct);
         return Parse(reply);
     }
-    internal static ChunkReply Parse(RawReply reply)
-    {
-        var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
-        string[] providers=[];
-        if(obj&&j!.Value.TryGetProperty("providers",out var p)&&p.ValueKind==JsonValueKind.Object)
-            providers=p.EnumerateObject().Select(x=>x.Name+":"+(x.Value.ValueKind==JsonValueKind.Object?(x.Value.TryGetProperty("ok",out var ok)&&ok.ValueKind==JsonValueKind.True?"ok":x.Value.TryGetProperty("status",out var st)&&st.ValueKind==JsonValueKind.Number?st.GetInt32().ToString():x.Value.TryGetProperty("reason",out var rs)&&rs.ValueKind==JsonValueKind.String?(rs.GetString()??"").Take(30).Aggregate("",(a,c)=>a+c):"fail"):"?")).Take(8).ToArray();
-        string text=obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"";
-        bool degraded=obj&&j!.Value.TryGetProperty("degraded",out var d)&&d.ValueKind==JsonValueKind.True;
-        double seconds=obj&&j!.Value.TryGetProperty("seconds",out var sec)&&sec.ValueKind==JsonValueKind.Number?sec.GetDouble():0;
-        long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;
-        return new(reply.Status,text,providers,degraded,seconds,ms,reply.Code);
-    }
+    internal static ChunkReply Parse(RawReply reply)=>ChunkReplyParse.From(reply.Status,reply.Json?.RootElement,reply.Code);
     // Live caption of the last seconds of audio (PCM16 16 kHz mono WAV, at most 12 s). Status, text and the cost the gateway measured, if it says.
     public sealed record CaptionReply(int Status,string Text,long Ms,double Seconds,double? Cost,string? Code);
     public async Task<CaptionReply> Caption(byte[] wav,string[] visibleIds,string[] recentTerms,CancellationToken ct)

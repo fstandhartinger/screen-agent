@@ -107,7 +107,7 @@ public sealed class DictationStore(string folder,Func<DateTimeOffset>? now=null)
             foreach(var p in m.Paths.Where(File.Exists)){var c=Wav.Repair(p);if(c.Repaired)repaired++;pcm+=c.Pcm;}
             if(pcm<DictationGate.MinSeconds*Wav.BytesPerSecond){Delete(m);dropped++;continue;}
             m.State="failed";m.Stage="recover";m.Reason="Die App wurde beendet, bevor das Diktat verarbeitet war";m.Seconds=Wav.Seconds(pcm);m.Bytes=BytesOf(m);
-            if(m.Ended==default)m.Ended=File.GetLastWriteTimeUtc(m.Paths.Last());
+            m.Ended=clock().ToUniversalTime();   // the retention clock of a recovered recording starts now, not at the crash: it is announced before it can be swept
             Save(m);failed++;
         }
         foreach(var p in Directory.EnumerateFiles(folder,"*.wav"))
@@ -118,7 +118,7 @@ public sealed class DictationStore(string folder,Func<DateTimeOffset>? now=null)
             // <stamp>-<id>.wav (id = 8 hex); anything else keeps its whole name as id
             var stem=Path.GetFileNameWithoutExtension(name);var parts=stem.Split('-');
             var m=new DictationMeta{Id=parts.Length>=3?parts[2]:stem,Stamp=parts.Length>=2?parts[0]+"-"+parts[1]:"",State="failed",Stage="recover",Reason="Aufnahme ohne Protokoll gefunden (Absturz oder Stromausfall)",
-                Files=[name],Seconds=Wav.Seconds(c.Pcm),Bytes=new FileInfo(p).Length,Started=File.GetCreationTimeUtc(p),Ended=File.GetLastWriteTimeUtc(p),Folder=folder};
+                Files=[name],Seconds=Wav.Seconds(c.Pcm),Bytes=new FileInfo(p).Length,Started=File.GetCreationTimeUtc(p),Ended=clock().ToUniversalTime(),Folder=folder};
             Save(m);orphans++;failed++;
         }
         return new(repaired,failed,orphans,dropped);

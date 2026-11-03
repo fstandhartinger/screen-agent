@@ -122,7 +122,7 @@ public class ErrorsLoggedTests
             string s=File.ReadAllText(f);string rel=Rel(f);
             if(rel.EndsWith("Native.cs"))continue;   // the P/Invoke declaration
             if(Regex.IsMatch(s,@"\bMessageBox\("))Assert.True(s.Contains("\"ui.window\""),rel+": MessageBox without ui.window");
-            if(rel.EndsWith("DictationWindow.cs"))Assert.Equal(2,Regex.Matches(s,@"""ui\.window""").Count);   // ShowFailure, ShowResult
+            if(rel.EndsWith("DictationWindow.cs"))Assert.Equal(3,Regex.Matches(s,@"""ui\.window""").Count);   // ShowFailure, ShowResult, ShowNotice
             // text shown in the Desk window instead of the page
             if(Regex.IsMatch(s,@"Content=new System\.Windows\.Controls\.TextBlock"))Assert.True(Regex.Matches(s,@"""desk-text""").Count>=Regex.Matches(s,@"Content=new System\.Windows\.Controls\.TextBlock").Count,rel+": desk text without log");
         }

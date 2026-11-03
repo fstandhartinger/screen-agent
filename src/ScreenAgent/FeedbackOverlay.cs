@@ -81,6 +81,7 @@ internal sealed class FeedbackOverlay : Window
 internal static class ScreenFlash
 {
     static FeedbackOverlay? current;
+    public static void CloseCurrent(){var c=current;current=null;try{c?.Close();}catch(Exception){ /* already gone */ }}
     public static (bool Shown,string Why) Show(Rectangle monitor,BitmapSource thumb)
     {
         var screen=System.Windows.Forms.Screen.AllScreens.FirstOrDefault(s=>s.Bounds==monitor)??System.Windows.Forms.Screen.FromRectangle(monitor);

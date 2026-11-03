@@ -11,14 +11,15 @@ internal sealed class CaptionHost : IDisposable
     const int WindowSeconds=6,MaxBytes=Wav.BytesPerSecond*WindowSeconds;
     readonly DeviceClient client;readonly Telemetry telemetry;readonly System.Windows.Threading.Dispatcher ui;readonly CaptionMode mode;
     readonly Func<(string[] Ids,string[] Terms)> context;
-    readonly CaptionPolicy policy=new();readonly CaptionStats stats=new();readonly CaptionStitcher stitch=new();
+    readonly CaptionPolicy policy=new();readonly CaptionStats stats=new();readonly CaptionStitcher stitch=new(60,4000);
     readonly object gate=new();
     readonly byte[] ring=new byte[MaxBytes];
     int filled;
     CaptionOverlay? overlay;
     WasapiCapture? tap;
     readonly System.Threading.Timer timer;
-    bool active,dictating,sending;long statsAt,startedAt;
+    bool active,dictating,sending;long statsAt,startedAt,tapRetryAt;
+    readonly List<DictationCaptions> dictations=[];   // the dictations whose own text the answers are added to (live ones and ones that ended a moment ago)
     public CaptionHost(AppConfig config,DeviceClient client,Telemetry telemetry,System.Windows.Threading.Dispatcher ui,Func<(string[] Ids,string[] Terms)> context)
     {
         this.client=client;this.telemetry=telemetry;this.ui=ui;this.context=context;mode=CaptionModes.Parse(config.Captions);
@@ -27,8 +28,7 @@ internal sealed class CaptionHost : IDisposable
     public bool Enabled=>mode!=CaptionMode.Off;
     public bool Disabled=>policy.Disabled;
     public string Text{get{lock(gate)return stitch.Text;}}
-    public int Mark(){lock(gate)return stitch.Mark();}
-    public string Slice(int from,int to){lock(gate)return stitch.Slice(from,to);}
+    public bool TapRunning=>tap is not null;
     // Called from the 100 ms app tick: which source runs. A muted microphone or an ended session/dictation stops it.
     public void Update(bool dictatingNow,bool voiceOn,bool muted)
     {
@@ -37,10 +37,17 @@ internal sealed class CaptionHost : IDisposable
         if(!dictatingNow&&!voiceOn)policy.NewSession();   // a switched-off session is over when nothing is running any more
         if(want&&!active)Begin();else if(!want&&active)End();
         bool tapWanted=want&&!dictatingNow;
-        if(tapWanted&&tap is null)StartTap();else if(!tapWanted&&tap is not null)StopTap();
+        if(tapWanted&&tap is null&&Environment.TickCount64>=tapRetryAt)StartTap();else if(!tapWanted&&tap is not null)StopTap();
     }
-    // A new dictation starts a new text.
-    public void NewText(){lock(gate){stitch.Reset();filled=0;}}
+    // A new dictation starts a new text: its own stitcher, fed by the answers for as long as it is live (and EndGraceMs after).
+    const int EndGraceMs=4000;
+    public DictationCaptions BeginDictation()
+    {
+        var d=new DictationCaptions();
+        lock(gate){stitch.Reset();filled=0;dictations.RemoveAll(x=>!x.Accepts(Environment.TickCount64));dictations.Add(d);}
+        return d;
+    }
+    public void EndDictation(DictationCaptions d)=>d.End(Environment.TickCount64,EndGraceMs);
     void Begin()
     {
         active=true;startedAt=Environment.TickCount64;statsAt=startedAt;
@@ -62,7 +69,11 @@ internal sealed class CaptionHost : IDisposable
             c.RecordingStopped+=(_,_)=>{};
             c.StartRecording();tap=c;
         }
-        catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="tap"}));tap=null;policy.NewSession();StopTap();}
+        catch(Exception ex)
+        {
+            tapRetryAt=Environment.TickCount64+30000;   // the microphone is held by another program or blocked: one try, one log line, then 30 s of quiet (not every 100 ms tick)
+            telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="tap",["retryInSeconds"]=30}));tap=null;StopTap();
+        }
     }
     void StopTap(){var t=tap;tap=null;try{t?.StopRecording();t?.Dispose();}catch(Exception ex){Diag.Fail("caption-stop-tap",ex);}}
     public void Feed(byte[] buffer,int count)
@@ -88,13 +99,14 @@ internal sealed class CaptionHost : IDisposable
             long now=Environment.TickCount64;
             if(active&&now-statsAt>=60000){statsAt=now;telemetry.Event("caption.stats",stats.Snapshot(policy));}
             if(!active||sending||!policy.ShouldSend(now))return;
-            byte[] pcm;lock(gate){if(filled<Wav.BytesPerSecond)return;pcm=ring.AsSpan(0,filled).ToArray();}
+            byte[] pcm;DictationCaptions[] owners;
+            lock(gate){if(filled<Wav.BytesPerSecond)return;pcm=ring.AsSpan(0,filled).ToArray();owners=dictations.Where(x=>x.Accepts(now)).ToArray();}   // the audio belongs to the dictations live when it was cut
             sending=true;int id=policy.Begin(now);
-            _=Send(id,Wav.FromPcm(pcm));
+            _=Send(id,Wav.FromPcm(pcm),owners);
         }
         catch(Exception ex){Diag.Fail("caption-tick",ex);}   // the next tick tries again
     }
-    async Task Send(int id,byte[] wav)
+    async Task Send(int id,byte[] wav,DictationCaptions[] owners)
     {
         try
         {
@@ -111,6 +123,7 @@ internal sealed class CaptionHost : IDisposable
             if(show&&!string.IsNullOrWhiteSpace(r.Text))
             {
                 string shown;lock(gate){stitch.Add(r.Text);shown=stitch.Last(110);}
+                foreach(var d in owners)d.Add(r.Text);
                 _=ui.BeginInvoke(new System.Action(()=>{try{(overlay??=new CaptionOverlay()).Present(shown);}catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="overlay"}));}}));
             }
         }

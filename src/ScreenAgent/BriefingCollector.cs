@@ -17,6 +17,7 @@ internal sealed class BriefingCollector
     readonly Func<string,bool?> distroRunning;
     readonly PrivacyPolicy policy;
     readonly object gate=new();
+    readonly Timeboxed.SingleFlight flight=new();   // a source whose thread is stuck is not started again until it returns
     string? screenText;
     int inFlight;
     long tailBytes=-1;
@@ -28,15 +29,26 @@ internal sealed class BriefingCollector
     }
     // What OCR read in the last frame; gone as soon as the picture is forgotten (pause, lock, excluded window, end of session).
     public void NoteScreenText(string? text){lock(gate)screenText=string.IsNullOrWhiteSpace(text)?null:text;}
+    string? ScreenTextNow(){lock(gate)return screenText;}
     public Task Start(string sid,CancellationToken ct)=>config.Briefing?Run(sid,null,ct):Task.CompletedTask;
     public Task Request(string sid,string commandId,CancellationToken ct)=>config.Briefing?Run(sid,commandId,ct):Task.CompletedTask;
     async Task Run(string sid,string? commandId,CancellationToken ct)
     {
-        if(Interlocked.Increment(ref inFlight)>2){Interlocked.Decrement(ref inFlight);log("briefing.fail",new(){["stage"]="start",["reason"]="busy"});return;}
+        if(Interlocked.Increment(ref inFlight)>2)
+        {
+            Interlocked.Decrement(ref inFlight);log("briefing.fail",new(){["stage"]="start",["reason"]="busy"});
+            // The Desk's tool call waits for an answer to its command id: an empty one beats a timeout.
+            if(commandId is not null){try{await Post(sid,BriefingPayload.Build([],[],null,null,commandId),0,Stopwatch.StartNew(),ct);}catch(OperationCanceledException){ /* cancelled: the session or call ended */ }}
+            return;
+        }
         try
         {
-            var clock=Stopwatch.StartNew();string? text;lock(gate)text=screenText;
-            var got=await Task.Factory.StartNew(Collect,ct,TaskCreationOptions.LongRunning,TaskScheduler.Default);   // blocks up to the budget: its own thread, not the pool
+            var clock=Stopwatch.StartNew();
+            var collecting=Task.Factory.StartNew(Collect,ct,TaskCreationOptions.LongRunning,TaskScheduler.Default);   // blocks up to the budget: its own thread, not the pool
+            // The start briefing is sent right after the session starts, before the first picture was read: give OCR the time the sources need anyway.
+            if(commandId is null&&ScreenTextNow() is null){for(int waited=0;waited<1500&&ScreenTextNow() is null&&!collecting.IsCompleted;waited+=50)await Task.Delay(50,ct);}
+            var got=await collecting;
+            string? text=ScreenTextNow();
             foreach(var (stage,reason) in got.Failures)log("briefing.fail",new(){["stage"]=stage,["reason"]=reason});
             var body=BriefingPayload.Build(got.Windows,got.Tabs,got.Main,text,commandId);
             int bytes=JsonSerializer.SerializeToUtf8Bytes(body).Length;
@@ -77,7 +89,7 @@ internal sealed class BriefingCollector
     internal Gathered Collect()
     {
         Interlocked.Exchange(ref tailBytes,-1);
-        return BriefingGather.Run(Windows,Tabs,ct=>MainSessionSource.Read(config.MainSessionPath,distroRunning,ct,s=>Interlocked.Exchange(ref tailBytes,s.BytesRead)));
+        return BriefingGather.Run(Windows,Tabs,ct=>MainSessionSource.Read(config.MainSessionPath,distroRunning,ct,s=>Interlocked.Exchange(ref tailBytes,s.BytesRead)),flight:flight);
     }
     Part<List<BriefingWindow>> Windows(CancellationToken ct)
     {

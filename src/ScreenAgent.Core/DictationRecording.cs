@@ -89,5 +89,28 @@ public sealed class DictationRecording : IDisposable
         foreach(var p in Meta.Paths.Where(File.Exists))foreach(var b in Wav.ReadBlocks(p))yield return b;
         if(memory.Length>0)yield return Wav.Samples(memory.ToArray());
     }
+    // The disk refused part of the recording: write what only reached memory to the first folder that takes it, as one more file of this recording (a retry reads
+    // files). Returns that path; null when nothing was in memory or every folder refused (the memory then stays, for the retry of this run).
+    public string? DumpMemory(params string[] folders)
+    {
+        lock(gate)
+        {
+            if(memory.Length==0)return null;
+            foreach(var folder in folders)
+            {
+                try
+                {
+                    Directory.CreateDirectory(folder);
+                    string path=Path.Combine(folder,$"{Meta.Stamp}-{Meta.Id}-mem.wav");
+                    File.WriteAllBytes(path,Wav.FromPcm(memory.ToArray()));
+                    Meta.Files.Add(string.Equals(Path.GetFullPath(folder),Path.GetFullPath(store.Folder),StringComparison.OrdinalIgnoreCase)?Path.GetFileName(path):path);
+                    memory.SetLength(0);
+                    return path;
+                }
+                catch(Exception ex){log("dictation.disk",new(){["id"]=Meta.Id,["stage"]="dump",["exType"]=ex.GetType().Name,["bytes"]=memory.Length,["path"]=folder});}
+            }
+            return null;
+        }
+    }
     public void Dispose(){lock(gate){stopped=true;try{writer?.Dispose();}catch(Exception){ /* the writer is dropped anyway */ }writer=null;}memory.Dispose();}
 }
