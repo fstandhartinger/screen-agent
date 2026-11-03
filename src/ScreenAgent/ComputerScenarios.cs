@@ -542,6 +542,7 @@ internal static partial class ComputerSelftest
                 for(int i=0;i<120;i++)
                 {
                     var rd=await Do(r6,"action","chrome_read",new{tab=popId});string txt=Res(rd);
+                    if(Rule(rd)=="step-report"){await Do(r6,"resume");i--;continue;}   // the 25-step stop is not a read: he says go and the loop goes on
                     if(txt.Contains("GEHEIM-MARKER-N6"))n6Leaks++;
                     else if(Code(rd)==ComputerCodes.Done&&txt.Contains("Ignoriere"))inScopeReads++;
                     else if(txt.Contains("ausgeblendet"))hiddenReads++;
