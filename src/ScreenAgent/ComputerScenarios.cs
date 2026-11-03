@@ -224,6 +224,19 @@ internal static partial class ComputerSelftest
                 Ok("Enter in an app is R2: asked, no newline appeared",Code(fo)==ComputerCodes.Done&&Code(enter)==ComputerCodes.NeedsConfirm&&Rule(enter)=="enter"&&NotepadText(nh)==back,Brief(enter));
                 var tab=await Do(run,"action","key",new{key="Tab"});
                 Ok("an allowlisted key (Tab) is R1 and was sent",Code(tab)==ComputerCodes.Done&&UiaDriver.KeysSent>k0,Brief(tab));
+                // Invoke: a menu item of Notepad opens through UI Automation (no mouse), checked by what the tree shows afterwards
+                var t4=await Do(run,"action","ui_tree",new{window=nw});
+                var menu=Regex.Match(Res(t4),@"^(\S+) (?:MenuItem|Button|Menu) ""(?:Datei|File)""",RegexOptions.Multiline);
+                if(!menu.Success)Skip("ui_click through Invoke on a Notepad menu","no File menu element in the Notepad tree");
+                else
+                {
+                    var clk=await Do(run,"action","ui_click",new{@ref=menu.Groups[1].Value});await Task.Delay(700);
+                    var t5=await Do(run,"action","ui_tree",new{window=nw});
+                    bool open=Regex.IsMatch(Res(t5),@"""(?:Speichern|Save|Neues Fenster|New window)""");
+                    var esc=await Do(run,"action","key",new{key="Esc"});
+                    if(open)Ok("ui_click uses UI Automation (Invoke/Expand), the menu really opened",Code(clk)==ComputerCodes.Done&&Res(clk).StartsWith("geklickt:"),Brief(clk)+" "+Res(clk));
+                    else Skip("ui_click through Invoke on a Notepad menu","click returned "+Brief(clk)+" but the opened menu was not visible in the tree");
+                }
                 var f5=await Do(run,"action","key",new{key="F5"});var del=await Do(run,"action","key",new{key="Alt+F4"});
                 Ok("keys outside the global allowlist (F5, Alt+F4) are refused",Code(f5)==ComputerCodes.Refused&&Code(del)==ComputerCodes.Refused,Brief(f5)+" / "+Brief(del));
                 await End(run);

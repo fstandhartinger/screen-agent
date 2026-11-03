@@ -36,7 +36,7 @@ internal sealed class ComputerAgent:IDisposable
     UiaDriver? uia;
     ChromeCdp? cdp;
     string? cdpFailure;
-    bool pendingHere,handsOnNoted,confirmKeyNoted;
+    bool pendingHere,handsOnNoted,confirmKeyNoted,hotkeyChecked;
     Func<ActionBinding?,string>? pendingExec;
     Plan? pendingPlan;
     long lastBeat;
@@ -137,7 +137,7 @@ internal sealed class ComputerAgent:IDisposable
                 Send(w,Reply(true,ComputerCodes.Done,null,"extend",ScopeText(cur),null,cur.StateName));return;
             }
             var nr=new ComputerRun(cmd.Run,goal,more);
-            run=nr;runSid=w.Sid;pendingHere=here;handsOnNoted=confirmKeyNoted=false;cdp=null;cdpFailure=null;pendingExec=null;pendingPlan=null;
+            run=nr;runSid=w.Sid;pendingHere=here;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;cdp=null;cdpFailure=null;pendingExec=null;pendingPlan=null;
             uia=new UiaDriver(policy,()=>nr.Revoked);
             ComputerGuard.Attach(nr);hook?.ComputerRunStarted();
         }
@@ -172,6 +172,12 @@ internal sealed class ComputerAgent:IDisposable
         var r=run;if(r is null)return;
         string? sid=runSid;
         if(r.Revoked){EndRun("killed");return;}
+        // The second stop path (RegisterHotKey) may be taken by another program: say so once per run; the keyboard hook path remains.
+        if(!hotkeyChecked&&hook is not null&&Environment.TickCount64-r.StartedAt>1000)
+        {
+            hotkeyChecked=true;Log("computer.hotkey",new(){["run"]=r.Id,["registered"]=hook.ComputerHotkeyOk,["error"]=hook.ComputerHotkeyError,["hook"]=hook.Healthy,["mouse"]=hook.MouseHookHealthy});
+            if(!hook.ComputerHotkeyOk)notice?.Invoke("Zweite Stopp-Taste nicht frei · Strg+Win+Umschalt+X über den Tastatur-Hook");
+        }
         if(!enabled()){Stop("off");return;}
         if(sid is null||sessionId()!=sid||!voiceOn()){r.Close("voice");EndRun("voice");return;}
         if(Native.OpenInputDesktop(0,false,0x100) is var d&&d==IntPtr.Zero){r.Close("lock");EndRun("lock");return;}
