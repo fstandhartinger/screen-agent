@@ -9,9 +9,9 @@ internal static class HighlightBuilder
     public static HighlightImages? Build(DrawOverlay overlay,Bitmap clean)
     {
         var points=overlay.Strokes.SelectMany(s=>s).ToArray();
-        if(points.Length==0)return null;
+        if(points.Length==0){Diag.Event("highlight.build.fail",new(){["why"]="no-points"});return null;}
         overlay.Composite(clean);
-        if(HighlightGeometry.Crop(points.Min(p=>p.X),points.Max(p=>p.X),points.Min(p=>p.Y),points.Max(p=>p.Y),clean.Width,clean.Height) is not {} box)return null;
+        if(HighlightGeometry.Crop(points.Min(p=>p.X),points.Max(p=>p.X),points.Min(p=>p.Y),points.Max(p=>p.Y),clean.Width,clean.Height) is not {} box){Diag.Event("highlight.build.fail",new(){["why"]="no-crop",["points"]=points.Length,["w"]=clean.Width,["h"]=clean.Height});return null;}
         using var crop=clean.Clone(new Rectangle(box.x,box.y,box.w,box.h),PixelFormat.Format32bppArgb);
         byte[] png=PrivacyCapture.Png(crop);
         int w=crop.Width,h=crop.Height;
