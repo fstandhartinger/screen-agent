@@ -10,11 +10,14 @@ internal sealed class KeyboardHook : IDisposable
     readonly HotkeyBindings bindings;
     readonly Native.HookProc callback;
     readonly Thread thread;
-    IntPtr hook;
+    IntPtr hook,mouseHook;
+    readonly Native.HookProc mouseCallback;
     uint threadId;
+    volatile bool mouseHealthy;
+    public bool ComputerHotkeyOk {get;private set;}
     volatile bool swallowCaps,muteLive,baseline,disposed,healthy;
     bool capsOwned,muteOwned;
-    readonly System.Threading.Timer watchdog;
+    readonly System.Threading.Timer watchdog,runWatchdog;
     readonly ConcurrentQueue<Func<IReadOnlyList<ActionKind>>> commands=new();
     // Selftests drive the hook with SendInput, which Windows flags as injected. Production ignores injected keys
     // (other tools, remote desktop) and only ever accepts physical ones.
@@ -29,7 +32,7 @@ internal sealed class KeyboardHook : IDisposable
     public KeyboardHook(HotkeyBindings? bindings=null)
     {
         this.bindings=bindings??new HotkeyBindings(new AppConfig().Hotkeys);
-        baseline=Native.Caps; callback=Callback;
+        baseline=Native.Caps; callback=Callback; mouseCallback=MouseCallback;
         thread=new Thread(Run){IsBackground=true,Name="ScreenAgent keyboard hook"};thread.Start();
         consumer=Task.Run(async ()=>
         {
@@ -38,6 +41,8 @@ internal sealed class KeyboardHook : IDisposable
         });
         // Reinstall proactively: Windows silently removes timed-out LL hooks, with no query API.
         watchdog=new System.Threading.Timer(_=>{if(threadId!=0)Native.PostThreadMessage(threadId,0x8001,UIntPtr.Zero,IntPtr.Zero);},null,30000,30000);
+        // During a computer-use run the kill key must not be dead for up to 30 s: reinstall every 5 s.
+        runWatchdog=new System.Threading.Timer(_=>{if(threadId!=0&&ComputerGuard.Current is not null)Native.PostThreadMessage(threadId,0x8001,UIntPtr.Zero,IntPtr.Zero);},null,5000,5000);
     }
     // Tray menu: start or stop the session without the chord. Runs on the consumer thread, like key events.
     public void SetSession(bool on)=>commands.Enqueue(()=>state.SetSession(on));
@@ -48,13 +53,44 @@ internal sealed class KeyboardHook : IDisposable
         while(Native.GetMessage(out var m,IntPtr.Zero,0,0)>0)
         {
             if(m.message==0x8001) Install();
+            else if(m.message==0x8002) RunStarted();
+            else if(m.message==0x8003) RunEnded();
+            else if(m.message==0x0312&&(int)m.wParam==ComputerNative.HotkeyKill) ComputerGuard.Kill("hotkey-registered");
         }
+        RunEnded();
         if(hook!=IntPtr.Zero)Native.UnhookWindowsHookEx(hook);
     }
     void Install()
     {
         if(hook!=IntPtr.Zero)Native.UnhookWindowsHookEx(hook);
         hook=Native.SetWindowsHookEx(13,callback,Native.GetModuleHandle(null),0);healthy=hook!=IntPtr.Zero;
+        if(mouseHook!=IntPtr.Zero)InstallMouse();
+    }
+    // Computer use: a mouse hook (hands-on) and RegisterHotKey for Ctrl+Win+Shift+X as the kill key's second, independent path. Both only while a run exists.
+    public void ComputerRunStarted(){if(threadId!=0)Native.PostThreadMessage(threadId,0x8002,UIntPtr.Zero,IntPtr.Zero);}
+    public void ComputerRunEnded(){if(threadId!=0)Native.PostThreadMessage(threadId,0x8003,UIntPtr.Zero,IntPtr.Zero);}
+    public bool MouseHookHealthy=>mouseHealthy;
+    void InstallMouse()
+    {
+        if(mouseHook!=IntPtr.Zero)Native.UnhookWindowsHookEx(mouseHook);
+        mouseHook=Native.SetWindowsHookEx(14,mouseCallback,Native.GetModuleHandle(null),0);mouseHealthy=mouseHook!=IntPtr.Zero;
+    }
+    void RunStarted()
+    {
+        InstallMouse();
+        ComputerHotkeyOk=ComputerNative.RegisterHotKey(IntPtr.Zero,ComputerNative.HotkeyKill,0x2|0x4|0x8|0x4000,0x58);   // Ctrl+Shift+Win+X, no repeat; false = another program owns the chord
+    }
+    void RunEnded()
+    {
+        if(mouseHook!=IntPtr.Zero){Native.UnhookWindowsHookEx(mouseHook);mouseHook=IntPtr.Zero;mouseHealthy=false;}
+        if(ComputerHotkeyOk){ComputerNative.UnregisterHotKey(IntPtr.Zero,ComputerNative.HotkeyKill);ComputerHotkeyOk=false;}
+    }
+    IntPtr MouseCallback(int code,IntPtr w,IntPtr l)
+    {
+        if(code<0)return Native.CallNextHookEx(mouseHook,code,w,l);
+        var m=Marshal.PtrToStructure<ComputerNative.MouseLl>(l);
+        ComputerGuard.OnMouse((int)w.ToInt64(),m.pt.X,m.pt.Y,(m.flags&1)!=0);
+        return Native.CallNextHookEx(mouseHook,code,w,l);
     }
     IntPtr Callback(int code,IntPtr w,IntPtr l)
     {
@@ -63,6 +99,7 @@ internal sealed class KeyboardHook : IDisposable
         if(k.extra==Native.Marker)return Native.CallNextHookEx(hook,code,w,l); // our own mask key
         if((k.flags&0x10)!=0&&!AcceptInjectedForTests)return Native.CallNextHookEx(hook,code,w,l); // other tools' synthetic keys
         bool down=w.ToInt64() is 0x100 or 0x104;
+        ComputerGuard.OnKey((int)k.vk,down,(k.flags&0x10)!=0);   // kill, confirm and hands-on: flags only, in the callback
         if(down)
             foreach(var (_,role) in bindings.Resync(vk=>(Native.GetAsyncKeyState(vk)&0x8000)!=0,(int)k.vk))
                 queue.Enqueue((new(role,false,Environment.TickCount64),Native.GetForegroundWindow()));
@@ -109,7 +146,7 @@ internal sealed class KeyboardHook : IDisposable
     }
     public void Dispose()
     {
-        if(disposed)return;disposed=true;watchdog.Dispose();
+        if(disposed)return;disposed=true;watchdog.Dispose();runWatchdog.Dispose();
         if(threadId!=0)Native.PostThreadMessage(threadId,0x12,UIntPtr.Zero,IntPtr.Zero);
         thread.Join(1000);stop.Cancel();try{consumer.Wait(1000);}catch(AggregateException){}
         if(state.Session&&bindings.DrawVk==0x14)Native.RestoreCaps(baseline);stop.Dispose();

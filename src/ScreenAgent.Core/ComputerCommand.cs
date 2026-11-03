@@ -72,7 +72,7 @@ public static class CdpMethods
         "Browser.getVersion","Target.getTargets","Target.createTarget","Target.attachToTarget","Target.detachFromTarget","Target.activateTarget","Target.closeTarget","Target.setDiscoverTargets",
         "Page.enable","Page.navigate","Page.getFrameTree","Page.createIsolatedWorld","Page.captureScreenshot","Page.handleJavaScriptDialog","Page.bringToFront",
         "DOM.enable","DOM.getDocument","DOM.getNodeForLocation","DOM.describeNode","DOM.resolveNode","DOM.getBoxModel","DOM.scrollIntoViewIfNeeded","DOM.focus",
-        "Accessibility.enable","Accessibility.getFullAXTree",
+        "Accessibility.enable","Accessibility.getFullAXTree","Accessibility.getPartialAXTree","Page.getLayoutMetrics",
         "Input.dispatchMouseEvent","Input.dispatchKeyEvent","Input.insertText",
         "Runtime.callFunctionOn","Runtime.releaseObject"
     };
@@ -97,7 +97,7 @@ public static class AllowDialog
     public static List<int> Headers(IReadOnlyList<DialogNode> tree)
     {
         var hits=new List<int>();
-        for(int i=0;i<tree.Count;i++)if(tree[i].Role is "Text" or "Heading" or "Group" or "Pane"&&Array.IndexOf(Headings,tree[i].Name)>=0)hits.Add(i);
+        for(int i=0;i<tree.Count;i++)if(tree[i].Role is "Text" or "Heading" or "Group" or "Pane" or "Window"&&Array.IndexOf(Headings,tree[i].Name)>=0)hits.Add(i);
         return hits;
     }
     public static DialogMatch Find(IReadOnlyList<DialogNode> tree,string portOwnerImage,string[]? buttonNames=null)

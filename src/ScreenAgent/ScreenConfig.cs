@@ -16,4 +16,12 @@ internal static class ScreenConfig
         }
         return config;
     }
+    // Only this one key is rewritten, everything else in config.json stays as the user wrote it.
+    public static void SetComputerUse(bool on)
+    {
+        string file=Path.Combine(Folder,"config.json");
+        var node=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        node["ComputerUse"]=on;
+        string temp=file+".tmp";File.WriteAllText(temp,node.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));File.Move(temp,file,true);
+    }
 }

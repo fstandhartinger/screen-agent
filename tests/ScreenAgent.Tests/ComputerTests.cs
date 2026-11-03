@@ -359,6 +359,11 @@ public class AllowDialogTests
         var fake=Real(process:"notepad",image:@"C:\Windows\System32\notepad.exe");
         Assert.Equal("wrong-process",AllowDialog.Find(fake,Chrome).Reason);
     }
+    [Fact] public void NotepadWindowTitledLikeTheDialogIsNotClicked()
+    {
+        var fake=new List<DialogNode>{new("Window","Remote-Fehlerbehebung zulassen?",false,"notepad",@"C:\Windows\System32\notepad.exe",0,-1),new("Button","Zulassen",false,"notepad",@"C:\Windows\System32\notepad.exe",1,0)};
+        Assert.Equal("wrong-process",AllowDialog.Find(fake,Chrome).Reason);
+    }
     [Fact] public void AnotherChromeExeIsNotTheOwnerOfThePort()
     {
         var other=@"C:\Users\x\Downloads\chrome.exe";
