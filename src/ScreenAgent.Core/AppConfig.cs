@@ -24,6 +24,14 @@ public sealed class AppConfig
     public bool TraceUpload {get;init;}=true;
     // The drawing panel opens by itself when the agent draws ("auto"); "manual": only the chord, the tray or the Desk button open it.
     public string CanvasPanel {get;init;}="auto";
+    // Dictation recordings are written to %LOCALAPPDATA%\ScreenAgent\dictation from the first sample. After DictationMaxMinutes of one dictation the next file is started
+    // (the recording never stops by itself). Kept locally: a processed one KeepHours, a failed one KeepFailedDays, everything together at most DictationCapMb (oldest successful first).
+    public double DictationMaxMinutes {get;init;}=60;
+    public double DictationKeepHours {get;init;}=24;
+    public double DictationKeepFailedDays {get;init;}=14;
+    public int DictationCapMb {get;init;}=2048;
+    // Live subtitles from the microphone: "dictation+voice" (default), "dictation" or "off". Needs the gateway's caption route; the audio of the last 6 s goes there while someone speaks.
+    public string Captions {get;init;}="dictation+voice";
     // Accessible names of the Claude Code message box in VS Code (the only place the Main Agent prompt is ever typed into).
     // null in config.json means the default.
     public string[] MainAgentInputNames {get=>inputNames;init=>inputNames=value??DefaultInputNames;}
@@ -53,6 +61,8 @@ public sealed class AppConfig
         if(!new[]{"default","xai","openai","gemini","gemini-fast"}.Contains(c.VoiceProvider))throw new InvalidDataException("Unbekannter Sprach-Anbieter");
         if(c.Indicator is not ("session" or "notices"))throw new InvalidDataException("Indicator must be session or notices");
         if(c.CanvasPanel is not ("auto" or "manual"))throw new InvalidDataException("CanvasPanel must be auto or manual");
+        if(!CaptionModes.Valid(c.Captions))throw new InvalidDataException("Captions must be dictation+voice, dictation or off");
+        if(c.DictationMaxMinutes<0.05||c.DictationMaxMinutes>600||c.DictationKeepHours<0||c.DictationKeepFailedDays<1||c.DictationCapMb<50)throw new InvalidDataException("Invalid dictation retention settings");
         if(c.MainAgentInputNames.Length==0||c.MainAgentInputNames.Any(string.IsNullOrWhiteSpace))throw new InvalidDataException("MainAgentInputNames needs at least one name");
         if(SameHotkeys(c.Hotkeys,LegacyHotkeys())||SameHotkeys(c.Hotkeys,V012Hotkeys()))c=c.WithHotkeys(DefaultHotkeys(),true);
         else if(HotkeyBindings.Required.Any(k=>!c.Hotkeys.ContainsKey(k)))
@@ -80,7 +90,8 @@ public sealed class AppConfig
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
-        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,LearnThreshold=LearnThreshold,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
+        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
     };
+    public RetentionOptions Retention()=>new(TimeSpan.FromHours(DictationKeepHours),TimeSpan.FromDays(DictationKeepFailedDays),DictationCapMb*(1L<<20));
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};
 }

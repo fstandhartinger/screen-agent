@@ -1,7 +1,7 @@
 name: Windows spike
 on:
   push:
-    branches: [spike, app, main, 'fusion/**']
+    branches: [spike, app, main, 'fusion/**', 'v017/**']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -102,6 +102,13 @@ jobs:
           $code = $LASTEXITCODE
           if ($code -eq 2) { Write-Warning 'Hotkey selftest skipped; see hotkeys.json for the runner limitation. Manual checklist remains required.'; exit 0 }
           elseif ($code -ne 0) { throw 'Hotkey selftest failed' }
+      - name: Dictation selftest (real recorder and chunker, stand-in Desk, retry, retention, failure window, subtitle)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Invoke-SA --selftest-dictation testdata/e2e-actions.wav | Tee-Object artifacts/dictation.json
+          if ($LASTEXITCODE -ne 0) { throw 'Dictation selftest failed' }
       - name: Desk pairing, native DPI bounds, window and status toast selftest
         shell: pwsh
         run: |

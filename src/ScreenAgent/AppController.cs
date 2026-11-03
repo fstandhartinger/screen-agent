@@ -42,7 +42,9 @@ internal sealed class AppController : IDisposable
     readonly RunLog quiet=new();
     TextInjector.Target? target,audioTarget;
     string before="",process="";
-    DictationCapture? audio;
+    DictationFlow? audio;
+    readonly DictationManager dictation;
+    readonly CaptionHost captions;
     string? audioSession;
     Task audioQueue=Task.CompletedTask;
     readonly Telemetry telemetry;
@@ -62,6 +64,9 @@ internal sealed class AppController : IDisposable
         this.config=config;this.client=client;this.bridge=bridge;this.hook=hook;this.toast=toast;
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
         telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);
+        captions=new(config,client,telemetry,bridge.Dispatcher,()=>(ids.ToArray(),terms.Take(30).ToArray()));
+        dictation=new(config,client,telemetry,captions,bridge.Dispatcher,(text,level)=>{if(bridge.Dispatcher.CheckAccess())Notice(text,level);else bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,level)));},text=>Balloon(text),
+            (proc,field)=>new DictationContext(proc,field.Length<=500?field:field[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray()),InjectRetry);
         prompts=new(config.MainAgentInputNames,(type,data)=>telemetry.Event(type,data),config.MainAgentAllowStableCode);
         promptChannel=new(client,prompts.Run,(type,data)=>telemetry.Event(type,data),
             (code,text,chars)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,text,chars);}catch{ /* the result still tells */ }})),
@@ -83,6 +88,7 @@ internal sealed class AppController : IDisposable
         {
             try
             {
+                captions.Update(audio!=null,bridge.VoiceOn,micMuted);
                 if(pendingClear is {} pending&&!clearing&&clearRetry.Ready(Environment.TickCount64))_=ClearContext(pending,pendingWhy??"stop");
                 if(needsUnmute&&audio is null&&!unmuting&&audioQueue.IsCompleted&&Environment.TickCount64>=unmuteRetryAt){unmuteRetryAt=Environment.TickCount64+2000;_=Unmute();}
                 if(!hook.Healthy){if(ids.Length>0||audio!=null)Reset("error");await SyncVoice();UpdateStatus();return;}
@@ -102,7 +108,7 @@ internal sealed class AppController : IDisposable
         sessionItem.Click+=(_,_)=>hook.SetSession(!hook.Session);menu.Items.Add(sessionItem);
         pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
         menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset("stop");bridge.Disconnect();});
-        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        var keysSeparator=new System.Windows.Forms.ToolStripSeparator();menu.Items.Add(keysSeparator);
         foreach(var line in KeyHelp(config.Hotkeys))menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(line){Enabled=false});
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Beenden",null,async (_,_)=>{paused=true;Reset();await bridge.Voice(false,config.VoiceProvider);await ClearContext(contextSid??bridge.SessionId);await Unmute();bridge.AllowClose=true;System.Windows.Application.Current.Shutdown();});
@@ -111,6 +117,7 @@ internal sealed class AppController : IDisposable
             var st=Current();statusItem.Text=st.Text;
             sessionItem.Text=hook.Session?"Sitzung beenden":"Sitzung starten";
             pauseItem.Text=hook.Paused?"Fortsetzen":"Pause";
+            dictation.FillTray(menu.Items,keysSeparator);   // failed dictations that can be retried
         };
         tray=new(){Icon=TrayIcons.For(Level.Idle),Text="Screen Agent",Visible=true,ContextMenuStrip=menu};
         // A left click is the obvious thing to try on a tray icon; the menu stays on the right button.
@@ -119,6 +126,7 @@ internal sealed class AppController : IDisposable
         if(config.HotkeysMigrated)Balloon($"Tastenkürzel: Sitzung jetzt {chord} (wie ursprünglich), Diktat an/aus {KeyNames.Display(config.Hotkeys["dictationToggle"])}. Strg+Win allein bleibt frei für Wispr.");
         else if(new HotkeyBindings(config.Hotkeys).CollidesWithWispr)Balloon("Achtung: Strg+Win als Diktat-Taste ist auch die Wispr-Taste. Ändere „Hotkeys“ in config.json (Beispiel: Alt+Win), sonst stören sich beide.");
         else if(!client.Paired)Balloon($"Screen Agent läuft im Tray (Symbol unten rechts, evtl. unter ^). Rechtsklick → Desk öffnen, um das Gerät zu verbinden. Danach: {chord} startet und beendet das Gespräch.");
+        dictation.Startup();
     }
     // The tray lists every key, so the user never has to remember them or read the README.
     static string[] KeyHelp(Dictionary<string,string> k)=>
@@ -133,7 +141,7 @@ internal sealed class AppController : IDisposable
     ];
     void Balloon(string text){tray.BalloonTipTitle="Screen Agent";tray.BalloonTipText=text;tray.BalloonTipIcon=System.Windows.Forms.ToolTipIcon.Info;tray.ShowBalloonTip(8000);}
     Status Current()=>StatusLine.Compute(new(hook.Healthy,client.Paired,bridge.SessionId is not null,hook.Session,paused||hook.Paused,voiceFailed,needsUnmute,
-        schedule.Ready(Environment.TickCount64),locked,audio!=null,drawings.Count>0,ids.Length,KeyNames.Display(config.Hotkeys["session"]),micMuted&&bridge.VoiceOn,KeyNames.Display(config.Hotkeys["mute"]),excluded));
+        schedule.Ready(Environment.TickCount64),locked,audio!=null,drawings.Count>0,ids.Length,KeyNames.Display(config.Hotkeys["session"]),micMuted&&bridge.VoiceOn,KeyNames.Display(config.Hotkeys["mute"]),excluded,dictation.Status));
     // The single place that touches the visible state: tray icon, tray tooltip, and the toast.
     void UpdateStatus()
     {
@@ -142,6 +150,11 @@ internal sealed class AppController : IDisposable
         string tip=st.Text.Length>120?st.Text[..120]:st.Text;
         if(tip!=shownText){shownText=tip;tray.Text=tip;}
         if(notice)return;   // the notice keeps the toast until it expires
+        if(dictation.Status is {} live)   // he is talking, or chunks are still being transcribed: the note says how far, session or not
+        {
+            if(toastText!=live||toastLevel!=Level.Busy||!toast.IsVisible){toastText=live;toastLevel=Level.Busy;toast.Present(live,Level.Busy);}
+            return;
+        }
         if(st.ShowToast&&config.Indicator=="session")
         {
             if(toastText!=st.Text||toastLevel!=st.Level||!toast.IsVisible){toastText=st.Text;toastLevel=st.Level;toast.Present(st.Text,st.Level);}
@@ -203,7 +216,8 @@ internal sealed class AppController : IDisposable
         epoch.Cancel();epoch.Dispose();epoch=new();ocrRunning=false;ocrGen++;capturedAt=0;lastForeground=IntPtr.Zero;learner.Cancel();
         locked=excluded=false;quiet.Break();freshId=null;commandsSid=null;
         foreach(var d in drawings)d.Close();drawings.Clear();
-        QueueAudio(ActionKind.DictationDiscard);
+        // A dictation is independent of the session: a session that ends or changes does not cut his words. Pause and a dead keyboard hook end it, and it is delivered.
+        if(why is "paused" or "error")QueueAudio(ActionKind.DictationStop);
     }
     static string HotkeyEvent(ActionKind a)=>a switch{ActionKind.SessionToggle=>"hotkey.session",ActionKind.PauseToggle=>"hotkey.pause",ActionKind.MuteToggle=>"hotkey.mute",ActionKind.CanvasToggle=>"hotkey.canvas",ActionKind.DictationStart=>"hotkey.dictation.start",ActionKind.DictationStop=>"hotkey.dictation.stop",ActionKind.DictationDiscard=>"hotkey.dictation.discard",ActionKind.DrawStart=>"hotkey.draw.start",ActionKind.DrawStop=>"hotkey.draw.stop",_=>"hotkey."+a.ToString().ToLowerInvariant()};
     void Action(ActionKind action)
@@ -248,38 +262,56 @@ internal sealed class AppController : IDisposable
         {
             if(action==ActionKind.DictationStart)
             {
-                if(audio!=null||!hook.Dictating||target is null||paused||hook.Paused||!client.Paired||!TextInjector.Safe(target,config.Policy()))return;
+                string? refused=audio!=null?"already-recording":!hook.Dictating?"key-released":target is null?"no-target":paused||hook.Paused?"paused":!client.Paired?"not-paired":!TextInjector.Safe(target,config.Policy())?"unsafe-target":null;
+                if(refused!=null)
+                {
+                    telemetry.Event("dictation.refused",new(){["why"]=refused,["process"]=SafeProcess(target)});
+                    Notice(refused switch{"already-recording"=>"Diktat läuft schon","key-released"=>"Diktat nicht gestartet · Taste zu früh losgelassen","no-target"=>"Diktat nicht möglich · kein Textfeld gewählt","paused"=>"Diktat nicht möglich · pausiert","not-paired"=>"Diktat nicht möglich · nicht mit dem Desk verbunden",_=>"Diktat nicht möglich · dieses Feld ist geschützt (Passwort oder erhöhtes Fenster)"},Level.Warn);
+                    return;
+                }
                 audioTarget=target;audioSession=bridge.SessionId;
-                if(!await bridge.Mute(true)){await Unmute();Notice("Diktat · Mikrofon nicht bestätigt",Level.Warn);return;}
-                if(!hook.Dictating||paused||hook.Paused||audioTarget is null||!TextInjector.Safe(audioTarget,config.Policy())||audioSession!=bridge.SessionId){await Unmute();return;}
+                if(!await bridge.Mute(true)){await Unmute();telemetry.Event("dictation.refused",new(){["why"]="mute-unconfirmed"});Notice("Diktat · Mikrofon nicht bestätigt",Level.Warn);return;}
+                if(!hook.Dictating||paused||hook.Paused||audioTarget is null||!TextInjector.Safe(audioTarget,config.Policy()))
+                {await Unmute();telemetry.Event("dictation.refused",new(){["why"]="target-changed"});Notice("Diktat abgebrochen · Ziel hat gewechselt",Level.Warn);return;}
                 process=TextInjector.ProcessName(audioTarget.Window);
                 before=TextInjector.Terminal(audioTarget.Window)?"":TextInjector.Read(audioTarget.Element)??"";
-                audio=new();Notice("Diktat");return;
+                try{audio=dictation.Start(process,before.Length<=500?before:before[^500..],audioSession!=null);}
+                catch(Exception){await Unmute();Notice("Diktat nicht möglich · Mikrofon nicht verfügbar",Level.Warn);return;}   // dictation.fail is logged by the manager
+                Notice("Diktat");return;
             }
-            if(audio is null)return;
-            var recording=audio;audio=null;
-            var bound=audioTarget;string prior=before,proc=process;var ct=epoch.Token;
+            if(audio is null){telemetry.Event("dictation.stop.idle");return;}
+            var flow=audio;audio=null;
+            var bound=audioTarget;string prior=before;
             try
             {
-                byte[] wav=await recording.Finish();
-                if(action==ActionKind.DictationDiscard||bound is null||paused||hook.Paused||audioSession!=bridge.SessionId)return;
-                var context=new DictationContext(proc,prior.Length<=500?prior:prior[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray());
-                _=transcriptions.Enqueue(async ()=>
+                if(action==ActionKind.DictationDiscard){await dictation.Discard(flow,"hotkey");Notice("Diktat verworfen · Aufnahme bleibt 24 h",Level.Idle);return;}
+                await dictation.Stop(flow);
+                // Deliver even if the session ended or changed meanwhile: the words were said. Only the discard chord throws them away.
+                _=transcriptions.Enqueue(()=>dictation.Deliver(flow,async text=>
                 {
-                    try
-                    {
-                        string text=await client.Dictate(wav,context,ct);ct.ThrowIfCancellationRequested();
-                        bool injected=await TextInjector.Inject(bound,text,text.Length>=60&&!TextInjector.Terminal(bound.Window),config.Policy(),inputGate);
-                        Notice(injected?"Diktat eingefügt":"Ziel geändert · Text kopiert");
-                        if(injected)_=learner.Watch(bound,prior,TextInjector.Sanitize(text),ct);
-                    }
-                    catch(OperationCanceledException){}catch{Notice("Diktat fehlgeschlagen",Level.Warn);}
-                });
+                    bool injected=await TextInjector.Inject(bound!,text,text.Length>=60&&!TextInjector.Terminal(bound!.Window),config.Policy(),inputGate);
+                    if(injected)_=learner.Watch(bound!,prior,TextInjector.Sanitize(text),epoch.Token);
+                    return injected;
+                }));
             }
-            finally{recording.Dispose();needsUnmute=true;}
+            finally{needsUnmute=true;}
         }
         catch(OperationCanceledException){}
-        catch{audio?.Dispose();audio=null;await Unmute();Notice("Diktat fehlgeschlagen",Level.Warn);}
+        catch(Exception ex)
+        {
+            telemetry.Event("dictation.fail",new(){["stage"]="audio-queue",["reason"]="exception",["exType"]=ex.GetType().Name});
+            dictation.Abort("Unerwarteter Fehler: "+ex.GetType().Name);audio=null;await Unmute();Notice("Diktat fehlgeschlagen · "+ex.GetType().Name,Level.Warn);
+        }
+    }
+    static string SafeProcess(TextInjector.Target? t){try{return t is null?"":TextInjector.ProcessName(t.Window);}catch{return "";}}
+    // A retry (button or tray) has no window of its own: it goes into the one in front only when that is still the process he dictated into and the field is safe;
+    // otherwise the manager shows the text with a copy button. Nothing reaches the clipboard here.
+    async Task<bool> InjectRetry(string proc,string text)
+    {
+        TextInjector.Target? t;
+        try{t=TextInjector.Bind();if(TextInjector.ProcessName(t.Window)!=proc||!TextInjector.Safe(t,config.Policy()))return false;}
+        catch{return false;}
+        return await TextInjector.Inject(t,text,text.Length>=60&&!TextInjector.Terminal(t.Window),config.Policy(),inputGate);
     }
     // Called every tick: the bits of session life that are not a hotkey (dialog started in the Desk window, mute state, lifecycle log).
     async Task Lifecycle()
@@ -308,6 +340,8 @@ internal sealed class AppController : IDisposable
     }
     async Task ToggleMute()
     {
+        // The microphone of the voice session is muted for the whole dictation (so the agent does not hear it). The key must not undo that.
+        if(audio!=null||hook.Dictating){telemetry.Event("hotkey.mute.ignored",new(){["why"]="dictating",["muted"]=micMuted});Notice("Mikro bleibt stumm während des Diktats",Level.Muted);return;}
         if(!Active||!bridge.VoiceOn){Notice("Kein Gespräch aktiv · nichts zu stummschalten",Level.Warn);return;}
         var muted=await bridge.ToggleMicMute();
         if(muted is null){Notice("Stumm nicht möglich · Desk antwortet nicht",Level.Warn);return;}
@@ -549,7 +583,7 @@ internal sealed class AppController : IDisposable
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);
         telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);
-        disposed=true;canvas?.Terminate();timer.Stop();epoch.Cancel();learner.Cancel();audio?.Dispose();audio=null;
+        disposed=true;canvas?.Terminate();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
         foreach(var d in drawings)d.Close();drawings.Clear();tray.Visible=false;tray.Dispose();epoch.Dispose();
     }
 }

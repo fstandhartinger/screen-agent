@@ -198,3 +198,14 @@ public class DictationFlowTests
         now+=24*3600_000L;Assert.Empty(again.Peek(10));   // a day later they are gone
     }
 }
+public class DictationConfigTests
+{
+    [Fact] public void DefaultsAndOverridesSurviveTheHotkeyMigrationCopy()
+    {
+        var c=AppConfig.Parse("{}");Assert.Equal(60,c.DictationMaxMinutes);Assert.Equal("dictation+voice",c.Captions);Assert.Equal(2048L<<20,c.Retention().CapBytes);
+        var m=AppConfig.Parse("{\"Hotkeys\":{\"session\":\"Ctrl+Win+Shift\",\"dictation\":\"Alt+Win\"},\"DictationMaxMinutes\":5,\"DictationKeepHours\":2,\"DictationKeepFailedDays\":3,\"DictationCapMb\":100,\"Captions\":\"off\"}");
+        Assert.Equal(5,m.DictationMaxMinutes);Assert.Equal("off",m.Captions);Assert.Equal(TimeSpan.FromHours(2),m.Retention().Success);Assert.Equal(TimeSpan.FromDays(3),m.Retention().Failed);Assert.Equal(100L<<20,m.Retention().CapBytes);
+    }
+    [Theory][InlineData("{\"Captions\":\"always\"}")][InlineData("{\"DictationCapMb\":1}")][InlineData("{\"DictationKeepFailedDays\":0}")]
+    public void InvalidSettingsStopStartup(string json)=>Assert.Throws<InvalidDataException>(()=>AppConfig.Parse(json));
+}

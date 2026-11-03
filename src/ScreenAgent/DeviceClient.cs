@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
+using ScreenAgent.Core;
 namespace ScreenAgent;
 internal sealed record DeviceToken(string token,string deviceId,DateTimeOffset expiresAt,string? origin=null);
 internal sealed record PairingStart(string pairId,string pollToken,string browserUrl,long expiresAt);
@@ -26,7 +27,7 @@ internal sealed class DeviceClient : IDisposable
     {
         origin=new Uri(config.DeskUrl).GetLeftPart(UriPartial.Authority);
         this.tokenPath=tokenPath??Path.Combine(ScreenConfig.Folder,"device.bin");
-        http=new(handler??new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(40)};
+        http=new(handler??new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(75)};
         try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(this.tokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}catch{device=null;}
     }
     async Task<T> Read<T>(HttpResponseMessage response,CancellationToken ct)
@@ -98,6 +99,17 @@ internal sealed class DeviceClient : IDisposable
     {
         if(!Paired)throw new InvalidOperationException("Pair this device first");
         using var request=new HttpRequestMessage(method,path){Content=body is null?null:JsonContent.Create(body)};request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",device!.token);
+        return await Exec(request,ct);
+    }
+    // Same for a ready-made body (multipart audio): status and the small JSON answer, never an exception for a refusal.
+    public async Task<RawReply> RawContent(HttpMethod method,string path,HttpContent body,CancellationToken ct)
+    {
+        if(!Paired)throw new InvalidOperationException("Pair this device first");
+        using var request=new HttpRequestMessage(method,path){Content=body};request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",device!.token);
+        return await Exec(request,ct);
+    }
+    async Task<RawReply> Exec(HttpRequestMessage request,CancellationToken ct)
+    {
         using var response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
         JsonDocument? json=null;
         try
@@ -119,6 +131,42 @@ internal sealed class DeviceClient : IDisposable
     {
         using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(wav);audio.Headers.ContentType=new("audio/wav");form.Add(audio,"audio","dictation.wav");form.Add(new StringContent(JsonSerializer.Serialize(context)),"context");
         using var r=await Send(HttpMethod.Post,"api/device/dictate",form,ct);using var j=JsonDocument.Parse(await r.Content.ReadAsStringAsync(ct));return j.RootElement.GetProperty("text").GetString()??"";
+    }
+    // One chunk of a dictation (or the whole of it: Only = no `chunk` field). A refusal is a ChunkReply with the gateway's status and code, a lost connection throws.
+    // Providers: {groq:{ok,ms,status,reason},...} becomes "groq:ok", "openai:503".
+    public async Task<ChunkReply> DictateChunk(ChunkRequest r,DictationContext baseContext,CancellationToken ct)
+    {
+        if(!Paired)return new(401,Code:"not-paired",Failure:"NotPaired");
+        using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(r.Chunk.WavBytes);audio.Headers.ContentType=new("audio/wav");
+        form.Add(audio,"audio","dictation.wav");form.Add(new StringContent(JsonSerializer.Serialize(baseContext with{fieldBefore=r.FieldBefore})),"context");
+        if(!r.Only)form.Add(new StringContent(JsonSerializer.Serialize(new{dictationId=r.DictationId,index=r.Chunk.Index,final=r.Chunk.Final})),"chunk");
+        using var reply=await RawContent(HttpMethod.Post,"api/device/dictate",form,ct);
+        return Parse(reply);
+    }
+    internal static ChunkReply Parse(RawReply reply)
+    {
+        var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
+        string[] providers=[];
+        if(obj&&j!.Value.TryGetProperty("providers",out var p)&&p.ValueKind==JsonValueKind.Object)
+            providers=p.EnumerateObject().Select(x=>x.Name+":"+(x.Value.ValueKind==JsonValueKind.Object?(x.Value.TryGetProperty("ok",out var ok)&&ok.ValueKind==JsonValueKind.True?"ok":x.Value.TryGetProperty("status",out var st)&&st.ValueKind==JsonValueKind.Number?st.GetInt32().ToString():x.Value.TryGetProperty("reason",out var rs)&&rs.ValueKind==JsonValueKind.String?(rs.GetString()??"").Take(30).Aggregate("",(a,c)=>a+c):"fail"):"?")).Take(8).ToArray();
+        string text=obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"";
+        bool degraded=obj&&j!.Value.TryGetProperty("degraded",out var d)&&d.ValueKind==JsonValueKind.True;
+        double seconds=obj&&j!.Value.TryGetProperty("seconds",out var sec)&&sec.ValueKind==JsonValueKind.Number?sec.GetDouble():0;
+        long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;
+        return new(reply.Status,text,providers,degraded,seconds,ms,reply.Code);
+    }
+    // Live caption of the last seconds of audio (PCM16 16 kHz mono WAV, at most 12 s). Status, text and the cost the gateway measured, if it says.
+    public sealed record CaptionReply(int Status,string Text,long Ms,double Seconds,double? Cost,string? Code);
+    public async Task<CaptionReply> Caption(byte[] wav,string[] visibleIds,string[] recentTerms,CancellationToken ct)
+    {
+        using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(wav);audio.Headers.ContentType=new("audio/wav");
+        form.Add(audio,"audio","caption.wav");form.Add(new StringContent(JsonSerializer.Serialize(new{visibleIds,recentTerms})),"context");
+        using var reply=await RawContent(HttpMethod.Post,"api/device/caption",form,ct);
+        var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
+        double? cost=obj&&j!.Value.TryGetProperty("usage",out var u)&&u.ValueKind==JsonValueKind.Object&&u.TryGetProperty("cost",out var c)&&c.ValueKind==JsonValueKind.Number?c.GetDouble()
+            :obj&&j!.Value.TryGetProperty("cost",out var c2)&&c2.ValueKind==JsonValueKind.Number?c2.GetDouble():null;
+        return new(reply.Status,obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"",
+            obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0,obj&&j!.Value.TryGetProperty("seconds",out var s)&&s.ValueKind==JsonValueKind.Number?s.GetDouble():0,cost,reply.Code);
     }
     public void Dispose()=>http.Dispose();
 }
