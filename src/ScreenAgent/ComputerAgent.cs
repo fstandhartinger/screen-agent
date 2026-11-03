@@ -661,7 +661,8 @@ internal sealed class ComputerAgent:IDisposable
         }
         if(policy.ReadDenied(w.Process,w.Title,url))return "ausgeblendet";
         if(policy.SensitiveRead(w.Process,w.Title,url))r.Taint();
-        r.NoteRead(ComputerPolicy.ReadOrigin(w.Process,url));
+        // Only what the run may work on counts as read: the tab in the scope, an app of the scope. The titles of other windows are listed as before (their sensitive ones taint), but they are no origin the run has "read" (a listing of the whole desktop would make every later action a cross-origin one).
+        if(url is not null||r.Scope.ContainsApp(ComputerPolicy.ProcessName(w.Process)))r.NoteRead(ComputerPolicy.ReadOrigin(w.Process,url));
         return UiaDriver.CapTitle(w.Title);
     }
     bool Visible(CdpTab tab,ComputerRun r)=>Domains.HostOf(tab.Url) is {} h&&r.Scope.Reaches(h);   // in the scope or approved by a confirmed open; being a tab the run opened is not enough
