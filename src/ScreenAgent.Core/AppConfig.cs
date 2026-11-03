@@ -45,6 +45,11 @@ public sealed class AppConfig
     public bool MainAgentAllowStableCode {get;init;}=false;
     // Start briefing (v0.1.7): at session start and on request the app tells the Desk which windows and Chrome tabs are open, what OCR last read
     // and the tail of the main Claude Code session. MainSessionPath overrides where that session is looked up (a .jsonl file, a projects folder, an account folder or a home folder).
+    // Computer use (v0.1.7 F): the agent may operate the PC (UI Automation, Chrome through its debugging port) on spoken request, with confirmations and a kill key. Off by default; switched in the tray
+    // ("Computer-Steuerung erlauben"), which also tells the Desk (POST api/device/computer). Never read from the Desk.
+    public bool ComputerUse {get;set;}=false;
+    // Hosts (or domains) that count as sensitive for computer use in addition to the built-in lists: every action there asks. Only ever adds.
+    public string[] ComputerSensitive {get;init;}=[];
     public bool Briefing {get;init;}=true;
     public string? MainSessionPath {get;init;}
     // Florian's spec: Ctrl+Win+Shift (any order) starts and ends the voice session; Ctrl+Win alone stays untouched for Wispr Flow.
@@ -100,7 +105,7 @@ public sealed class AppConfig
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
-        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,Briefing=Briefing,MainSessionPath=MainSessionPath,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
+        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,Briefing=Briefing,MainSessionPath=MainSessionPath,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,ComputerUse=ComputerUse,ComputerSensitive=ComputerSensitive,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
     };
     public RetentionOptions Retention()=>new(TimeSpan.FromHours(DictationKeepHours),TimeSpan.FromDays(DictationKeepFailedDays),DictationCapMb*(1L<<20));
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};

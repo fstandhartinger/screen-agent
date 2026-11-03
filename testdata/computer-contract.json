@@ -1,0 +1,676 @@
+{
+ "contract": 1,
+ "note": "The exact messages between the Desk gateway (agent-desk) and the Screen Agent app. The same file lives in both repos (agent-desk gateway/test/fixtures/computer-contract.json, screen-agent testdata/computer-contract.json). Core tests parse commands and build results from it, the gateway tests produce commands and validate results against it. Change it in BOTH repos or a test fails.",
+ "ids": {
+  "command": "^c[0-9a-f]{16}$",
+  "run": "^r[0-9a-f]{16}$"
+ },
+ "timing": {
+  "beatMs": 5000,
+  "deadAfterMs": 15000,
+  "hotkeySecondResultMs": 120000
+ },
+ "scope": {
+  "post": "/api/device/computer",
+  "body": {
+   "enabled": true
+  },
+  "repostEveryMs": 120000,
+  "note": "the gateway keeps the scope in memory: re-posted every 2 min, after a failed poll and at every new session"
+ },
+ "routes": {
+  "poll": "GET /api/device/session/:sid/commands -> {fresh:false, computer:<command>}",
+  "result": "POST /api/device/session/:sid/computer/:commandId/result",
+  "beat": "POST /api/device/session/:sid/computer/beat",
+  "trace": "POST /api/device/session/:sid/trace and /api/device/log (types computer.*)"
+ },
+ "commands": [
+  {
+   "name": "start",
+   "wire": {
+    "id": "c0000000000000001",
+    "run": "r0123456789abcdef",
+    "seq": 1,
+    "op": "start",
+    "goal": "Übernimm den Computer und öffne mail.google.com.",
+    "scopeWords": [
+     "mail.google.com"
+    ]
+   }
+  },
+  {
+   "name": "extend",
+   "wire": {
+    "id": "c0000000000000002",
+    "run": "r0123456789abcdef",
+    "seq": 2,
+    "op": "start",
+    "extend": true,
+    "goal": "Übernimm den Computer und öffne mail.google.com. Und öffne auch github.com.",
+    "scopeWords": [
+     "mail.google.com",
+     "github.com",
+     "github"
+    ]
+   }
+  },
+  {
+   "name": "stop",
+   "wire": {
+    "id": "c0000000000000003",
+    "run": "r0123456789abcdef",
+    "seq": 3,
+    "op": "stop",
+    "reason": "voice-stop"
+   }
+  },
+  {
+   "name": "beat",
+   "wire": {
+    "id": "c0000000000000004",
+    "run": "r0123456789abcdef",
+    "seq": 4,
+    "op": "beat"
+   }
+  },
+  {
+   "name": "confirm",
+   "wire": {
+    "id": "c0000000000000005",
+    "run": "r0123456789abcdef",
+    "seq": 5,
+    "op": "confirm",
+    "hash": "a1b2c3d4e5f60718",
+    "digits": "47"
+   }
+  },
+  {
+   "name": "resume",
+   "wire": {
+    "id": "c0000000000000006",
+    "run": "r0123456789abcdef",
+    "seq": 6,
+    "op": "resume"
+   }
+  },
+  {
+   "name": "taint",
+   "wire": {
+    "id": "c0000000000000007",
+    "run": "r0123456789abcdef",
+    "seq": 7,
+    "op": "taint",
+    "source": "server_read"
+   }
+  },
+  {
+   "name": "void",
+   "wire": {
+    "id": "c0000000000000008",
+    "run": "r0123456789abcdef",
+    "seq": 8,
+    "op": "void",
+    "hash": "a1b2c3d4e5f60718"
+   }
+  }
+ ],
+ "actions": [
+  {
+   "name": "action.ui_windows",
+   "loop": {},
+   "wire": {
+    "id": "c000000000000000a",
+    "run": "r0123456789abcdef",
+    "seq": 10,
+    "op": "action",
+    "tool": "ui_windows",
+    "args": {}
+   }
+  },
+  {
+   "name": "action.ui_tree",
+   "loop": {
+    "window": "w2"
+   },
+   "wire": {
+    "id": "c000000000000000b",
+    "run": "r0123456789abcdef",
+    "seq": 11,
+    "op": "action",
+    "tool": "ui_tree",
+    "args": {
+     "window": "w2"
+    }
+   }
+  },
+  {
+   "name": "action.ui_click",
+   "loop": {
+    "ref": "e5"
+   },
+   "wire": {
+    "id": "c000000000000000c",
+    "run": "r0123456789abcdef",
+    "seq": 12,
+    "op": "action",
+    "tool": "ui_click",
+    "args": {
+     "ref": "e5"
+    }
+   }
+  },
+  {
+   "name": "action.ui_type",
+   "loop": {
+    "ref": "e5",
+    "text": "Hallo Anna"
+   },
+   "wire": {
+    "id": "c000000000000000d",
+    "run": "r0123456789abcdef",
+    "seq": 13,
+    "op": "action",
+    "tool": "ui_type",
+    "args": {
+     "ref": "e5",
+     "text": "Hallo Anna"
+    }
+   }
+  },
+  {
+   "name": "action.key",
+   "loop": {
+    "key": "Ctrl+F"
+   },
+   "wire": {
+    "id": "c000000000000000e",
+    "run": "r0123456789abcdef",
+    "seq": 14,
+    "op": "action",
+    "tool": "key",
+    "args": {
+     "key": "Ctrl+F"
+    }
+   }
+  },
+  {
+   "name": "action.scroll5",
+   "loop": {
+    "direction": "down",
+    "amount": 3
+   },
+   "wire": {
+    "id": "c000000000000000f",
+    "run": "r0123456789abcdef",
+    "seq": 15,
+    "op": "action",
+    "tool": "scroll",
+    "args": {
+     "dy": 360
+    }
+   }
+  },
+  {
+   "name": "action.scroll6",
+   "loop": {
+    "direction": "up",
+    "tab": "AB12CD34"
+   },
+   "wire": {
+    "id": "c0000000000000010",
+    "run": "r0123456789abcdef",
+    "seq": 16,
+    "op": "action",
+    "tool": "scroll",
+    "args": {
+     "tab": "AB12CD34",
+     "dy": -600
+    }
+   }
+  },
+  {
+   "name": "action.window_focus",
+   "loop": {
+    "window": "w2"
+   },
+   "wire": {
+    "id": "c0000000000000011",
+    "run": "r0123456789abcdef",
+    "seq": 17,
+    "op": "action",
+    "tool": "window_focus",
+    "args": {
+     "window": "w2"
+    }
+   }
+  },
+  {
+   "name": "action.screenshot8",
+   "loop": {},
+   "wire": {
+    "id": "c0000000000000012",
+    "run": "r0123456789abcdef",
+    "seq": 18,
+    "op": "action",
+    "tool": "screenshot",
+    "args": {}
+   }
+  },
+  {
+   "name": "action.screenshot9",
+   "loop": {
+    "window": "w2"
+   },
+   "wire": {
+    "id": "c0000000000000013",
+    "run": "r0123456789abcdef",
+    "seq": 19,
+    "op": "action",
+    "tool": "screenshot",
+    "args": {
+     "window": "w2"
+    }
+   }
+  },
+  {
+   "name": "action.chrome_tabs",
+   "loop": {},
+   "wire": {
+    "id": "c0000000000000014",
+    "run": "r0123456789abcdef",
+    "seq": 20,
+    "op": "action",
+    "tool": "chrome_tabs",
+    "args": {}
+   }
+  },
+  {
+   "name": "action.chrome_open",
+   "loop": {
+    "url": "https://mail.google.com/mail/u/0/#inbox"
+   },
+   "wire": {
+    "id": "c0000000000000015",
+    "run": "r0123456789abcdef",
+    "seq": 21,
+    "op": "action",
+    "tool": "chrome_open",
+    "args": {
+     "url": "https://mail.google.com/mail/u/0/#inbox"
+    }
+   }
+  },
+  {
+   "name": "action.chrome_snapshot",
+   "loop": {
+    "tab": "AB12CD34"
+   },
+   "wire": {
+    "id": "c0000000000000016",
+    "run": "r0123456789abcdef",
+    "seq": 22,
+    "op": "action",
+    "tool": "chrome_snapshot",
+    "args": {
+     "tab": "AB12CD34"
+    }
+   }
+  },
+  {
+   "name": "action.chrome_click",
+   "loop": {
+    "ref": "e7"
+   },
+   "wire": {
+    "id": "c0000000000000017",
+    "run": "r0123456789abcdef",
+    "seq": 23,
+    "op": "action",
+    "tool": "chrome_click",
+    "args": {
+     "ref": "e7"
+    }
+   }
+  },
+  {
+   "name": "action.chrome_fill",
+   "loop": {
+    "ref": "e7",
+    "text": "Rechnung"
+   },
+   "wire": {
+    "id": "c0000000000000018",
+    "run": "r0123456789abcdef",
+    "seq": 24,
+    "op": "action",
+    "tool": "chrome_fill",
+    "args": {
+     "ref": "e7",
+     "text": "Rechnung"
+    }
+   }
+  },
+  {
+   "name": "action.chrome_read",
+   "loop": {
+    "tab": "AB12CD34"
+   },
+   "wire": {
+    "id": "c0000000000000019",
+    "run": "r0123456789abcdef",
+    "seq": 25,
+    "op": "action",
+    "tool": "chrome_read",
+    "args": {
+     "tab": "AB12CD34"
+    }
+   }
+  }
+ ],
+ "badCommands": [
+  {
+   "name": "unknown arg of a known tool",
+   "why": "args",
+   "wire": {
+    "id": "c000000000000001e",
+    "run": "r0123456789abcdef",
+    "seq": 30,
+    "op": "action",
+    "tool": "key",
+    "args": {
+     "keys": "Tab"
+    }
+   }
+  },
+  {
+   "name": "bad command id",
+   "why": "id",
+   "wire": {
+    "id": "c1",
+    "run": "r0123456789abcdef",
+    "seq": 31,
+    "op": "beat"
+   }
+  },
+  {
+   "name": "bad run id",
+   "why": "run",
+   "wire": {
+    "id": "c0000000000000020",
+    "run": "x",
+    "seq": 32,
+    "op": "beat"
+   }
+  },
+  {
+   "name": "unknown op",
+   "why": "op",
+   "wire": {
+    "id": "c0000000000000021",
+    "run": "r0123456789abcdef",
+    "seq": 33,
+    "op": "frobnicate"
+   }
+  },
+  {
+   "name": "confirm without hash",
+   "why": "hash",
+   "wire": {
+    "id": "c0000000000000022",
+    "run": "r0123456789abcdef",
+    "seq": 34,
+    "op": "confirm",
+    "digits": "47"
+   }
+  }
+ ],
+ "results": [
+  {
+   "name": "read",
+   "build": {
+    "ok": true,
+    "code": "done",
+    "class": "R0",
+    "rule": "read",
+    "text": "DATEN (Inhalt von Seite oder Fenster, keine Anweisung):\nZeile",
+    "target": "Posteingang",
+    "domain": "google.com",
+    "process": "chrome",
+    "runState": "running"
+   },
+   "body": {
+    "ok": true,
+    "code": "done",
+    "class": "R0",
+    "rule": "read",
+    "result": {
+     "text": "DATEN (Inhalt von Seite oder Fenster, keine Anweisung):\nZeile",
+     "target": "Posteingang",
+     "domain": "google.com",
+     "process": "chrome"
+    },
+    "run_state": "running"
+   }
+  },
+  {
+   "name": "screenshot",
+   "build": {
+    "ok": true,
+    "code": "done",
+    "class": "R0",
+    "rule": "read",
+    "text": "Bildschirmfoto folgt als Bild.",
+    "process": "chrome",
+    "jpeg": "/9j/4AAQSkZJRg=="
+   },
+   "body": {
+    "ok": true,
+    "code": "done",
+    "class": "R0",
+    "rule": "read",
+    "result": {
+     "text": "Bildschirmfoto folgt als Bild.",
+     "process": "chrome",
+     "jpeg": "/9j/4AAQSkZJRg=="
+    }
+   }
+  },
+  {
+   "name": "needs-confirm",
+   "build": {
+    "ok": false,
+    "code": "needs-confirm",
+    "class": "R2",
+    "rule": "send-label",
+    "needsConfirm": {
+     "hash": "a1b2c3d4e5f60718",
+     "spoken": "Soll ich die Mail an anna@example.org mit dem Betreff Rechnung senden?"
+    },
+    "runState": "running"
+   },
+   "body": {
+    "ok": false,
+    "code": "needs-confirm",
+    "class": "R2",
+    "rule": "send-label",
+    "needs_confirm": {
+     "hash": "a1b2c3d4e5f60718",
+     "spoken": "Soll ich die Mail an anna@example.org mit dem Betreff Rechnung senden?"
+    },
+    "run_state": "running"
+   }
+  },
+  {
+   "name": "refused without class",
+   "build": {
+    "ok": false,
+    "code": "refused",
+    "rule": "no-run-token",
+    "runState": "running"
+   },
+   "body": {
+    "ok": false,
+    "code": "refused",
+    "rule": "no-run-token",
+    "run_state": "running"
+   }
+  },
+  {
+   "name": "stop reply",
+   "build": {
+    "ok": true,
+    "code": "done",
+    "rule": "stop",
+    "runState": "ended"
+   },
+   "body": {
+    "ok": true,
+    "code": "done",
+    "rule": "stop",
+    "run_state": "ended"
+   }
+  },
+  {
+   "name": "hotkey second result",
+   "note": "posted to the id of the action that returned needs-confirm",
+   "build": {
+    "ok": true,
+    "code": "done",
+    "class": "R2",
+    "rule": "send-label",
+    "text": "geklickt",
+    "target": "Senden",
+    "runState": "running"
+   },
+   "body": {
+    "ok": true,
+    "code": "done",
+    "class": "R2",
+    "rule": "send-label",
+    "result": {
+     "text": "geklickt",
+     "target": "Senden"
+    },
+    "run_state": "running"
+   }
+  }
+ ],
+ "badResults": [
+  {
+   "name": "class null",
+   "body": {
+    "ok": false,
+    "code": "refused",
+    "class": null,
+    "rule": "x"
+   }
+  },
+  {
+   "name": "run_state closed",
+   "body": {
+    "ok": true,
+    "code": "done",
+    "run_state": "closed"
+   }
+  },
+  {
+   "name": "unknown key",
+   "body": {
+    "ok": true,
+    "code": "done",
+    "confirm": "47"
+   }
+  },
+  {
+   "name": "needs-confirm with ok true",
+   "body": {
+    "ok": true,
+    "code": "needs-confirm",
+    "needs_confirm": {
+     "hash": "a1b2c3d4e5f60718",
+     "spoken": "x"
+    }
+   }
+  }
+ ],
+ "beats": [
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "running"
+   }
+  },
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "handson"
+   }
+  },
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "paused"
+   }
+  },
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "ended",
+    "why": "voice"
+   }
+  },
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "killed",
+    "why": "hotkey"
+   }
+  }
+ ],
+ "badBeats": [
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "closed"
+   }
+  },
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "confirm-key",
+    "hash": "a1b2c3d4e5f60718"
+   }
+  },
+  {
+   "body": {
+    "run": "r0123456789abcdef",
+    "state": "running",
+    "extra": 1
+   }
+  }
+ ],
+ "traceTypes": [
+  "computer.run.start",
+  "computer.run.extend",
+  "computer.run.stop",
+  "computer.action",
+  "computer.confirm.ask",
+  "computer.confirm.ok",
+  "computer.confirm.no",
+  "computer.confirm.expired",
+  "computer.refused",
+  "computer.kill",
+  "computer.handson",
+  "computer.scope",
+  "computer.taint",
+  "computer.resume",
+  "computer.run.extend.ask",
+  "computer.tab.left_scope",
+  "computer.run.here",
+  "computer.error"
+ ],
+ "hotkey": {
+  "note": "A physical Ctrl+Win+Shift+Y (not injected) confirms the pending ask in the app: the app runs the action and POSTs a SECOND result to the id of the action command that returned needs-confirm. The gateway accepts it once, within 120 s, and never sends digits:'' itself.",
+  "secondResult": "results[hotkey second result]"
+ }
+}

@@ -29,7 +29,10 @@ internal sealed class AppController : IDisposable
     readonly VoiceSync voice=new();
     Level shownLevel=Level.Idle;string shownText="";
     string? toastText;Level toastLevel;bool unmuteNoticed;
-    readonly System.Windows.Forms.ToolStripMenuItem statusItem=new(){Enabled=false},sessionItem=new(),pauseItem=new();
+    readonly System.Windows.Forms.ToolStripMenuItem statusItem=new(){Enabled=false},sessionItem=new(),pauseItem=new(),computerItem=new("Computer-Steuerung erlauben");
+    readonly ComputerAgent computer;
+    readonly ComputerOverlay computerOverlay;
+    bool? scopeSent;bool scopePosting;long scopeRetryAt,scopeRefreshAt;   // the gateway keeps the scope in memory only: re-posted every 2 min, after a failed poll and at every new session
     string? contextSid;
     long unmuteRetryAt;
     bool voiceSyncing;
@@ -79,6 +82,12 @@ internal sealed class AppController : IDisposable
         promptChannel=new(client,prompts.Run,Trace,
             (code,text,chars)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{telemetry.Event("ui.window",new(){["window"]="prompt-fallback",["code"]=code,["chars"]=chars});try{PromptFallbackWindow.Show(code,text,chars);}catch(Exception ex){Diag.Fail("prompt-fallback-window",ex);}})),
             sid=>bridge.SessionId==sid&&bridge.VoiceOn,inputGate);
+        // Computer use: off until he allows it in the tray. The executor owns the run, the policy and the confirmations (see ComputerAgent).
+        computerOverlay=new ComputerOverlay();
+        computer=new(async (url,body)=>{using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);return reply.Ok||reply.Status is 404 or 409;},
+            (type,data)=>telemetry.Event(type,data),inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host,config.ComputerSensitive),computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
+            text=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,Level.Active,"computer"))),new ChromeCdp.ConnectOptions(),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","logs","computer.log"),bridge.Dispatcher);
         // The drawing panel waits while a prompt is typed (it could take the focus back), and opens when the prompt is over.
         inputGate.PromptEnded+=()=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{if(panelQueued is {} q){panelQueued=null;_=ShowCanvas(q.ByUser,q.Why);}}));
         bridge.CanvasPending+=OnCanvasPending;bridge.CanvasToggle+=ToggleCanvas;
@@ -90,7 +99,7 @@ internal sealed class AppController : IDisposable
         }));
         if(config.HotkeyNote is {} hotkeyNote)telemetry.Event("config.note",new(){["why"]=hotkeyNote});
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
-        bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();};
+        bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();scopeRefreshAt=0;computer.Stop("session");};
         hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
         {
             if(audio!=null)return;
@@ -102,6 +111,7 @@ internal sealed class AppController : IDisposable
         {
             try
             {
+                if(client.Paired&&(scopeSent!=config.ComputerUse||config.ComputerUse&&Environment.TickCount64>=scopeRefreshAt)&&!scopePosting&&Environment.TickCount64>=scopeRetryAt)_=PostComputerScope(config.ComputerUse);
                 // Their own guards: a throw in the subtitles or the activity rows must not starve the session logic below (and is logged, once per 30 s per type).
                 try{captions.Update(audio!=null,bridge.VoiceOn,micMuted);}
                 catch(Exception ex){TickFailed("captions",ex);}   // logged: tick.error
@@ -134,6 +144,7 @@ internal sealed class AppController : IDisposable
         menu.Items.Add("Zeichnung zeigen",null,(_,_)=>{_=ShowCanvas(true,"tray");});
         sessionItem.Click+=(_,_)=>hook.SetSession(!hook.Session);menu.Items.Add(sessionItem);
         pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
+        computerItem.Checked=config.ComputerUse;computerItem.Click+=(_,_)=>_=SetComputer(!config.ComputerUse);menu.Items.Add(computerItem);
         menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset("stop");bridge.Disconnect();});
         var keysSeparator=new System.Windows.Forms.ToolStripSeparator();menu.Items.Add(keysSeparator);
         foreach(var line in KeyHelp(config.Hotkeys))menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(line){Enabled=false});
@@ -143,6 +154,7 @@ internal sealed class AppController : IDisposable
         {
             var st=Current();statusItem.Text=st.Text;
             sessionItem.Text=hook.Session?"Sitzung beenden":"Sitzung starten";
+            computerItem.Checked=config.ComputerUse;computerItem.Text=config.ComputerUse?"Computer-Steuerung erlauben (an)":"Computer-Steuerung erlauben";
             pauseItem.Text=hook.Paused?"Fortsetzen":"Pause";
             dictation.FillTray(menu.Items,keysSeparator);   // failed dictations that can be retried
         };
@@ -169,6 +181,8 @@ internal sealed class AppController : IDisposable
         $"{KeyNames.Display(k["dictation"])} halten: Diktat",
         $"{KeyNames.Display(k["dictationToggle"])}: Diktat an/aus",
         $"{(k["draw"]=="Caps"?"Feststelltaste":k["draw"])} halten: zeichnen",
+        "Strg+Win+Umschalt+X: Computer-Steuerung stoppen",
+        "Strg+Win+Umschalt+Y: Computer-Bestätigung (nur echte Tasten)",
     ];
     void Balloon(string text,string why){telemetry.Event("ui.balloon",new(){["msg"]=text,["why"]=why});tray.BalloonTipTitle="Screen Agent";tray.BalloonTipText=text;tray.BalloonTipIcon=System.Windows.Forms.ToolTipIcon.Info;tray.ShowBalloonTip(8000);}
     Status Current()=>StatusLine.Compute(new(hook.Healthy,client.Paired,bridge.SessionId is not null,hook.Session,paused||hook.Paused,voiceFailed,needsUnmute,
@@ -419,6 +433,29 @@ internal sealed class AppController : IDisposable
         telemetry.Event("hotkey.mute.state",new(){["muted"]=micMuted,["source"]="hotkey"});
         Notice(micMuted?"Mikro stumm":"Mikro an",micMuted?Level.Muted:Level.Active,"mute-toggle");
     }
+    // The Desk learns the scope only from here; a lost POST is retried every 30 s while the paired app runs.
+    async Task PostComputerScope(bool on)
+    {
+        scopePosting=true;
+        try
+        {
+            using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var reply=await client.Raw(HttpMethod.Post,"api/device/computer",new{enabled=on},cts.Token);
+            if(reply.Ok){scopeSent=on;scopeRefreshAt=Environment.TickCount64+120000;}else{scopeRetryAt=Environment.TickCount64+30000;telemetry.Event("computer.scope.failed",new(){["status"]=reply.Status,["enabled"]=on});}
+        }
+        catch(Exception e){scopeRetryAt=Environment.TickCount64+30000;telemetry.Event("computer.scope.failed",new(){["status"]=0,["type"]=e.GetType().Name});}
+        finally{scopePosting=false;}
+    }
+    async Task SetComputer(bool on)
+    {
+        if(on)telemetry.Event("ui.window",new(){["window"]="computer-consent"});
+        if(on&&Native.MessageBox(IntPtr.Zero,"Der Agent darf dann auf Zuruf deinen Computer bedienen: Fenster per Windows-Bedienungshilfen und Chrome über dessen Debug-Port. Riskante Aktionen fragen dich vorher mit einem Code. Strg+Win+Umschalt+X stoppt sofort.\r\n\r\nHinweis zu Chrome: Die Fernsteuerung in Chrome schaltest du selbst ein (chrome://inspect/#remote-debugging). Solange sie an ist, kann jedes Programm deines Benutzers mit einem Klick auf „Zulassen“ auf deinen Browser zugreifen.\r\n\r\nErlauben?","Screen Agent · Computer-Steuerung",0x4|0x20|0x10000|0x40000)!=6)return;
+        try{ScreenConfig.SetComputerUse(on);}catch(Exception e){telemetry.Event("computer.scope.failed",new(){["status"]=-1,["type"]=e.GetType().Name});Notice("Einstellung konnte nicht gespeichert werden",Level.Warn,"computer-config",e);return;}
+        config.ComputerUse=on;computerItem.Checked=on;telemetry.Event("computer.scope",new(){["enabled"]=on});
+        if(!on)computer.Stop("off");
+        Notice(on?"Computer-Steuerung erlaubt":"Computer-Steuerung aus",on?Level.Active:Level.Muted,"computer-scope");
+        scopeSent=null;await PostComputerScope(on);
+    }
     // Long poll: the voice agent asks for a fresh picture ("was siehst du jetzt?") through look_at_screen.
     async Task CommandLoop(string sid,CancellationToken ct)
     {
@@ -429,14 +466,15 @@ internal sealed class AppController : IDisposable
                 using var reply=await client.Raw(HttpMethod.Get,"api/device/session/"+Uri.EscapeDataString(sid)+"/commands",null,ct);
                 // The page says voice is on before the gateway has its session (connecting), and a dialog can end: wait, the loop ends with VoiceOn.
                 if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="commands"});await Task.Delay(3000,ct);continue;}
+                if(reply.Ok&&reply.Json is {} cj){if(ComputerWire.Parse(cj.RootElement,out string why) is {} cc)computer.Handle(sid,cc);else if(why.Length>0)telemetry.Event("computer.refused",new(){["rule"]="malformed",["reason"]=why});}
                 if(reply.Ok&&reply.Json is {} bj&&BriefingCommand.Parse(bj.RootElement) is {} briefingId)_=briefing.Request(sid,briefingId,ct);   // answered by a POST of its own, next to whatever else the reply carries
                 if(reply.Ok&&reply.Json is {} pj&&PromptCommand.Parse(pj.RootElement) is {} request)_=promptChannel.Handle(sid,request,ct);   // typing runs on its own; the long poll is parked again at once
                 else if(reply.Ok&&reply.Json is {} j&&j.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.True&&j.RootElement.TryGetProperty("id",out var id)&&id.ValueKind==System.Text.Json.JsonValueKind.String)
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
-                else if(!reply.Ok)await Task.Delay(3000,ct);
+                else if(!reply.Ok){scopeRefreshAt=0;await Task.Delay(3000,ct);}   // a gateway restart shows here first: the scope is posted again on the next tick
             }
             catch(OperationCanceledException){return;}   /* cancelled */
-            catch(Exception ex){telemetry.Event("screen.commands.fail",Redact.Of(ex));try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}   /* cancelled */}
+            catch(Exception ex){scopeRefreshAt=0;telemetry.Event("screen.commands.fail",Redact.Of(ex));try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}   /* cancelled */}
         }
     }
     // Drawing panel. Auto-open only when allowed (config, not closed by him this session) and only with the capture exclusion confirmed.
@@ -681,7 +719,7 @@ internal sealed class AppController : IDisposable
     public void Dispose()
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);
-        disposed=true;canvas?.Terminate();activity?.Close();ScreenFlash.CloseCurrent();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
+        disposed=true;computer.Dispose();computerOverlay.Dispose();canvas?.Terminate();activity?.Close();ScreenFlash.CloseCurrent();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
         // After the dictation and the captions are gone: their last events (dictation.fail stage=shutdown) are in the queue the flush and the final save see.
         telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);telemetry.Dispose();
         foreach(var d in drawings)d.Close();drawings.Clear();tray.Visible=false;tray.Dispose();epoch.Dispose();
