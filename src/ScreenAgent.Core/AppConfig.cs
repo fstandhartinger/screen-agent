@@ -24,6 +24,10 @@ public sealed class AppConfig
     public bool TraceUpload {get;init;}=true;
     // The drawing panel opens by itself when the agent draws ("auto"); "manual": only the chord, the tray or the Desk button open it.
     public string CanvasPanel {get;init;}="auto";
+    // Live activity overlay: what the agent is doing right now (tool calls, typing the Main Agent prompt), small rows above the status note.
+    public bool ActivityOverlay {get;init;}=true;
+    // Purple flash plus a small thumbnail when the agent looks at the screen: "visible" (default: session start, on request, highlight), "all" (every frame sent), "off".
+    public string ScreenshotFeedback {get;init;}="visible";
     // Accessible names of the Claude Code message box in VS Code (the only place the Main Agent prompt is ever typed into).
     // null in config.json means the default.
     public string[] MainAgentInputNames {get=>inputNames;init=>inputNames=value??DefaultInputNames;}
@@ -53,6 +57,7 @@ public sealed class AppConfig
         if(!new[]{"default","xai","openai","gemini","gemini-fast"}.Contains(c.VoiceProvider))throw new InvalidDataException("Unbekannter Sprach-Anbieter");
         if(c.Indicator is not ("session" or "notices"))throw new InvalidDataException("Indicator must be session or notices");
         if(c.CanvasPanel is not ("auto" or "manual"))throw new InvalidDataException("CanvasPanel must be auto or manual");
+        if(!ScreenAgent.Core.ScreenshotFeedback.Modes.Contains(c.ScreenshotFeedback))throw new InvalidDataException("ScreenshotFeedback must be visible, all or off");
         if(c.MainAgentInputNames.Length==0||c.MainAgentInputNames.Any(string.IsNullOrWhiteSpace))throw new InvalidDataException("MainAgentInputNames needs at least one name");
         if(SameHotkeys(c.Hotkeys,LegacyHotkeys())||SameHotkeys(c.Hotkeys,V012Hotkeys()))c=c.WithHotkeys(DefaultHotkeys(),true);
         else if(HotkeyBindings.Required.Any(k=>!c.Hotkeys.ContainsKey(k)))
@@ -80,7 +85,7 @@ public sealed class AppConfig
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
-        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,LearnThreshold=LearnThreshold,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
+        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,LearnThreshold=LearnThreshold,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
     };
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};
 }

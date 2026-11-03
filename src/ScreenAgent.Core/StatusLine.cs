@@ -2,7 +2,7 @@ namespace ScreenAgent.Core;
 public enum Level { Idle, Active, Busy, Paused, Warn, Muted }
 public readonly record struct Status(string Text,Level Level,bool ShowToast);
 public sealed record StatusInputs(bool HookHealthy,bool Paired,bool DeskLoggedIn,bool SessionRequested,bool Paused,bool VoiceFailed,
-    bool NeedsUnmute,bool ServicesReachable,bool Locked,bool Dictating,bool Drawing,int IdCount,string SessionHotkey,bool Muted=false,string MuteHotkey="",bool Excluded=false);
+    bool NeedsUnmute,bool ServicesReachable,bool Locked,bool Dictating,bool Drawing,int IdCount,string SessionHotkey,bool Muted=false,string MuteHotkey="",bool Excluded=false,bool Starting=false,int StartingSeconds=0);
 // One place decides what the user is told, so the tray tooltip, the toast and the tests cannot drift apart.
 // Order matters: a stuck warning must never hide the answer to "did my hotkey do anything?".
 public static class StatusLine
@@ -19,6 +19,8 @@ public static class StatusLine
         if(s.Paused)return new("Pausiert",Level.Paused,true);
         if(s.Muted)return new($"Mikro stumm{(s.MuteHotkey==""?"":" · "+s.MuteHotkey+" hebt auf")}",Level.Muted,true);
         if(s.VoiceFailed)return new("Desk-Stimme startet nicht · Tray → Desk öffnen, Mikrofon erlauben",Level.Warn,true);
+        // The first session after launch can take seconds (WebView2, page, microphone): say so at once, then count.
+        if(s.Starting)return new(s.StartingSeconds>=3?$"Sitzung startet … {s.StartingSeconds} s":"Sitzung startet …",Level.Busy,true);
         if(s.NeedsUnmute)return new("Desk-Mikro stumm · Tray → Desk öffnen",Level.Warn,true);
         if(!s.ServicesReachable)return new("Desk/Registry nicht erreichbar",Level.Warn,true);
         if(s.Locked)return new("Bildschirm gesperrt",Level.Active,true);
