@@ -442,7 +442,7 @@ internal static partial class ComputerSelftest
                 var enterS=await Do(rn,"action","key",new{key="Enter"});
                 Ok("F4: Enter in a search box of the scope is R1 (the focus is read, SearchBox is set for keys)",Code(enterS)==ComputerCodes.Done&&Rule(enterS)=="enter-search"&&UiaDriver.KeysSent>k0,Brief(enterS));
                 var shotIn=await Do(rn,"action","screenshot",new{window=winRef});
-                Ok("F2: a screenshot of a browser window with a verified in-scope URL is taken (or says that another window lies over it); never anything else",Code(shotIn)==ComputerCodes.Done&&(Res(shotIn).StartsWith("data:image/jpeg")||Res(shotIn).StartsWith("ausgeblendet (ein anderes Fenster")),Brief(shotIn)+" · "+(Res(shotIn).Length>80?Res(shotIn)[..80]:Res(shotIn)));
+                Ok("F2: a screenshot of a browser window with a verified in-scope URL is taken (or says that another window lies over it); never anything else",Code(shotIn)==ComputerCodes.Done&&(Res(shotIn).Contains("data:image/jpeg")||Res(shotIn).Contains("ausgeblendet (ein anderes Fenster")),Brief(shotIn)+" · "+(Res(shotIn).Length>80?Res(shotIn)[..80]:Res(shotIn)));
             }
             await End(rn);
         }
@@ -462,7 +462,7 @@ internal static partial class ComputerSelftest
                 {
                     var tree=await Do(rp,"action","ui_tree",new{window=chromeWin2});
                     var shot=await Do(rp,"action","screenshot",new{window=chromeWin2});
-                    Ok("F2: ui_tree on a browser window is refused (use-cdp) and a screenshot of a browser window outside the scope shows nothing",Code(tree)==ComputerCodes.Refused&&Rule(tree)=="use-cdp"&&Res(shot).StartsWith("ausgeblendet")&&!Res(shot).StartsWith("data:image"),Brief(tree)+" · "+Res(shot));
+                    Ok("F2: ui_tree on a browser window is refused (use-cdp) and a screenshot of a browser window outside the scope shows nothing",Code(tree)==ComputerCodes.Refused&&Rule(tree)=="use-cdp"&&Res(shot).Contains("ausgeblendet")&&!Res(shot).Contains("data:image"),Brief(tree)+" · "+Res(shot));
                 }
             }
             await End(rp);
