@@ -40,7 +40,8 @@ public class ComputerFixPolicyTests
             Assert.Equal((ActionClass.R2,"tainted"),(P.Classify(c,sc).Class,P.Classify(c,sc).Rule));
             Assert.Equal(ActionClass.R1,P.Classify(c with{Tainted=false},sc).Class);
         }
-        Assert.Equal((ActionClass.R2,"tainted"),(P.Classify(new("chrome_open"){OpenUrl="https://example.org/",Tainted=true},sc).Class,P.Classify(new("chrome_open"){OpenUrl="https://example.org/",Tainted=true},sc).Rule));
+        Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://example.org/",Tainted=true},sc).Class);   // an open carries no data: path and query are refused unless he spoke them
+        Assert.Equal("url-path",P.Classify(new("chrome_open"){OpenUrl="https://example.org/Zm9v",Tainted=true},sc).Rule);
         Assert.Equal(ActionClass.R0,P.Classify(Chrome("chrome_read","https://example.org/") with{Tainted=true},sc).Class);
         Assert.Equal(ActionClass.R1,P.Classify(new ActionContext("scroll"){Process="chrome",Url="https://example.org/",Tainted=true},sc).Class);
     }

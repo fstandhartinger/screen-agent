@@ -369,8 +369,9 @@ internal static partial class ComputerSelftest
             string rk=await Start("Übernimm den Rechner und öffne "+U("mail.localhost","/inbox")+" und "+U("site.localhost","/fields"));
             var (mt,_)=await Page(rk,"mail.localhost","/inbox");
             var rd=await Do(rk,"action","chrome_read",new{tab=mt});
-            var open2=await Do(rk,"action","chrome_open",new{url=U("site.localhost","/fields")});
-            Ok("F1 taint: after reading a mail page, even an open inside the scope asks (tainted)",Code(rd)==ComputerCodes.Done&&agent.Run!.Tainted&&Code(open2)==ComputerCodes.NeedsConfirm&&Rule(open2)=="tainted",Brief(rd)+" · "+Brief(open2));
+            var (ft0,fs0)=await Page(rk,"site.localhost","/fields");var n0=Find(fs0,"textbox","Name");
+            var fillT=await Do(rk,"action","chrome_fill",new{@ref=n0!.Value.Ref,text="Anna"});
+            Ok("F1 taint: after reading a mail page, even a fill inside the scope asks (tainted)",Code(rd)==ComputerCodes.Done&&agent.Run!.Tainted&&Code(fillT)==ComputerCodes.NeedsConfirm&&Rule(fillT)=="tainted",Brief(rd)+" · "+Brief(fillT));
             await End(rk);
             rk=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/fields"));
             var (ft,fs)=await Page(rk,"site.localhost","/fields");var nameRef=Find(fs,"textbox","Name");

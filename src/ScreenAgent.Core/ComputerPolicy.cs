@@ -337,8 +337,9 @@ public sealed class ComputerPolicy
         if(IsComposerTarget(p,host))return Verdict.Of(ActionClass.R2,"composer");
         // Where a click goes (link, form action, formaction), read live in the page: out of the scope it asks, with the domain spoken. Data leaves by a link or a form post as well as by chrome_open.
         if(tool=="chrome_click"&&c.Href is {Length:>0} href&&Link(href,scope) is {} lv)return lv;
-        if(c.Tainted&&tool is "ui_click" or "ui_type" or "chrome_click" or "chrome_fill")return Verdict.Of(ActionClass.R2,"tainted");
         if(Target(c,p,host,scope) is {} tv)return tv;
+        // After a read of a sensitive page (or a server_read) every outward click or fill asks. (chrome_open needs no such rule: an in-scope open can only carry a URL he spoke or a link of the page, anything else is refused.)
+        if(c.Tainted&&tool is "ui_click" or "ui_type" or "chrome_click" or "chrome_fill")return Verdict.Of(ActionClass.R2,"tainted");
         if(c.FileDialog)return Verdict.Of(ActionClass.R2,"file");
         if(c.BrowserChrome)return Verdict.Of(ActionClass.R2,"browser-chrome");
         if(c.Nameless&&tool is "ui_click")return Verdict.Of(ActionClass.R2,"nameless");
@@ -385,6 +386,6 @@ public sealed class ComputerPolicy
         if(u.AbsolutePath.Length>1&&!c.UrlInWords&&!c.UrlInSnapshot)return Verdict.Of(ActionClass.R3,"url-path");
         if(scope.Empty)return Verdict.Of(ActionClass.R2,"no-scope");
         if(!scope.ContainsHost(host))return Verdict.Of(ActionClass.R2,"open-out-of-scope");
-        return c.Tainted?Verdict.Of(ActionClass.R2,"tainted"):Verdict.Of(ActionClass.R1,"open-in-scope");
+        return Verdict.Of(ActionClass.R1,"open-in-scope");
     }
 }
