@@ -1,12 +1,12 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 namespace ScreenAgent.Core;
-// One command of the poll: {computer:{id:"c<16 hex>",run:"r<16 hex>",seq,op:"start|stop|action|confirm|beat",...}}. start+extend:true = a new spoken final appends to the open run; stop carries reason (log only).
+// One command of the poll: {computer:{id:"c<16 hex>",run:"r<16 hex>",seq,op:"start|stop|action|confirm|beat|resume|taint|void",...}}. resume = the go after hands-on or the 25-step stop (no scope, no goal); taint = a server_read happened (can only raise); void = the gateway voided the open ask. start+extend:true = a new spoken final appends to the open run; stop carries reason (log only).
 // The exact messages both sides speak are in testdata/computer-contract.json (this repo and agent-desk keep the same file).
 public sealed record ComputerCommand(string Id,string Run,int Seq,string Op,string? Sid,string Goal,string[] ScopeWords,string Tool,JsonElement Args,string Hash,string Digits,string State,bool Extend=false,string Reason="");
 public static class ComputerWire
 {
-    public static readonly string[] Ops=["start","stop","action","confirm","beat"];
+    public static readonly string[] Ops=["start","stop","action","confirm","beat","resume","taint","void"];
     public const int MaxResultBytes=512*1024;
     // The arguments each tool takes. A known tool with any other argument is malformed and never executed (closed by default); an unknown tool is refused by the app as unknown-tool.
     public static readonly Dictionary<string,string[]> ToolArgs=new()
@@ -36,7 +36,7 @@ public static class ComputerWire
         JsonElement args=default;
         if(m.TryGetProperty("args",out var a)&&a.ValueKind==JsonValueKind.Object)args=a.Clone();
         string hash=Str(m,"hash",80);
-        if(op=="confirm"&&!HashRx.IsMatch(hash)){why="hash";return null;}
+        if(op is "confirm" or "void"&&!HashRx.IsMatch(hash)){why="hash";return null;}
         string tool=Str(m,"tool",32);
         if(op=="action"&&(tool.Length==0||!tool.All(c=>char.IsAsciiLetterOrDigit(c)||c=='_'))){why="tool";return null;}
         if(op=="action"&&ToolArgs.TryGetValue(tool,out var known)&&args.ValueKind==JsonValueKind.Object&&args.EnumerateObject().Any(p=>Array.IndexOf(known,p.Name)<0)){why="args";return null;}

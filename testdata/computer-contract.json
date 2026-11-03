@@ -83,6 +83,35 @@
     "hash": "a1b2c3d4e5f60718",
     "digits": "47"
    }
+  },
+  {
+   "name": "resume",
+   "wire": {
+    "id": "c0000000000000006",
+    "run": "r0123456789abcdef",
+    "seq": 6,
+    "op": "resume"
+   }
+  },
+  {
+   "name": "taint",
+   "wire": {
+    "id": "c0000000000000007",
+    "run": "r0123456789abcdef",
+    "seq": 7,
+    "op": "taint",
+    "source": "server_read"
+   }
+  },
+  {
+   "name": "void",
+   "wire": {
+    "id": "c0000000000000008",
+    "run": "r0123456789abcdef",
+    "seq": 8,
+    "op": "void",
+    "hash": "a1b2c3d4e5f60718"
+   }
   }
  ],
  "actions": [
@@ -380,7 +409,7 @@
     "id": "c0000000000000021",
     "run": "r0123456789abcdef",
     "seq": 33,
-    "op": "resume"
+    "op": "frobnicate"
    }
   },
   {

@@ -6,7 +6,7 @@ public class ComputerPolicyTests
 {
     static readonly ComputerPolicy P=new(extraSensitive:["mail.localhost"],extraComposer:["composer.localhost"],deskHost:"desk.localhost");
     static ComputerScope Scope(string goal,string? here=null)=>ComputerScope.From(goal,here);
-    static Verdict V(ActionContext c,string goal="öffne github.com und klick auf Issues")=>P.Classify(c,Scope(goal));
+    static Verdict V(ActionContext c,string goal="öffne example.org und klick auf Issues")=>P.Classify(c,Scope(goal));
     static ActionContext Chrome(string tool,string url,string? label=null)=>new(tool){Process="chrome",Url=url,Label=label};
     [Theory]
     [InlineData("www.example.com","example.com")][InlineData("a.b.example.co.uk","example.co.uk")][InlineData("mail.localhost","mail.localhost")][InlineData("x.y.localhost","y.localhost")]
@@ -32,8 +32,8 @@ public class ComputerPolicyTests
     }
     [Fact] public void InScopeClickIsR1()
     {
-        var v=V(Chrome("chrome_click","https://github.com/x/y","Issues"));Assert.Equal((ActionClass.R1,"in-scope"),(v.Class,v.Rule));
-        Assert.Equal(ActionClass.R1,V(Chrome("chrome_fill","https://github.com/search") with{Text="hallo"}).Class);
+        var v=V(Chrome("chrome_click","https://example.org/x/y","Issues"));Assert.Equal((ActionClass.R1,"in-scope"),(v.Class,v.Rule));
+        Assert.Equal(ActionClass.R1,V(Chrome("chrome_fill","https://example.org/search") with{Text="hallo"}).Class);
     }
     [Fact] public void WeiterFixtureOnUnlistedSiteOutsideScope()   // a button named "Weiter" that sends: outside the scope it is R2 whatever it is called
     {
@@ -47,26 +47,26 @@ public class ComputerPolicyTests
     }
     [Fact] public void LabelsOnlyRaise()
     {
-        Assert.Equal((ActionClass.R2,"label-send"),(V(Chrome("chrome_click","https://github.com/","Senden")).Class,V(Chrome("chrome_click","https://github.com/","Senden")).Rule));
-        Assert.Equal("label-delete",V(Chrome("chrome_click","https://github.com/","Löschen")).Rule);
-        Assert.Equal(ActionClass.R1,V(Chrome("chrome_click","https://github.com/","Issues")).Class);
+        Assert.Equal((ActionClass.R2,"label-send"),(V(Chrome("chrome_click","https://example.org/","Senden")).Class,V(Chrome("chrome_click","https://example.org/","Senden")).Rule));
+        Assert.Equal("label-delete",V(Chrome("chrome_click","https://example.org/","Löschen")).Rule);
+        Assert.Equal(ActionClass.R1,V(Chrome("chrome_click","https://example.org/","Issues")).Class);
         // a friendly label cannot lower anything
-        Assert.Equal(ActionClass.R2,V(Chrome("chrome_click","https://github.com/","Speichern")) .Class);
+        Assert.Equal(ActionClass.R2,V(Chrome("chrome_click","https://example.org/","Speichern")) .Class);
         Assert.Equal(ActionClass.R2,V(Chrome("chrome_click","https://other.com/","Ansehen")).Class);
     }
     [Fact] public void BrowserWithoutCdpUrlIsR2()
     {
         foreach(var t in new[]{"ui_click","ui_type","key"})
         {
-            var c=new ActionContext(t){Process="msedge",Label="Ok",Text="a",Key="Tab"};
-            Assert.Equal((ActionClass.R2,"no-cdp"),(P.Classify(c,Scope("öffne github.com")).Class,P.Classify(c,Scope("öffne github.com")).Rule));
+            var c=new ActionContext(t){Process="msedge",Label="Ok",Text="a",Key="Tab",FocusVerified=true};
+            Assert.Equal((ActionClass.R2,"no-cdp"),(P.Classify(c,Scope("öffne example.org")).Class,P.Classify(c,Scope("öffne example.org")).Rule));
         }
     }
     [Fact] public void AppNamedInSentenceIsR1_OthersR2()
     {
         var n=new ActionContext("ui_click"){Process="notepad",Label="Datei"};
         Assert.Equal(ActionClass.R1,P.Classify(n,Scope("schreib was in den Editor")).Class);
-        Assert.Equal((ActionClass.R2,"out-of-scope"),(P.Classify(n,Scope("öffne github.com")).Class,P.Classify(n,Scope("öffne github.com")).Rule));
+        Assert.Equal((ActionClass.R2,"out-of-scope"),(P.Classify(n,Scope("öffne example.org")).Class,P.Classify(n,Scope("öffne example.org")).Rule));
         Assert.Equal(ActionClass.R2,P.Classify(new ActionContext("ui_click"){Process="notepad",Nameless=true},Scope("editor")).Class);
     }
     [Theory]
@@ -82,8 +82,8 @@ public class ComputerPolicyTests
     [InlineData("blob:https://a.com/1")][InlineData("view-source:https://a.com")][InlineData("chrome-extension://abc/page.html")]
     public void R3Schemes(string url)
     {
-        Assert.Equal((ActionClass.R3,"scheme"),(P.Classify(Chrome("chrome_click",url,"x"),Scope("github.com")).Class,P.Classify(Chrome("chrome_click",url,"x"),Scope("github.com")).Rule));
-        Assert.Equal(ActionClass.R3,P.Classify(new("chrome_open"){OpenUrl=url},Scope("github.com")).Class);
+        Assert.Equal((ActionClass.R3,"scheme"),(P.Classify(Chrome("chrome_click",url,"x"),Scope("example.org")).Class,P.Classify(Chrome("chrome_click",url,"x"),Scope("example.org")).Rule));
+        Assert.Equal(ActionClass.R3,P.Classify(new("chrome_open"){OpenUrl=url},Scope("example.org")).Class);
     }
     [Fact] public void DeskOriginAndOwnWindowsAreR3()
     {
@@ -111,20 +111,20 @@ public class ComputerPolicyTests
     public void OtherKeysRefused(string key)=>Assert.Equal(ActionClass.R3,P.Classify(new("key"){Process="notepad",Key=key},Scope("editor")).Class);
     [Fact] public void EnterIsR2UnlessSearchBoxInScope()
     {
-        Assert.Equal("enter",P.Classify(Chrome("key","https://github.com/") with{Key="Enter"},Scope("github.com")).Rule);
-        Assert.Equal("enter",P.Classify(Chrome("key","https://github.com/") with{Key="Ctrl+Enter"},Scope("github.com")).Rule);
-        Assert.Equal("enter",P.Classify(Chrome("key","https://github.com/") with{Key="Alt+Enter"},Scope("github.com")).Rule);
-        Assert.Equal("enter-search",P.Classify(Chrome("key","https://github.com/") with{Key="Enter",SearchBox=true},Scope("github.com")).Rule);
-        Assert.Equal("enter",P.Classify(Chrome("key","https://github.com/") with{Key="Ctrl+Enter",SearchBox=true},Scope("github.com")).Rule);
-        Assert.Equal("out-of-scope",P.Classify(Chrome("key","https://other.com/") with{Key="Enter",SearchBox=true},Scope("github.com")).Rule);
+        Assert.Equal("enter",P.Classify(Chrome("key","https://example.org/") with{FocusVerified=true,Key="Enter"},Scope("example.org")).Rule);
+        Assert.Equal("enter",P.Classify(Chrome("key","https://example.org/") with{FocusVerified=true,Key="Ctrl+Enter"},Scope("example.org")).Rule);
+        Assert.Equal("enter",P.Classify(Chrome("key","https://example.org/") with{FocusVerified=true,Key="Alt+Enter"},Scope("example.org")).Rule);
+        Assert.Equal("enter-search",P.Classify(Chrome("key","https://example.org/") with{FocusVerified=true,Key="Enter",SearchBox=true},Scope("example.org")).Rule);
+        Assert.Equal("enter",P.Classify(Chrome("key","https://example.org/") with{FocusVerified=true,Key="Ctrl+Enter",SearchBox=true},Scope("example.org")).Rule);
+        Assert.Equal("out-of-scope",P.Classify(Chrome("key","https://other.com/") with{FocusVerified=true,Key="Enter",SearchBox=true},Scope("example.org")).Rule);
     }
     [Fact] public void ClaudeCodeBoxEveryKeyIsR2()
     {
         foreach(var proc in new[]{"Code","Code - Insiders","Cursor","claude"})
             foreach(var key in new[]{"Enter","Tab","Esc"})
-                Assert.Equal((ActionClass.R2,"composer-key"),(P.Classify(new ActionContext("key"){Process=proc,Key=key},Scope("editor")).Class,P.Classify(new ActionContext("key"){Process=proc,Key=key},Scope("editor")).Rule));
+                Assert.Equal((ActionClass.R2,"composer-key"),(P.Classify(new ActionContext("key"){Process=proc,Key=key,FocusVerified=true},Scope("editor")).Class,P.Classify(new ActionContext("key"){Process=proc,Key=key,FocusVerified=true},Scope("editor")).Rule));
         Assert.Equal("composer",P.Classify(new ActionContext("ui_type"){Process="Code - Insiders",Text="rm -rf"},Scope("editor")).Rule);
-        Assert.Equal("composer-key",P.Classify(Chrome("key","https://composer.localhost/x") with{Key="Enter"},Scope("composer.localhost")).Rule);
+        Assert.Equal("composer-key",P.Classify(Chrome("key","https://composer.localhost/x") with{FocusVerified=true,Key="Enter"},Scope("composer.localhost")).Rule);
         Assert.Equal("composer",P.Classify(Chrome("chrome_fill","https://claude.ai/new") with{Text="hi"},Scope("claude")).Rule);
         // still no clipboard / win chord there
         Assert.Equal(ActionClass.R3,P.Classify(new ActionContext("key"){Process="Code",Key="Ctrl+V"},Scope("editor")).Class);
@@ -137,21 +137,23 @@ public class ComputerPolicyTests
         Assert.Equal(ActionClass.R1,P.Classify(new("ui_type"){Process="notepad",Text=new string('a',2000)},Scope("editor")).Class);
         Assert.Equal("text-long",P.Classify(new("ui_type"){Process="notepad",Text=new string('a',2001)},Scope("editor")).Rule);
         Assert.Equal("password-field",P.Classify(new("ui_type"){Process="notepad",Text="x",Password=true},Scope("editor")).Rule);
-        Assert.Equal("password-field",P.Classify(Chrome("chrome_fill","https://github.com/login") with{Text="x",Password=true},Scope("github.com")).Rule);
+        Assert.Equal("password-field",P.Classify(Chrome("chrome_fill","https://example.org/login") with{Text="x",Password=true},Scope("example.org")).Rule);
     }
     [Fact] public void OpenRules()
     {
-        ComputerScope sc=Scope("öffne github.com");
-        Assert.Equal((ActionClass.R1,"open-in-scope"),(P.Classify(new("chrome_open"){OpenUrl="https://github.com/a/b"},sc).Class,P.Classify(new("chrome_open"){OpenUrl="https://github.com/a/b"},sc).Rule));
+        ComputerScope sc=Scope("öffne example.org");
+        Assert.Equal((ActionClass.R1,"open-in-scope"),(P.Classify(new("chrome_open"){OpenUrl="https://example.org/"},sc).Class,P.Classify(new("chrome_open"){OpenUrl="https://example.org/"},sc).Rule));
+        Assert.Equal("url-path",P.Classify(new("chrome_open"){OpenUrl="https://example.org/a/b"},sc).Rule);   // F1: data in the path leaves just like data in a query
+        Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://example.org/a/b",UrlInWords=true},sc).Class);
         Assert.Equal("open-out-of-scope",P.Classify(new("chrome_open"){OpenUrl="https://evil.example/"},sc).Rule);
         Assert.Equal("url-query",P.Classify(new("chrome_open"){OpenUrl="https://evil.example/?d=secret"},sc).Rule);
-        Assert.Equal("url-query",P.Classify(new("chrome_open"){OpenUrl="https://github.com/#token=abc"},sc).Rule);
-        Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://github.com/search?q=a",UrlInWords=true},sc).Class);
-        Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://github.com/search?q=a",UrlInSnapshot=true},sc).Class);
-        Assert.Equal("url-invalid",P.Classify(new("chrome_open"){OpenUrl="https://user:pw@github.com/"},sc).Rule);
+        Assert.Equal("url-query",P.Classify(new("chrome_open"){OpenUrl="https://example.org/#token=abc"},sc).Rule);
+        Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://example.org/search?q=a",UrlInWords=true},sc).Class);
+        Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://example.org/search?q=a",UrlInSnapshot=true},sc).Class);
+        Assert.Equal("url-invalid",P.Classify(new("chrome_open"){OpenUrl="https://user:pw@example.org/"},sc).Rule);
         Assert.Equal("scheme",P.Classify(new("chrome_open"){OpenUrl="data:text/html,<script>"},sc).Rule);
         Assert.Equal("scheme",P.Classify(new("chrome_open"){OpenUrl="//evil.com"},sc).Rule);
-        Assert.Equal("scheme",P.Classify(new("chrome_open"){OpenUrl="ftp://github.com/"},sc).Rule);
+        Assert.Equal("scheme",P.Classify(new("chrome_open"){OpenUrl="ftp://example.org/"},sc).Rule);
         Assert.Equal("password-manager",P.Classify(new("chrome_open"){OpenUrl="https://vault.bitwarden.com/"},Scope("bitwarden.com")).Rule);
     }
     [Fact] public void ExfiltrationByTypingIntoUnlistedFormIsR2()   // M2: read mail, type it into a form on another site
@@ -161,10 +163,10 @@ public class ComputerPolicyTests
     [Fact] public void FileDialogBrowserChromeUnknownTool()
     {
         Assert.Equal("file",P.Classify(new ActionContext("ui_click"){Process="notepad",FileDialog=true,Label="Öffnen"},Scope("editor")).Rule);
-        Assert.Equal("browser-chrome",P.Classify(Chrome("ui_click","https://github.com/") with{BrowserChrome=true},Scope("github.com")).Rule);
-        Assert.Equal("unknown-tool",P.Classify(new("chrome_eval"){Process="chrome"},Scope("github.com")).Rule);
-        Assert.Equal("unknown-tool",P.Classify(new("job_start"){Process="chrome"},Scope("github.com")).Rule);
-        Assert.Equal("unknown-tool",P.Classify(new("drag"){Process="chrome"},Scope("github.com")).Rule);
+        Assert.Equal("browser-chrome",P.Classify(Chrome("ui_click","https://example.org/") with{BrowserChrome=true},Scope("example.org")).Rule);
+        Assert.Equal("unknown-tool",P.Classify(new("chrome_eval"){Process="chrome"},Scope("example.org")).Rule);
+        Assert.Equal("unknown-tool",P.Classify(new("job_start"){Process="chrome"},Scope("example.org")).Rule);
+        Assert.Equal("unknown-tool",P.Classify(new("drag"){Process="chrome"},Scope("example.org")).Rule);
     }
     [Fact] public void WebTerminalOnInfraDomain()=>Assert.Equal("web-terminal",P.Classify(Chrome("chrome_click","https://console.cloud.google.com/shell","Terminal"),Scope("console.cloud.google.com")).Rule);
     [Fact] public void ReadDeny()
@@ -191,7 +193,7 @@ public class ComputerPolicyTests
     }
     [Fact] public void EveryToolHasAClass()
     {
-        foreach(var t in ComputerPolicy.AllTools)Assert.NotEqual("unknown-tool",P.Classify(new(t){Process="chrome",Url="https://github.com/",OpenUrl="https://github.com/",Key="Tab",Text="a"},Scope("github.com")).Rule);
+        foreach(var t in ComputerPolicy.AllTools)Assert.NotEqual("unknown-tool",P.Classify(new(t){Process="chrome",Url="https://example.org/",OpenUrl="https://example.org/",Key="Tab",Text="a"},Scope("example.org")).Rule);
         Assert.DoesNotContain("job_start",ComputerPolicy.AllTools);Assert.DoesNotContain("board_post",ComputerPolicy.AllTools);Assert.DoesNotContain("chrome_eval",ComputerPolicy.AllTools);
     }
 }
@@ -231,11 +233,11 @@ public class ComputerRunTests
         Assert.Equal("action-cap",r.Gate()!.Value.Rule);Assert.True(r.IsClosed);
         var (t,tc)=Make();tc.Now+=10*60_000+1;Assert.Equal("time-cap",t.Gate()!.Value.Rule);Assert.True(t.IsClosed);
     }
-    [Fact] public void ThreeAsksThenStop()
+    [Fact] public void EightAsksThenStop()
     {
         var (r,c)=Make();
-        for(int i=0;i<3;i++)Assert.Null(r.Propose(Ask(c,"h"+i)));
-        Assert.Equal("asks-cap",r.Propose(Ask(c,"h4"))!.Value.Rule);Assert.True(r.IsClosed);
+        for(int i=0;i<8;i++)Assert.Null(r.Propose(Ask(c,"h"+i)));
+        Assert.Equal("asks-cap",r.Propose(Ask(c,"h9"))!.Value.Rule);Assert.True(r.IsClosed);
     }
     [Fact] public void NewProposalVoidsTheOldOne()
     {

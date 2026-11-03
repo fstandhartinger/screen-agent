@@ -10,16 +10,9 @@ internal static class ComputerGuard
     public static ComputerRun? Current=>run;
     public static void Attach(ComputerRun? r){run=r;Interlocked.Exchange(ref moved,0);}
     public static void Kill(string via)=>run?.Kill(via);
-    static bool Chord()=>(Native.GetAsyncKeyState(0x11)&0x8000)!=0&&(Native.GetAsyncKeyState(0x10)&0x8000)!=0&&((Native.GetAsyncKeyState(0x5b)&0x8000)!=0||(Native.GetAsyncKeyState(0x5c)&0x8000)!=0);
-    // injected: LLKHF_INJECTED. The hook passes injected keys here only in selftest mode; production never sees one.
-    public static void OnKey(int vk,bool down,bool injected)
-    {
-        var r=run;
-        if(r is null||!down)return;
-        if(vk==0x58&&Chord()){r.Kill("hotkey");return;}
-        if(vk==0x59&&Chord()&&!injected){if(r.Pending is not null)r.PhysicalConfirm();return;}   // the confirm chord is the user's physical hand: never injected, never swallowed
-        if(!injected)r.HandsOn();
-    }
+    static bool Held(int vk)=>(Native.GetAsyncKeyState(vk)&0x8000)!=0;
+    // injected: LLKHF_INJECTED. The hook passes injected keys here only in selftest mode; production never sees one. The decision itself is ScreenAgent.Core.ComputerInput (unit tested with the real key order).
+    public static void OnKey(int vk,bool down,bool injected)=>ComputerInput.OnKey(run,vk,down,injected,Held);
     public static void OnMouse(int msg,int x,int y,bool injected)
     {
         var r=run;

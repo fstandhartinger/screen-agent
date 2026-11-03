@@ -65,14 +65,14 @@ public sealed class ActionBinding
     public static string Digest(IEnumerable<string> values)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\u0001',values)))).ToLowerInvariant()[..16];
 }
 public sealed record PendingAsk(string Tool,string Hash,string Spoken,string Code,long At,ActionBinding Binding,JsonElement Args,string Class,string Rule);
-public sealed record RunCaps(long MaxMs=10*60_000,int MaxActions=150,int StepReport=25,long PendingMs=60_000,int MaxAsks=3,int MaxExpiries=2,long IdleMs=60_000,long GatewayQuietMs=15_000);
+public sealed record RunCaps(long MaxMs=10*60_000,int MaxActions=150,int StepReport=25,long PendingMs=60_000,int MaxAsks=8,int MaxExpiries=2,long IdleMs=60_000,long GatewayQuietMs=15_000);
 public enum RunState { Running, HandsOn, Paused, Closed }
 // The app owns the run. The kill flag is set from the keyboard hook callback (an Interlocked write: no allocation, no lock, no I/O) and the input worker looks at it before every SendInput batch and CDP call.
 public sealed class ComputerRun
 {
     readonly Func<long> clock;
     readonly object gate=new();
-    int revoked,handsOn,paused,closed,physical;
+    int revoked,handsOn,paused,closed,physical,tainted,armed;
     string? killVia;
     long lastAction,lastGateway;
     public string Id {get;}
@@ -86,9 +86,9 @@ public sealed class ComputerRun
     public int Expiries {get;private set;}
     public string? ClosedWhy {get;private set;}
     public PendingAsk? Pending {get;private set;}
-    public ComputerRun(string id,string goal,ComputerScope scope,Func<long>? clock=null,RunCaps? caps=null)
+    public ComputerRun(string id,string goal,ComputerScope scope,Func<long>? clock=null,RunCaps? caps=null,bool armed=true)
     {
-        Id=id;Goal=goal;Scope=scope;Caps=caps??new();this.clock=clock??(()=>Environment.TickCount64);
+        Id=id;Goal=goal;Scope=scope;Caps=caps??new();this.armed=armed?1:0;this.clock=clock??(()=>Environment.TickCount64);
         StartedAt=lastAction=lastGateway=this.clock();
     }
     public bool Revoked=>Volatile.Read(ref revoked)!=0;
@@ -96,6 +96,14 @@ public sealed class ComputerRun
     public bool IsHandsOn=>Volatile.Read(ref handsOn)!=0;
     public bool IsPaused=>Volatile.Read(ref paused)!=0;
     public bool IsClosed=>Volatile.Read(ref closed)!=0;
+    // The run is armed once its start was accepted (a start with a non-empty scope waits for his code or chord). Nothing but the start's own confirm runs before.
+    public bool Armed=>Volatile.Read(ref armed)!=0;
+    public void Arm(){Interlocked.Exchange(ref armed,1);}
+    // A sensitive read (or a server_read reported by the gateway) happened: every outward action asks from here on. It can only be raised, never lowered.
+    public bool Tainted=>Volatile.Read(ref tainted)!=0;
+    public void Taint(){Interlocked.Exchange(ref tainted,1);}
+    /// <summary>The go after hands-on or after the 25-step stop: adds no scope and no goal, voids a pending ask. The gateway sends it only for a real spoken sentence.</summary>
+    public void Resume(){lock(gate){Interlocked.Exchange(ref handsOn,0);StepsSinceFinal=0;Pending=null;Interlocked.Exchange(ref physical,0);lastAction=clock();}}
     public RunState State=>IsClosed||Revoked?RunState.Closed:IsHandsOn?RunState.HandsOn:IsPaused?RunState.Paused:RunState.Running;
     public string StateName=>State switch{RunState.Running=>"running",RunState.HandsOn=>"handson",RunState.Paused=>"paused",_=>Revoked?"killed":"ended"};
     // From the hook callback: nothing but an Interlocked write. The run token is revoked for good; the gateway cannot resume it.
@@ -122,13 +130,14 @@ public sealed class ComputerRun
         }
     }
     // Null = the action may go ahead. Otherwise the code and rule the result carries. Called for every action, R2 proposals included; run state does the counting.
-    public (string Code,string Rule)? Gate(bool confirmedRun=false)
+    public (string Code,string Rule)? Gate(bool forStart=false)
     {
         lock(gate)
         {
             Seen();
             if(Revoked)return (ComputerCodes.Killed,"killed");
             if(IsClosed)return (ComputerCodes.NoRun,ClosedWhy??"closed");
+            if(!Armed&&!forStart)return (ComputerCodes.Refused,"not-armed");
             long now=clock();
             if(IsHandsOn)return (ComputerCodes.HandsOn,"handson");
             if(IsPaused)return (ComputerCodes.Refused,"paused");
