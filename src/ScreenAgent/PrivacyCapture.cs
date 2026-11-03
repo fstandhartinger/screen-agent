@@ -22,7 +22,7 @@ internal sealed class PrivacyCapture
         Rectangle rect=Native.GetWindowRect(h,out var r)?Rectangle.FromLTRB(r.Left,r.Top,r.Right,r.Bottom):default;
         Native.GetWindowThreadProcessId(h,out uint pid);
         string process="";
-        try{using var p=Process.GetProcessById((int)pid);process=p.ProcessName;}catch{ /* a process that cannot be read has no name; it cannot match a list */ }
+        try{using var p=Process.GetProcessById((int)pid);process=p.ProcessName;}catch(Exception){ /* a process that cannot be read has no name; it cannot match a list */ }
         var title=new StringBuilder(1024);Native.GetWindowText(h,title,title.Capacity);
         string? url=readUrl&&PrivacyPolicy.Browser(process)?(address??((w,_)=>Address(w)))(h,title.ToString()):null;
         return new(h,process,title.ToString(),url,rect,policy.Blocked(process,title.ToString(),url));
@@ -46,7 +46,7 @@ internal sealed class PrivacyCapture
             Native.GetWindowThreadProcessId(h,out uint pid);
             if(pid==Environment.ProcessId)return true; // own overlays are not part of the picture
             string process="";
-            try{using var p=Process.GetProcessById((int)pid);process=p.ProcessName;}catch{return true;}
+            try{using var p=Process.GetProcessById((int)pid);process=p.ProcessName;}catch(Exception){return true;}   /* unreadable process: treated as locked */
             var info=Describe(h,policy,policy.NeedsAddress(process));
             list.Add(info);
             return true;
@@ -74,7 +74,7 @@ internal sealed class PrivacyCapture
                 }
             }
         }
-        catch { }
+        catch(Exception ex){Diag.Fail("address-read",ex);}   // an unreadable address never blocks
         return null;
     }
     static bool SecureDesktop()
@@ -120,7 +120,7 @@ internal sealed class PrivacyCapture
             info=new(fg,before);LastSkip="";
             return image;
         }
-        catch{image?.Dispose();info=null;LastSkip="capture-failed";return null;}
+        catch(Exception ex){image?.Dispose();info=null;LastSkip="capture-failed";Diag.Fail("capture",ex,new(){["w"]=monitor.Width,["h"]=monitor.Height});return null;}
     }
     public static byte[] Png(Bitmap image){using var s=new MemoryStream();image.Save(s,ImageFormat.Png);return s.ToArray();}
 }

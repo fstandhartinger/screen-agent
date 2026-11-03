@@ -26,7 +26,7 @@ internal sealed class PromptFallbackWindow : Window
         var grid=new DockPanel{Margin=new Thickness(10)};
         DockPanel.SetDock(heading,Dock.Top);DockPanel.SetDock(buttons,Dock.Bottom);grid.Children.Add(heading);grid.Children.Add(buttons);grid.Children.Add(box);
         Content=grid;
-        copy.Click+=(_,_)=>{try{Clipboard.SetText(body);copy.Content="Kopiert";}catch{copy.Content="Kopieren nicht möglich";}};
+        copy.Click+=(_,_)=>{try{Clipboard.SetText(body);copy.Content="Kopiert";}catch(Exception ex){copy.Content="Kopieren nicht möglich";Diag.Fail("prompt-window-copy",ex);}};
         close.Click+=(_,_)=>Close();
         SourceInitialized+=(_,_)=>
         {

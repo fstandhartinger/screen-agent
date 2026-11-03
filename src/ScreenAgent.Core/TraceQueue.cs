@@ -24,7 +24,7 @@ public sealed class TraceQueue(string path,int capacity=1000,TimeSpan? maxAge=nu
                 }
                 Trim();
             }
-            catch(IOException){ }
+            catch(IOException){ /* an unreadable queue file starts empty; the rolling log has the events */ }
         }
     }
     // After JSON, values are JsonElements; the sanitizer's shapes are what the upload needs.

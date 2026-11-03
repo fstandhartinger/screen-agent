@@ -36,7 +36,7 @@ public sealed class DictationRecording : IDisposable
     }
     void FailDisk(string stage,Exception ex)
     {
-        DiskOk=false;Meta.DiskOk=false;try{writer?.Dispose();}catch{ }writer=null;
+        DiskOk=false;Meta.DiskOk=false;try{writer?.Dispose();}catch(Exception){ /* the writer is dropped anyway */ }writer=null;
         log("dictation.disk",new(){["id"]=Meta.Id,["stage"]=stage,["exType"]=ex.GetType().Name,["bytes"]=samples*2,["path"]=store.Folder});
         const string say="Diktat wird nicht auf der Festplatte gesichert · Aufnahme läuft im Speicher weiter";
         StartWarning??=say;Warning?.Invoke(say);
@@ -77,9 +77,9 @@ public sealed class DictationRecording : IDisposable
         {
             if(stopped)return null;
             stopped=true;
-            try{writer?.Dispose();}catch{ }writer=null;
+            try{writer?.Dispose();}catch(Exception){ /* the writer is dropped anyway */ }writer=null;
             Meta.Seconds=Seconds;Meta.Ended=DateTimeOffset.UtcNow;Meta.State="processing";Meta.Bytes=DiskOk?store.BytesOf(Meta):memory.Length;
-            try{store.Save(Meta);}catch{ /* the wav is on disk and recoverable without it */ }
+            try{store.Save(Meta);}catch(Exception){ /* the wav is on disk and recoverable without it */ }
             return chunker.Finish();
         }
     }
@@ -89,5 +89,28 @@ public sealed class DictationRecording : IDisposable
         foreach(var p in Meta.Paths.Where(File.Exists))foreach(var b in Wav.ReadBlocks(p))yield return b;
         if(memory.Length>0)yield return Wav.Samples(memory.ToArray());
     }
-    public void Dispose(){lock(gate){stopped=true;try{writer?.Dispose();}catch{ }writer=null;}memory.Dispose();}
+    // The disk refused part of the recording: write what only reached memory to the first folder that takes it, as one more file of this recording (a retry reads
+    // files). Returns that path; null when nothing was in memory or every folder refused (the memory then stays, for the retry of this run).
+    public string? DumpMemory(params string[] folders)
+    {
+        lock(gate)
+        {
+            if(memory.Length==0)return null;
+            foreach(var folder in folders)
+            {
+                try
+                {
+                    Directory.CreateDirectory(folder);
+                    string path=Path.Combine(folder,$"{Meta.Stamp}-{Meta.Id}-mem.wav");
+                    File.WriteAllBytes(path,Wav.FromPcm(memory.ToArray()));
+                    Meta.Files.Add(string.Equals(Path.GetFullPath(folder),Path.GetFullPath(store.Folder),StringComparison.OrdinalIgnoreCase)?Path.GetFileName(path):path);
+                    memory.SetLength(0);
+                    return path;
+                }
+                catch(Exception ex){log("dictation.disk",new(){["id"]=Meta.Id,["stage"]="dump",["exType"]=ex.GetType().Name,["bytes"]=memory.Length,["path"]=folder});}
+            }
+            return null;
+        }
+    }
+    public void Dispose(){lock(gate){stopped=true;try{writer?.Dispose();}catch(Exception){ /* the writer is dropped anyway */ }writer=null;}memory.Dispose();}
 }

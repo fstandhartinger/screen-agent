@@ -93,6 +93,7 @@ internal sealed class CanvasPanel : Window
         if(!Prepare())return false;
         if(bridge.WebEnvironment is null)return false;
         IntPtr before=Native.GetForegroundWindow();
+        var stateBefore=policy.State;bool frontBefore=policy.FrontDone;
         hiding=false;
         if(!IsVisible)
         {
@@ -104,6 +105,11 @@ internal sealed class CanvasPanel : Window
         ResizeBrowser();
         if(!initStarted){initStarted=true;await InitBrowser();}
         else if(browser is not null&&!PageLoaded&&!navigating)Navigate();   // the page did not load (Desk down, offline): try again. A signed-out Desk page is no failure; it says so itself.
+        if(browser is null&&!initStarted)   // the browser could not be created: no blank window, and the "front" permission is not used up, so the next diagram tries again
+        {
+            hiding=true;Hide();hiding=false;policy.OpenFailed(stateBefore,frontBefore);
+            return false;
+        }
         // A browser that took the focus on creation gives it back.
         var now=Native.GetForegroundWindow();
         if(before!=IntPtr.Zero&&now!=before&&now==Handle){Native.SetForegroundWindow(before);ForegroundRestores++;}
@@ -114,6 +120,7 @@ internal sealed class CanvasPanel : Window
     public void HidePanel(bool byUser)
     {
         if(!IsVisible)return;
+        if(!byUser&&!policy.HideAtSessionEnd){Log("kept-minimized","session-end");return;}   // minimised by him: it stays in the taskbar, minimised, until he restores it
         SaveBounds();hiding=true;Hide();hiding=false;
         policy.Hidden(byUser);Log(byUser?"closed":"hidden",byUser?"user":"session-end");
         if(byUser)ClosedByUser?.Invoke();
@@ -131,8 +138,9 @@ internal sealed class CanvasPanel : Window
             controller.RasterizationScaleChanged+=(_,_)=>ResizeBrowser();
             browser=controller.CoreWebView2;
             bridge.InstallTestResponses(browser);
-            browser.NavigationStarting+=(_,e)=>{if(!bridge.IsTrusted(e.Uri))e.Cancel=true;};
-            browser.NavigationCompleted+=(_,e)=>{PageLoaded=e.IsSuccess;navigating=false;ResizeBrowser();};
+            browser.NavigationStarting+=(_,e)=>{if(!bridge.IsTrusted(e.Uri)){e.Cancel=true;Diag.Event("canvas.nav.blocked",new(){["host"]=Uri.TryCreate(e.Uri,UriKind.Absolute,out var blocked)?blocked.Host:"?"});}};
+            browser.ProcessFailed+=(_,e)=>Diag.Event("canvas.process.failed",new(){["kind"]=e.ProcessFailedKind.ToString(),["reason"]=e.Reason.ToString(),["exit"]=e.ExitCode});
+            browser.NavigationCompleted+=(_,e)=>{if(!e.IsSuccess)Diag.Event("canvas.nav.fail",new(){["error"]=e.WebErrorStatus.ToString(),["status"]=e.HttpStatusCode});PageLoaded=e.IsSuccess;navigating=false;ResizeBrowser();};
             browser.NewWindowRequested+=(_,e)=>{e.Handled=true;};
             browser.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;};
             ResizeBrowser();
@@ -140,7 +148,7 @@ internal sealed class CanvasPanel : Window
             Navigate();
             InitStage="ready";
         }
-        catch(Exception ex){InitStage="failed:"+ex.GetType().Name;initStarted=false;controller?.Close();controller=null;browser=null;}
+        catch(Exception ex){InitStage="failed:"+ex.GetType().Name;Diag.Fail("canvas-init",ex);initStarted=false;controller?.Close();controller=null;browser=null;}
     }
     void Navigate(){navigating=true;browser!.Navigate(new Uri(bridge.DeskOrigin,"/?panel=canvas").AbsoluteUri);}
     void ResizeBrowser()

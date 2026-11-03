@@ -16,6 +16,10 @@ public static class DictationGate
     public const double MinSeconds=0.3;
     public const int SilentPeak=8;
     public static string? Reject(long samples,int peak)=>samples<MinSeconds*Wav.Rate?"too-short":peak<=SilentPeak?"silent":null;
+    // Audio that must come back with words: longer than 2 s and clearly louder than room noise. An empty answer for it is a failure.
+    public const double SpeechSeconds=2;
+    public const int SpeechPeak=2000;
+    public static bool HadSpeech(Chunk c)=>c.Seconds>SpeechSeconds&&AudioLevel.Peak(c.Samples)>=SpeechPeak;
 }
 // Splits a running recording for the gateway (60 s per request). Cuts at the first pause of Gap length after MinSeconds (so chunks go out while he still talks);
 // with none by HardSeconds it cuts anyway and the next chunk starts OverlapSeconds earlier, which DictationJoin removes by word overlap again.

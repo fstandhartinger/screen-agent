@@ -28,7 +28,25 @@ internal sealed class DeviceClient : IDisposable
         origin=new Uri(config.DeskUrl).GetLeftPart(UriPartial.Authority);
         this.tokenPath=tokenPath??Path.Combine(ScreenConfig.Folder,"device.bin");
         http=new(handler??new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(75)};
-        try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(this.tokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}catch{device=null;}
+        try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(this.tokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}
+        catch(Exception ex){device=null;if(ex is not (FileNotFoundException or DirectoryNotFoundException))Diag.Fail("token-load",ex);}   // no file = not paired yet
+    }
+    // http.fail {route, method, status, ms, sent, got, exType, msg}: every call that did not come back 2xx, threw, or took over 3 s. No URLs with ids, no bodies. The Desk
+    // trace routes are left out (their failure is logged locally by Telemetry; logging it here would feed itself).
+    static string Route(string path)
+    {
+        int q=path.IndexOf('?');if(q>=0)path=path[..q];
+        return System.Text.RegularExpressions.Regex.Replace(path,"/[A-Za-z0-9_-]{16,}","/{id}");
+    }
+    static long Len(HttpContent? c){try{return c?.Headers.ContentLength??-1;}catch(Exception){return -1;}}   // -1: not known before it is sent
+    static void Note(HttpRequestMessage request,int status,System.Diagnostics.Stopwatch clock,long got,Exception? ex=null)
+    {
+        string route=Route(request.RequestUri?.ToString()??"");
+        bool ok=status is >=200 and <300;
+        if(route.EndsWith("/trace")||route=="api/device/log"||ok&&(clock.ElapsedMilliseconds<3000||route.EndsWith("/commands")))return;   // the commands poll is long by design
+        var data=new Dictionary<string,object?>{["route"]=route,["method"]=request.Method.Method,["status"]=status,["ms"]=clock.ElapsedMilliseconds,["sent"]=Len(request.Content),["got"]=got};
+        if(ex is not null)Redact.Of(ex,data);
+        Diag.Event("http.fail",data);
     }
     async Task<T> Read<T>(HttpResponseMessage response,CancellationToken ct)
     {
@@ -39,13 +57,14 @@ internal sealed class DeviceClient : IDisposable
         while((n=await stream.ReadAsync(chunk,ct))>0){if(bytes.Length+n>65536)throw new InvalidDataException("Invalid Desk response");bytes.Write(chunk,0,n);}
         return JsonSerializer.Deserialize<T>(bytes.ToArray())??throw new InvalidDataException("Invalid Desk response");
     }
-    static void Success(HttpResponseMessage response)
+    static void Success(HttpResponseMessage response,string route)
     {
+        if(!response.IsSuccessStatusCode)Diag.Event("http.fail",new(){["route"]="api/device/"+route,["method"]="POST",["status"]=(int)response.StatusCode});
         if(!response.IsSuccessStatusCode)throw new HttpRequestException("Desk-Anfrage abgelehnt",null,response.StatusCode);
     }
     public async Task<PairingStart> StartPairing(string callbackUrl,CancellationToken ct)
     {
-        using var r=await http.PostAsJsonAsync("api/device/pairing/start",new{callbackUrl},ct);Success(r);
+        using var r=await http.PostAsJsonAsync("api/device/pairing/start",new{callbackUrl},ct);Success(r,"pairing/start");
         var result=await Read<PairingStart>(r,ct);
         if(!System.Text.RegularExpressions.Regex.IsMatch(result.pairId??"","^[A-Za-z0-9_-]{43}$")||
            !System.Text.RegularExpressions.Regex.IsMatch(result.pollToken??"","^[A-Za-z0-9_-]{43}$")||
@@ -57,7 +76,7 @@ internal sealed class DeviceClient : IDisposable
     {
         using var r=await http.PostAsJsonAsync("api/device/pairing/poll",new{pairId,pollToken,approvalProof},ct);
         if(r.StatusCode==System.Net.HttpStatusCode.Accepted)return null;
-        Success(r);using var json=await Read<JsonDocument>(r,ct);var m=json.RootElement;
+        Success(r,"pairing/poll");using var json=await Read<JsonDocument>(r,ct);var m=json.RootElement;
         return new(m.GetProperty("token").GetString()!,m.GetProperty("deviceId").GetString()!,DeviceProtocol.Expiry(m.GetProperty("expiresAt")));
     }
     public async Task<WebSession> WebSession(CancellationToken ct)
@@ -80,7 +99,10 @@ internal sealed class DeviceClient : IDisposable
     {
         if(!Paired)throw new InvalidOperationException("Pair this device first");
         using var request=new HttpRequestMessage(method,path){Content=body};request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",device!.token);
-        var response=await http.SendAsync(request,ct);
+        var clock=System.Diagnostics.Stopwatch.StartNew();HttpResponseMessage response;
+        try{response=await http.SendAsync(request,ct);}
+        catch(Exception ex){if(!ct.IsCancellationRequested)Note(request,0,clock,0,ex);throw;}
+        Note(request,(int)response.StatusCode,clock,response.Content.Headers.ContentLength??-1);
         if(!response.IsSuccessStatusCode){var status=response.StatusCode;response.Dispose();throw new HttpRequestException("Desk-Anfrage abgelehnt",null,status);}return response;
     }
     public async Task<string[]> Exists(string[] ids,CancellationToken ct)
@@ -110,15 +132,20 @@ internal sealed class DeviceClient : IDisposable
     }
     async Task<RawReply> Exec(HttpRequestMessage request,CancellationToken ct)
     {
-        using var response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);
-        JsonDocument? json=null;
+        var clock=System.Diagnostics.Stopwatch.StartNew();HttpResponseMessage response;
+        try{response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);}
+        catch(Exception ex){if(!ct.IsCancellationRequested)Note(request,0,clock,0,ex);throw;}
+        using var held=response;
+        JsonDocument? json=null;long got=0;
         try
         {
             using var stream=await response.Content.ReadAsStreamAsync(ct);using var bytes=new MemoryStream();var chunk=new byte[4096];int n;
             while((n=await stream.ReadAsync(chunk,ct))>0){if(bytes.Length+n>65536)break;bytes.Write(chunk,0,n);}
+            got=bytes.Length;
             if(bytes.Length>0&&bytes.Length<=65536)json=JsonDocument.Parse(bytes.ToArray());
         }
-        catch(JsonException){}
+        catch(JsonException){ /* a body that is no JSON: Json stays null, the status tells */ }
+        Note(request,(int)response.StatusCode,clock,got);
         int retry=response.Headers.RetryAfter?.Delta is {} d?(int)d.TotalSeconds:0;
         return new((int)response.StatusCode,json,retry);
     }
@@ -143,18 +170,7 @@ internal sealed class DeviceClient : IDisposable
         using var reply=await RawContent(HttpMethod.Post,"api/device/dictate",form,ct);
         return Parse(reply);
     }
-    internal static ChunkReply Parse(RawReply reply)
-    {
-        var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
-        string[] providers=[];
-        if(obj&&j!.Value.TryGetProperty("providers",out var p)&&p.ValueKind==JsonValueKind.Object)
-            providers=p.EnumerateObject().Select(x=>x.Name+":"+(x.Value.ValueKind==JsonValueKind.Object?(x.Value.TryGetProperty("ok",out var ok)&&ok.ValueKind==JsonValueKind.True?"ok":x.Value.TryGetProperty("status",out var st)&&st.ValueKind==JsonValueKind.Number?st.GetInt32().ToString():x.Value.TryGetProperty("reason",out var rs)&&rs.ValueKind==JsonValueKind.String?(rs.GetString()??"").Take(30).Aggregate("",(a,c)=>a+c):"fail"):"?")).Take(8).ToArray();
-        string text=obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"";
-        bool degraded=obj&&j!.Value.TryGetProperty("degraded",out var d)&&d.ValueKind==JsonValueKind.True;
-        double seconds=obj&&j!.Value.TryGetProperty("seconds",out var sec)&&sec.ValueKind==JsonValueKind.Number?sec.GetDouble():0;
-        long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;
-        return new(reply.Status,text,providers,degraded,seconds,ms,reply.Code);
-    }
+    internal static ChunkReply Parse(RawReply reply)=>ChunkReplyParse.From(reply.Status,reply.Json?.RootElement,reply.Code);
     // Live caption of the last seconds of audio (PCM16 16 kHz mono WAV, at most 12 s). Status, text and the cost the gateway measured, if it says.
     public sealed record CaptionReply(int Status,string Text,long Ms,double Seconds,double? Cost,string? Code);
     public async Task<CaptionReply> Caption(byte[] wav,string[] visibleIds,string[] recentTerms,CancellationToken ct)

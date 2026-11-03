@@ -34,7 +34,7 @@ public static class DictationJoin
 // Live captions arrive as rolling windows (the last 6 s every 1.5 s), each a fresh transcript of its own: the same words again, often a little different.
 // The stitch finds the longest run the window shares with the end of what it has and puts the window's version from there on; so the text grows and
 // only its last words may change. Without a shared run (a pause longer than a window) the window is appended.
-public sealed class CaptionStitcher(int lookback=60)
+public sealed class CaptionStitcher(int lookback=60,int maxWords=int.MaxValue)
 {
     readonly List<string> words=[];
     public int Count=>words.Count;
@@ -69,6 +69,7 @@ public sealed class CaptionStitcher(int lookback=60)
             words.AddRange(w.Skip(bestS));
         }
         else words.AddRange(w);
+        if(words.Count>maxWords)words.RemoveRange(0,words.Count-maxWords/2);   // an hour-long voice session: the subtitle only needs the end. (Dictations keep everything: their marks are word positions.)
     }
     // Position now (for the chunk boundaries) and the words between two positions: what the live text says for the part of a chunk that failed.
     public int Mark()=>words.Count;

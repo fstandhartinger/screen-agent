@@ -1,19 +1,39 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Threading.Channels;
 namespace ScreenAgent.Core;
 // What the sender needs for one request. Only = the whole dictation is this one chunk (no `chunk` field on the wire: same request as always).
 public sealed record ChunkRequest(string DictationId,Chunk Chunk,bool Only,string FieldBefore);
-// Status: 2xx ok; 0 no connection; -1 timeout; otherwise the HTTP status. Providers like "groq:ok,openai:503".
+// Status: 2xx ok; 0 no connection; -1 timeout; -2 the Desk answered 2xx but without a usable text (bad-reply) or with an empty text for speech (empty-text); otherwise the HTTP status.
+// Providers like "groq:ok,openai:503".
 public sealed record ChunkReply(int Status,string Text="",string[]? Providers=null,bool Degraded=false,double Seconds=0,long Ms=0,string? Code=null,string? Failure=null)
 {
     public bool Ok=>Status is >=200 and <300;
     public bool Network=>Status==0;
-    public bool Retryable=>Status is -1 or 408 or 425 or 429 or >=500;
+    public bool Retryable=>Status is -1 or -2 or 408 or 425 or 429 or >=500;
     public string Reason=>Status switch
     {
-        0=>"Keine Verbindung zum Desk",-1=>"Zeitüberschreitung beim Desk",401 or 403=>"Gerät nicht mehr verbunden",413=>"Aufnahme für eine Anfrage zu lang",429=>"Zu viele Anfragen",
+        0=>"Keine Verbindung zum Desk",-1=>"Zeitüberschreitung beim Desk",-2=>"Antwort des Desk ohne Text",401 or 403=>"Gerät nicht mehr verbunden",413=>"Aufnahme für eine Anfrage zu lang",429=>"Zu viele Anfragen",
         >=500=>$"Transkription nicht erreichbar (HTTP {Status})",_=>$"Desk lehnt ab (HTTP {Status})"
     };
+}
+// The gateway's answer to a chunk. A 2xx without a string `text` (a captive portal's HTML, a proxy page, an answer cut off) is NOT a success: status -2, code bad-reply, retried.
+public static class ChunkReplyParse
+{
+    public static ChunkReply From(int status,JsonElement? root,string? code)
+    {
+        var j=root;bool obj=j is {ValueKind:JsonValueKind.Object};
+        string[] providers=[];
+        if(obj&&j!.Value.TryGetProperty("providers",out var p)&&p.ValueKind==JsonValueKind.Object)
+            providers=p.EnumerateObject().Select(x=>x.Name+":"+(x.Value.ValueKind==JsonValueKind.Object?(x.Value.TryGetProperty("ok",out var ok)&&ok.ValueKind==JsonValueKind.True?"ok":x.Value.TryGetProperty("status",out var st)&&st.ValueKind==JsonValueKind.Number?st.GetInt32().ToString():x.Value.TryGetProperty("reason",out var rs)&&rs.ValueKind==JsonValueKind.String?(rs.GetString()??"").Take(30).Aggregate("",(a,c)=>a+c):"fail"):"?")).Take(8).ToArray();
+        bool hasText=obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String;
+        string text=hasText?j!.Value.GetProperty("text").GetString()??"":"";
+        bool degraded=obj&&j!.Value.TryGetProperty("degraded",out var d)&&d.ValueKind==JsonValueKind.True;
+        double seconds=obj&&j!.Value.TryGetProperty("seconds",out var sec)&&sec.ValueKind==JsonValueKind.Number?sec.GetDouble():0;
+        long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;
+        if(status is >=200 and <300&&!hasText)return new(-2,"",providers,degraded,seconds,ms,"bad-reply",obj?"NoText":"NotJson");
+        return new(status,text,providers,degraded,seconds,ms,code);
+    }
 }
 public delegate Task<ChunkReply> ChunkSender(ChunkRequest request,CancellationToken ct);
 public sealed record DictationOutcome(string Text,int Chunks,int Failed,bool Degraded,bool FromFallback,string? FailReason,int FailedStatus,long Ms)
@@ -73,7 +93,7 @@ public sealed class DictationJob
                 done++;Progress?.Invoke();
             }
         }
-        catch(OperationCanceledException){failReason??="Abgebrochen";failed++;}
+        catch(OperationCanceledException){failReason??="Abgebrochen";failed++;}   /* kept as failReason; the manager logs it */
     }
     string FieldBefore()
     {
@@ -91,10 +111,13 @@ public sealed class DictationJob
             attempt++;var t0=clock.ElapsedMilliseconds;ChunkReply reply;
             try{reply=await send(request,ct);}
             catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
-            catch(OperationCanceledException){reply=new(-1,Failure:"TimeoutException");}
-            catch(HttpRequestException ex){reply=new(0,Failure:ex.GetType().Name);}
-            catch(Exception ex){reply=new(0,Failure:ex.GetType().Name);}
-            log("dictation.chunk",new(){["id"]=id,["index"]=chunk.Index,["bytes"]=chunk.Samples.Length*2+Wav.HeaderBytes,["seconds"]=Math.Round(chunk.Seconds,1),["ms"]=clock.ElapsedMilliseconds-t0,["status"]=reply.Status,["attempt"]=attempt,["providers"]=string.Join(',',reply.Providers??[]),["code"]=reply.Code??"",["exType"]=reply.Failure??"",["degraded"]=reply.Degraded,["overlap"]=chunk.OverlapSamples>0});
+            catch(OperationCanceledException){reply=new(-1,Failure:"TimeoutException");}   /* in the reply; the job logs it */
+            catch(HttpRequestException ex){reply=new(0,Failure:ex.GetType().Name);}   /* in the reply; the job logs it */
+            catch(Exception ex){reply=new(0,Failure:ex.GetType().Name);}   /* in the reply; the job logs it */
+            int httpStatus=reply.Status;
+            // A 2xx with no text for a chunk that had speech is a lost chunk, not a quiet one (captive portal, provider hiccup behind a 200).
+            if(reply.Ok&&string.IsNullOrWhiteSpace(reply.Text)&&DictationGate.HadSpeech(chunk))reply=reply with{Status=-2,Code="empty-text",Failure="EmptyText"};
+            log("dictation.chunk",new(){["id"]=id,["http"]=httpStatus,["index"]=chunk.Index,["bytes"]=chunk.Samples.Length*2+Wav.HeaderBytes,["seconds"]=Math.Round(chunk.Seconds,1),["ms"]=clock.ElapsedMilliseconds-t0,["status"]=reply.Status,["attempt"]=attempt,["providers"]=string.Join(',',reply.Providers??[]),["code"]=reply.Code??"",["exType"]=reply.Failure??"",["degraded"]=reply.Degraded,["overlap"]=chunk.OverlapSamples>0});
             if(reply.Ok)return reply;
             if(reply.Network)
             {
@@ -103,7 +126,7 @@ public sealed class DictationJob
                 if(clock.ElapsedMilliseconds>=deadline)return reply;
                 networkWaits++;await delay(TimeSpan.FromSeconds(Math.Min(15,Math.Pow(2,Math.Min(networkWaits,4)))),ct);continue;
             }
-            if(!reply.Retryable||attempt>=3)return reply;
+            if(!reply.Retryable||attempt>=(reply.Status==-2?2:3))return reply;   // an empty answer is retried once: it rarely differs
             await delay(TimeSpan.FromSeconds(attempt==1?1:3),ct);
         }
     }

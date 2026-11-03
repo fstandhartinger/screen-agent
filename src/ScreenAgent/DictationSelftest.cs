@@ -157,7 +157,7 @@ internal static class DictationSelftest
     }
     static void WindowChecks(DictationMeta meta)
     {
-        var app=new Application();
+        var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};   // closing the last test window must not end the run (the finally shuts down)
         app.Startup+=async (_,_)=>
         {
             try
@@ -169,6 +169,15 @@ internal static class DictationSelftest
                 var w2=DictationWindow.ShowFailure(meta,"Zeitüberschreitung",meta.Paths.First(),null,()=>{});
                 Check("no copy button without a text",!w2.ButtonNames.Contains("Text kopieren")&&w2.ButtonNames.Count==3,string.Join("|",w2.ButtonNames));
                 w2.Close();
+                bool closedReported=false;
+                var r=DictationWindow.ShowResult(meta,"Diktat fertig · Text zum Einfügen","der ganze Text",_=>Task.FromResult(true),()=>closedReported=true);
+                Check("result window offers insert, copy and close",r.ButtonNames.SequenceEqual(["In aktuelles Feld einfügen","Text kopieren","Schließen"]),string.Join("|",r.ButtonNames));
+                r.Close();
+                Check("closing the result window is reported (the dictation counts as delivered)",closedReported);
+                var cap0=DictationWindow.ShowFailure(meta,"Mikrofon getrennt",meta.Paths.First(),null,null);
+                Check("a failure without a retry has no retry button",!cap0.ButtonNames.Contains("Erneut versuchen"),string.Join("|",cap0.ButtonNames));cap0.Close();
+                var note=DictationWindow.ShowNotice("Mikrofon getrennt bei 0:42 · wieder verbunden","Was in der Lücke gesagt wurde, fehlt.");
+                Check("notice window only closes",note.ButtonNames.SequenceEqual(["Schließen"])&&note.IsVisible,string.Join("|",note.ButtonNames));note.Close();
                 var cap=new CaptionOverlay();cap.Present("Das ist ein Probe-Untertitel");await Task.Delay(400);   // a layered window reports IsVisible only after its first render
                 long cx=Native.GetWindowLongPtr(new System.Windows.Interop.WindowInteropHelper(cap).Handle,-20).ToInt64();
                 Check("subtitle click-through, no focus, excluded from capture",cap.IsVisible&&(cx&0x20L)!=0&&(cx&0x08000000L)!=0&&cap.AffinityOk,$"visible={cap.IsVisible} exstyle={cx:x} affinity={cap.AffinityOk} text={cap.Text.Length}");

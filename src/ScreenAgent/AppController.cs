@@ -42,7 +42,7 @@ internal sealed class AppController : IDisposable
     int ocrGen;
     // ids = what the agent is told: OCR candidates the registry confirmed plus ids the vision model read (verified by the gateway).
     string[] ids=[],ocrIds=[],visionIds=[],terms=[];
-    readonly RunLog quiet=new();
+    readonly RunLog quiet=new(),noticeLog=new(5000);   // noticeLog: the same toast again within 5 s is logged once
     TextInjector.Target? target,audioTarget;
     string before="",process="";
     DictationFlow? audio;
@@ -64,7 +64,7 @@ internal sealed class AppController : IDisposable
     readonly ActivityOverlay? activity;
     readonly FeedbackGate feedback;
     readonly StartupTimeline startupTimeline=new();
-    bool micMuted,manualSession,prevVoice,prevActive;
+    bool micMuted,manualSession,prevVoice,prevActive,hookDeadHandled;
     long frameBackoffUntil,mutePollAt;
     public AppController(AppConfig config,DeviceClient client,AgentBridge bridge,KeyboardHook hook,StatusToast toast)
     {
@@ -72,32 +72,38 @@ internal sealed class AppController : IDisposable
         privacy=new(config.Policy(),()=>Active);learner=new(client,config.Policy(),config.LearnThreshold);
         telemetry=new(config,client,()=>bridge.SessionId);planner=new(config.IntervalMs);feedback=new(config.ScreenshotFeedback);
         captions=new(config,client,telemetry,bridge.Dispatcher,()=>(ids.ToArray(),terms.Take(30).ToArray()));
-        dictation=new(config,client,telemetry,captions,bridge.Dispatcher,(text,level)=>{if(bridge.Dispatcher.CheckAccess())Notice(text,level);else bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,level)));},text=>Balloon(text),
-            (proc,field)=>new DictationContext(proc,field.Length<=500?field:field[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray()),InjectRetry);
+        dictation=new(config,client,telemetry,captions,bridge.Dispatcher,(text,level)=>{if(bridge.Dispatcher.CheckAccess())Notice(text,level,"dictation");else bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,level,"dictation")));},text=>Balloon(text,"dictation"),
+            (proc,field)=>new DictationContext(proc,field.Length<=500?field:field[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray()),InsertHere);
         briefing=new(config,client,Trace,()=>bridge.SessionId);
         if(config.ActivityOverlay)activity=new ActivityOverlay(()=>toast.IsVisible?(int)Math.Ceiling(toast.ActualHeight*System.Windows.Media.VisualTreeHelper.GetDpi(toast).DpiScaleY)+6:0);
         bridge.Activity+=e=>OnActivity(e,false);bridge.ActivityRejected+=why=>telemetry.Event("activity.invalid",new(){["reason"]=why});
         bridge.Milestone+=(name,ms)=>telemetry.Event("session.startup",new(){["phase"]="app-"+name,["ms"]=ms});   // before any session: it reaches the trace with the first one
         prompts=new(config.MainAgentInputNames,Trace,config.MainAgentAllowStableCode);
         promptChannel=new(client,prompts.Run,Trace,
-            (code,text,chars)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{try{PromptFallbackWindow.Show(code,text,chars);}catch{ /* the result still tells */ }})),
+            (code,text,chars)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{telemetry.Event("ui.window",new(){["window"]="prompt-fallback",["code"]=code,["chars"]=chars});try{PromptFallbackWindow.Show(code,text,chars);}catch(Exception ex){Diag.Fail("prompt-fallback-window",ex);}})),
             sid=>bridge.SessionId==sid&&bridge.VoiceOn,inputGate);
         // Computer use: off until he allows it in the tray. The executor owns the run, the policy and the confirmations (see ComputerAgent).
         computerOverlay=new ComputerOverlay();
         computer=new(async (url,body)=>{using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);return reply.Ok||reply.Status is 404 or 409;},
             (type,data)=>telemetry.Event(type,data),inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host),computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
-            text=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,Level.Active))),new ChromeCdp.ConnectOptions(),
+            text=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,Level.Active,"computer"))),new ChromeCdp.ConnectOptions(),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","logs","computer.log"),bridge.Dispatcher);
         // The drawing panel waits while a prompt is typed (it could take the focus back), and opens when the prompt is over.
         inputGate.PromptEnded+=()=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{if(panelQueued is {} q){panelQueued=null;_=ShowCanvas(q.ByUser,q.Why);}}));
         bridge.CanvasPending+=OnCanvasPending;bridge.CanvasToggle+=ToggleCanvas;
+        bridge.MicState+=muted=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
+        {
+            if(!bridge.VoiceOn||muted==micMuted)return;
+            micMuted=muted;telemetry.Event("hotkey.mute.state",new(){["muted"]=muted,["source"]="page-event"});
+            try{captions.Update(audio!=null,bridge.VoiceOn,micMuted);}catch(Exception ex){TickFailed("captions",ex);}   // the subtitle microphone closes now, not on the next tick
+        }));
         if(config.HotkeyNote is {} hotkeyNote)telemetry.Event("config.note",new(){["why"]=hotkeyNote});
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
         bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();computer.Stop("session");};
         hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
         {
             if(audio!=null)return;
-            try{target=Native.GetForegroundWindow()==window?TextInjector.Bind():null;if(target!=null&&!TextInjector.Safe(target,config.Policy()))target=null;}catch{target=null;}
+            try{target=Native.GetForegroundWindow()==window?TextInjector.Bind():null;if(target!=null&&!TextInjector.Safe(target,config.Policy()))target=null;}catch(Exception ex){target=null;Diag.Fail("dictation-bind",ex);}
         }));
         hook.BindDrawing+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>underlying=window));
         hook.Action+=a=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Action(a)));
@@ -105,18 +111,30 @@ internal sealed class AppController : IDisposable
         {
             try
             {
-                captions.Update(audio!=null,bridge.VoiceOn,micMuted);
                 if(client.Paired&&scopeSent!=config.ComputerUse&&!scopePosting&&Environment.TickCount64>=scopeRetryAt)_=PostComputerScope(config.ComputerUse);
-                activity?.Tick();
+                // Their own guards: a throw in the subtitles or the activity rows must not starve the session logic below (and is logged, once per 30 s per type).
+                try{captions.Update(audio!=null,bridge.VoiceOn,micMuted);}
+                catch(Exception ex){TickFailed("captions",ex);}   // logged: tick.error
+                try{activity?.Tick();}
+                catch(Exception ex){TickFailed("activity",ex);}   // logged: tick.error
                 if(pendingClear is {} pending&&!clearing&&clearRetry.Ready(Environment.TickCount64))_=ClearContext(pending,pendingWhy??"stop");
                 if(needsUnmute&&audio is null&&!unmuting&&audioQueue.IsCompleted&&Environment.TickCount64>=unmuteRetryAt){unmuteRetryAt=Environment.TickCount64+2000;_=Unmute();}
-                if(!hook.Healthy){if(ids.Length>0||audio!=null)Reset("error");await SyncVoice();UpdateStatus();return;}
+                if(!hook.Healthy)
+                {
+                    if(!hookDeadHandled&&(ids.Length>0||audio!=null)){hookDeadHandled=true;Reset("error");}   // once per outage: the stop it queues is still pending on the next ticks
+                    await SyncVoice();UpdateStatus();return;
+                }
+                hookDeadHandled=false;
                 await SyncVoice();
                 await Lifecycle();
                 UpdateStatus();
                 await Watch();
             }
-            catch{Notice("Anfrage fehlgeschlagen",Level.Warn);}
+            catch(Exception ex)
+            {
+                if(quiet.ShouldLog("tick:"+ex.GetType().Name,Environment.TickCount64))Diag.Fail("tick",ex);   // the timer runs every 100 ms: once per 30 s per type
+                Notice("Anfrage fehlgeschlagen",Level.Warn,"tick-exception",ex);
+            }
         };timer.Start();
         var menu=new System.Windows.Forms.ContextMenuStrip();
         string chord=KeyNames.Display(config.Hotkeys["session"]);
@@ -144,10 +162,14 @@ internal sealed class AppController : IDisposable
         // A left click is the obvious thing to try on a tray icon; the menu stays on the right button.
         tray.MouseClick+=(_,e)=>{if(e.Button==System.Windows.Forms.MouseButtons.Left)bridge.ShowDesk();};
         tray.BalloonTipClicked+=(_,_)=>bridge.ShowDesk();
-        if(config.HotkeysMigrated)Balloon($"Tastenkürzel: Sitzung jetzt {chord} (wie ursprünglich), Diktat an/aus {KeyNames.Display(config.Hotkeys["dictationToggle"])}. Strg+Win allein bleibt frei für Wispr.");
-        else if(new HotkeyBindings(config.Hotkeys).CollidesWithWispr)Balloon("Achtung: Strg+Win als Diktat-Taste ist auch die Wispr-Taste. Ändere „Hotkeys“ in config.json (Beispiel: Alt+Win), sonst stören sich beide.");
-        else if(!client.Paired)Balloon($"Screen Agent läuft im Tray (Symbol unten rechts, evtl. unter ^). Rechtsklick → Desk öffnen, um das Gerät zu verbinden. Danach: {chord} startet und beendet das Gespräch.");
+        if(config.HotkeysMigrated)Balloon($"Tastenkürzel: Sitzung jetzt {chord} (wie ursprünglich), Diktat an/aus {KeyNames.Display(config.Hotkeys["dictationToggle"])}. Strg+Win allein bleibt frei für Wispr.","hotkeys-migrated");
+        else if(new HotkeyBindings(config.Hotkeys).CollidesWithWispr)Balloon("Achtung: Strg+Win als Diktat-Taste ist auch die Wispr-Taste. Ändere „Hotkeys“ in config.json (Beispiel: Alt+Win), sonst stören sich beide.","wispr-collision");
+        else if(!client.Paired)Balloon($"Screen Agent läuft im Tray (Symbol unten rechts, evtl. unter ^). Rechtsklick → Desk öffnen, um das Gerät zu verbinden. Danach: {chord} startet und beendet das Gespräch.","first-run");
         dictation.Startup();
+    }
+    void TickFailed(string where,Exception ex)
+    {
+        if(quiet.ShouldLog("tick-"+where+":"+ex.GetType().Name,Environment.TickCount64))telemetry.Event("tick.error",Redact.Of(ex,new(){["where"]=where}));
     }
     // The tray lists every key, so the user never has to remember them or read the README.
     static string[] KeyHelp(Dictionary<string,string> k)=>
@@ -162,7 +184,7 @@ internal sealed class AppController : IDisposable
         "Strg+Win+Umschalt+X: Computer-Steuerung stoppen",
         "Strg+Win+Umschalt+Y: Computer-Bestätigung (nur echte Tasten)",
     ];
-    void Balloon(string text){tray.BalloonTipTitle="Screen Agent";tray.BalloonTipText=text;tray.BalloonTipIcon=System.Windows.Forms.ToolTipIcon.Info;tray.ShowBalloonTip(8000);}
+    void Balloon(string text,string why){telemetry.Event("ui.balloon",new(){["msg"]=text,["why"]=why});tray.BalloonTipTitle="Screen Agent";tray.BalloonTipText=text;tray.BalloonTipIcon=System.Windows.Forms.ToolTipIcon.Info;tray.ShowBalloonTip(8000);}
     Status Current()=>StatusLine.Compute(new(hook.Healthy,client.Paired,bridge.SessionId is not null,hook.Session,paused||hook.Paused,voiceFailed,needsUnmute,
         schedule.Ready(Environment.TickCount64),locked,audio!=null,drawings.Count>0,ids.Length,KeyNames.Display(config.Hotkeys["session"]),micMuted&&bridge.VoiceOn,KeyNames.Display(config.Hotkeys["mute"]),excluded,dictation.Status,
 
@@ -171,7 +193,7 @@ internal sealed class AppController : IDisposable
     void UpdateStatus()
     {
         var st=Current();bool notice=Environment.TickCount64<noticeUntil;
-        if(st.Level!=shownLevel){shownLevel=st.Level;tray.Icon=TrayIcons.For(st.Level);}
+        if(st.Level!=shownLevel){shownLevel=st.Level;tray.Icon=TrayIcons.For(st.Level);telemetry.Event("ui.status",new(){["msg"]=st.Text,["level"]=st.Level.ToString()});}
         string tip=st.Text.Length>120?st.Text[..120]:st.Text;
         if(tip!=shownText){shownText=tip;tray.Text=tip;}
         if(notice)return;   // the notice keeps the toast until it expires
@@ -187,7 +209,12 @@ internal sealed class AppController : IDisposable
         else{toastText=null;toast.Dismiss();}
     }
     bool Active=>!disposed&&client.Paired&&bridge.SessionId is not null&&hook.Healthy&&hook.Session&&!hook.Paused&&!paused;
-    void Notice(string text,Level level=Level.Active){noticeUntil=Environment.TickCount64+2200;toastText=null;toast.Present(text,level);}
+    // Every toast the user sees goes through here and into the log: ui.notice {msg, level, why, exType}. A warning without a reason is logged as "unspecified" (ErrorsLoggedTests refuses the call).
+    void Notice(string text,Level level=Level.Active,string? why=null,Exception? ex=null)
+    {
+        if(noticeLog.ShouldLog(text+"|"+why,Environment.TickCount64))telemetry.Event("ui.notice",new(){["msg"]=text,["level"]=level.ToString(),["why"]=why??(level==Level.Warn?"unspecified":""),["exType"]=ex?.GetType().Name??""});
+        noticeUntil=Environment.TickCount64+2200;toastText=null;toast.Present(text,level);
+    }
     // session.startup {phase, ms since the hotkey}: each phase once per start.
     void StartMark(string phase,Dictionary<string,object?>? extra=null)
     {
@@ -204,7 +231,7 @@ internal sealed class AppController : IDisposable
     {
         if(activity is null||disposed)return;
         try{if(activity.Present(e))telemetry.Event("activity.shown",new(){["phase"]=e.Phase,["tool"]=e.Tool,["local"]=local});}
-        catch(Exception ex){telemetry.Event("activity.error",new(){["type"]=ex.GetType().Name});}
+        catch(Exception ex){telemetry.Event("activity.error",Redact.Of(ex,new(){["type"]=ex.GetType().Name}));}
     }
     // Desk voice follows the session; see VoiceSync for why a stop is only sent after a start.
     async Task SyncVoice()
@@ -236,7 +263,7 @@ internal sealed class AppController : IDisposable
             await screenWrites.Enqueue(()=>client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen/clear",DevicePayloads.Why(why),CancellationToken.None));
             if(pendingClear==sid)pendingClear=null;clearRetry.Success(Environment.TickCount64);
         }
-        catch{pendingClear=sid;pendingWhy=why;clearRetry.Failure(Environment.TickCount64);Notice("Kontext-Löschung ausstehend",Level.Warn);}
+        catch(Exception ex){pendingClear=sid;pendingWhy=why;clearRetry.Failure(Environment.TickCount64);telemetry.Event("screen.clear.fail",Redact.Of(ex,new(){["why"]=why}));Notice("Kontext-Löschung ausstehend",Level.Warn,"clear-failed",ex);}
         finally{clearing=false;}
     }
     string? pendingClear,pendingWhy;
@@ -248,7 +275,7 @@ internal sealed class AppController : IDisposable
         try{needsUnmute=!await bridge.Mute(false);}
         finally{unmuting=false;}
         if(!needsUnmute)unmuteNoticed=false;
-        else if(!unmuteNoticed){unmuteNoticed=true;Notice("Desk-Mikro stumm",Level.Warn);}   // once; the status line keeps saying it
+        else if(!unmuteNoticed){unmuteNoticed=true;Notice("Desk-Mikro stumm",Level.Warn,"unmute-unconfirmed");}   // once; the status line keeps saying it
     }
     Task PostScreen(string sid,object body,CancellationToken ct)=>screenWrites.Enqueue(()=>
     {
@@ -285,9 +312,9 @@ internal sealed class AppController : IDisposable
                 if(hook.Session&&!bridge.VoiceOn){startupTimeline.Begin(Environment.TickCount64);StartMark("hotkey",new(){["browser"]=bridge.BrowserReady,["page"]=bridge.SessionId is not null});}
                 else startupTimeline.End();
                 var st=Current();bool say=st.Level is Level.Warn or Level.Busy;   // "Sitzung startet …" at once, not a bare "an" and then seconds of nothing
-                if(hook.Session)Notice(say?st.Text:"Sitzung an",say?st.Level:Level.Active);else Notice("Sitzung aus",Level.Idle);
+                if(hook.Session)Notice(say?st.Text:"Sitzung an",say?st.Level:Level.Active,"status");else Notice("Sitzung aus",Level.Idle);
             }
-            else Notice(hook.Paused?"Pausiert":"Fortgesetzt",hook.Paused?Level.Paused:Level.Active);
+            else Notice(hook.Paused?audio!=null?"Pausiert · das Diktat wird noch eingefügt":"Pausiert":"Fortgesetzt",hook.Paused?Level.Paused:Level.Active,"pause-toggle");   // pause ends a dictation like a stop: its text is still delivered
             return;
         }
         if(action==ActionKind.DrawStart&&Active&&drawings.Count==0)
@@ -304,26 +331,26 @@ internal sealed class AppController : IDisposable
     }
     async Task RunAudioAfter(Task previous,ActionKind action)
     {
-        try{await previous;}catch{ /* A failed lifecycle must not poison future key events. */ }
+        try{await previous;}catch(Exception ex){Diag.Fail("audio-queue-previous",ex);}   // a failed lifecycle must not poison future key events
         try
         {
             if(action==ActionKind.DictationStart)
             {
-                string? refused=audio!=null?"already-recording":!hook.Dictating?"key-released":target is null?"no-target":paused||hook.Paused?"paused":!client.Paired?"not-paired":!TextInjector.Safe(target,config.Policy())?"unsafe-target":null;
+                string? refused=audio!=null?"already-recording":!hook.Dictating?"key-released":target is null?"no-target":paused||hook.Paused?"paused":!client.Paired?"not-paired":TextInjector.SafeWhy(target,config.Policy()) is {} unsafeWhy?"unsafe-target:"+unsafeWhy:null;
                 if(refused!=null)
                 {
                     telemetry.Event("dictation.refused",new(){["why"]=refused,["process"]=SafeProcess(target)});
-                    Notice(refused switch{"already-recording"=>"Diktat läuft schon","key-released"=>"Diktat nicht gestartet · Taste zu früh losgelassen","no-target"=>"Diktat nicht möglich · kein Textfeld gewählt","paused"=>"Diktat nicht möglich · pausiert","not-paired"=>"Diktat nicht möglich · nicht mit dem Desk verbunden",_=>"Diktat nicht möglich · dieses Feld ist geschützt (Passwort oder erhöhtes Fenster)"},Level.Warn);
+                    Notice(refused switch{"already-recording"=>"Diktat läuft schon","key-released"=>"Diktat nicht gestartet · Taste zu früh losgelassen","no-target"=>"Diktat nicht möglich · kein Textfeld gewählt","paused"=>"Diktat nicht möglich · pausiert","not-paired"=>"Diktat nicht möglich · nicht mit dem Desk verbunden",_=>"Diktat nicht möglich · dieses Feld ist geschützt (Passwort oder erhöhtes Fenster)"},Level.Warn,"refused:"+refused);
                     return;
                 }
                 audioTarget=target;audioSession=bridge.SessionId;
-                if(!await bridge.Mute(true)){await Unmute();telemetry.Event("dictation.refused",new(){["why"]="mute-unconfirmed"});Notice("Diktat · Mikrofon nicht bestätigt",Level.Warn);return;}
+                if(!await bridge.Mute(true)){await Unmute();telemetry.Event("dictation.refused",new(){["why"]="mute-unconfirmed"});Notice("Diktat · Mikrofon nicht bestätigt",Level.Warn,"mute-unconfirmed");return;}
                 if(!hook.Dictating||paused||hook.Paused||audioTarget is null||!TextInjector.Safe(audioTarget,config.Policy()))
-                {await Unmute();telemetry.Event("dictation.refused",new(){["why"]="target-changed"});Notice("Diktat abgebrochen · Ziel hat gewechselt",Level.Warn);return;}
+                {await Unmute();telemetry.Event("dictation.refused",new(){["why"]="target-changed"});Notice("Diktat abgebrochen · Ziel hat gewechselt",Level.Warn,"target-changed");return;}
                 process=TextInjector.ProcessName(audioTarget.Window);
                 before=TextInjector.Terminal(audioTarget.Window)?"":TextInjector.Read(audioTarget.Element)??"";
                 try{audio=dictation.Start(process,before.Length<=500?before:before[^500..],audioSession!=null);}
-                catch(Exception){await Unmute();Notice("Diktat nicht möglich · Mikrofon nicht verfügbar",Level.Warn);return;}   // dictation.fail is logged by the manager
+                catch(Exception ex){await Unmute();Notice("Diktat nicht möglich · Mikrofon nicht verfügbar",Level.Warn,"microphone",ex);return;}   // dictation.fail is logged by the manager
                 Notice("Diktat");return;
             }
             if(audio is null){telemetry.Event("dictation.stop.idle");return;}
@@ -331,7 +358,7 @@ internal sealed class AppController : IDisposable
             var bound=audioTarget;string prior=before;
             try
             {
-                if(action==ActionKind.DictationDiscard){await dictation.Discard(flow,"hotkey");Notice("Diktat verworfen · Aufnahme bleibt 24 h",Level.Idle);return;}
+                if(action==ActionKind.DictationDiscard){await dictation.Discard(flow,"hotkey");Notice("Diktat verworfen · Aufnahme bleibt 24 h",Level.Idle,"discard");return;}
                 await dictation.Stop(flow);
                 // Deliver even if the session ended or changed meanwhile: the words were said. Only the discard chord throws them away.
                 _=transcriptions.Enqueue(()=>dictation.Deliver(flow,async text=>
@@ -343,21 +370,23 @@ internal sealed class AppController : IDisposable
             }
             finally{needsUnmute=true;}
         }
-        catch(OperationCanceledException){}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception ex)
         {
-            telemetry.Event("dictation.fail",new(){["stage"]="audio-queue",["reason"]="exception",["exType"]=ex.GetType().Name});
-            dictation.Abort("Unerwarteter Fehler: "+ex.GetType().Name);audio=null;await Unmute();Notice("Diktat fehlgeschlagen · "+ex.GetType().Name,Level.Warn);
+            telemetry.Event("dictation.fail",Redact.Of(ex,new(){["stage"]="audio-queue",["reason"]="exception"}));
+            dictation.Abort("Unerwarteter Fehler: "+ex.GetType().Name);audio=null;await Unmute();Notice("Diktat fehlgeschlagen · "+ex.GetType().Name,Level.Warn,"audio-queue",ex);
         }
     }
-    static string SafeProcess(TextInjector.Target? t){try{return t is null?"":TextInjector.ProcessName(t.Window);}catch{return "";}}
-    // A retry (button or tray) has no window of its own: it goes into the one in front only when that is still the process he dictated into and the field is safe;
-    // otherwise the manager shows the text with a copy button. Nothing reaches the clipboard here.
-    async Task<bool> InjectRetry(string proc,string text)
+    // HTTP status of a refused Desk call (DeviceClient throws HttpRequestException with it), 0 = none.
+    static int StatusOf(Exception ex)=>ex is System.Net.Http.HttpRequestException{StatusCode:{} c}?(int)c:0;
+    static string SafeProcess(TextInjector.Target? t){try{return t is null?"":TextInjector.ProcessName(t.Window);}catch{return "";}   /* the window is gone: no name */ }
+    // "In aktuelles Feld einfügen" in the dictation window: the field that has the focus now (the window never takes it from his program). He clicked, so this field is his
+    // choice; the usual checks (password, elevated window, blocked list) still apply inside Inject. A retry never gets here by itself.
+    async Task<bool> InsertHere(string text)
     {
-        TextInjector.Target? t;
-        try{t=TextInjector.Bind();if(TextInjector.ProcessName(t.Window)!=proc||!TextInjector.Safe(t,config.Policy()))return false;}
-        catch{return false;}
+        TextInjector.Target t;
+        try{t=TextInjector.Bind();}
+        catch(Exception ex){Diag.Fail("insert-here-bind",ex);return false;}
         return await TextInjector.Inject(t,text,text.Length>=60&&!TextInjector.Terminal(t.Window),config.Policy(),inputGate);
     }
     // Called every tick: the bits of session life that are not a hotkey (dialog started in the Desk window, mute state, lifecycle log).
@@ -389,20 +418,20 @@ internal sealed class AppController : IDisposable
         // The dock button can mute too: follow the page so the toast and tray never disagree with the microphone.
         if(voice&&active&&Environment.TickCount64>=mutePollAt)
         {
-            mutePollAt=Environment.TickCount64+1000;
+            mutePollAt=Environment.TickCount64+(captions.TapRunning?250:1000);   // while the subtitle microphone is open a mute from the page's button must stop it quickly; the page can also tell us (mic-state)
             if(await bridge.MicMuted() is {} now&&now!=micMuted){micMuted=now;telemetry.Event("hotkey.mute.state",new(){["muted"]=now,["source"]="page"});}
         }
     }
     async Task ToggleMute()
     {
         // The microphone of the voice session is muted for the whole dictation (so the agent does not hear it). The key must not undo that.
-        if(audio!=null||hook.Dictating){telemetry.Event("hotkey.mute.ignored",new(){["why"]="dictating",["muted"]=micMuted});Notice("Mikro bleibt stumm während des Diktats",Level.Muted);return;}
-        if(!Active||!bridge.VoiceOn){Notice("Kein Gespräch aktiv · nichts zu stummschalten",Level.Warn);return;}
+        if(audio!=null||hook.Dictating){telemetry.Event("hotkey.mute.ignored",new(){["why"]="dictating",["muted"]=micMuted});Notice("Mikro bleibt stumm während des Diktats",Level.Muted,"dictating");return;}
+        if(!Active||!bridge.VoiceOn){telemetry.Event("hotkey.mute.ignored",new(){["why"]="no-session",["active"]=Active,["voice"]=bridge.VoiceOn});Notice("Kein Gespräch aktiv · nichts zu stummschalten",Level.Warn,"no-session");return;}
         var muted=await bridge.ToggleMicMute();
-        if(muted is null){Notice("Stumm nicht möglich · Desk antwortet nicht",Level.Warn);return;}
+        if(muted is null){telemetry.Event("hotkey.mute.ignored",new(){["why"]="page-silent"});Notice("Stumm nicht möglich · Desk antwortet nicht",Level.Warn,"page-silent");return;}
         micMuted=muted.Value;mutePollAt=Environment.TickCount64+1000;
         telemetry.Event("hotkey.mute.state",new(){["muted"]=micMuted,["source"]="hotkey"});
-        Notice(micMuted?"Mikro stumm":"Mikro an",micMuted?Level.Muted:Level.Active);
+        Notice(micMuted?"Mikro stumm":"Mikro an",micMuted?Level.Muted:Level.Active,"mute-toggle");
     }
     // The Desk learns the scope only from here; a lost POST is retried every 30 s while the paired app runs.
     async Task PostComputerScope(bool on)
@@ -420,10 +449,10 @@ internal sealed class AppController : IDisposable
     async Task SetComputer(bool on)
     {
         if(on&&Native.MessageBox(IntPtr.Zero,"Der Agent darf dann auf Zuruf deinen Computer bedienen: Fenster per Windows-Bedienungshilfen und Chrome über dessen Debug-Port. Riskante Aktionen fragen dich vorher mit einem Code. Strg+Win+Umschalt+X stoppt sofort.\r\n\r\nHinweis zu Chrome: Die Fernsteuerung in Chrome schaltest du selbst ein (chrome://inspect/#remote-debugging). Solange sie an ist, kann jedes Programm deines Benutzers mit einem Klick auf „Zulassen“ auf deinen Browser zugreifen.\r\n\r\nErlauben?","Screen Agent · Computer-Steuerung",0x4|0x20|0x10000|0x40000)!=6)return;
-        try{ScreenConfig.SetComputerUse(on);}catch(Exception e){telemetry.Event("computer.scope.failed",new(){["status"]=-1,["type"]=e.GetType().Name});Notice("Einstellung konnte nicht gespeichert werden",Level.Warn);return;}
+        try{ScreenConfig.SetComputerUse(on);}catch(Exception e){telemetry.Event("computer.scope.failed",new(){["status"]=-1,["type"]=e.GetType().Name});Notice("Einstellung konnte nicht gespeichert werden",Level.Warn,"computer-config",e);return;}
         config.ComputerUse=on;computerItem.Checked=on;telemetry.Event("computer.scope",new(){["enabled"]=on});
         if(!on)computer.Stop("off");
-        Notice(on?"Computer-Steuerung erlaubt":"Computer-Steuerung aus",on?Level.Active:Level.Muted);
+        Notice(on?"Computer-Steuerung erlaubt":"Computer-Steuerung aus",on?Level.Active:Level.Muted,"computer-scope");
         scopeSent=null;await PostComputerScope(on);
     }
     // Long poll: the voice agent asks for a fresh picture ("was siehst du jetzt?") through look_at_screen.
@@ -443,8 +472,8 @@ internal sealed class AppController : IDisposable
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
                 else if(!reply.Ok)await Task.Delay(3000,ct);
             }
-            catch(OperationCanceledException){return;}
-            catch{try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}}
+            catch(OperationCanceledException){return;}   /* cancelled */
+            catch(Exception ex){telemetry.Event("screen.commands.fail",Redact.Of(ex));try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}   /* cancelled */}
         }
     }
     // Drawing panel. Auto-open only when allowed (config, not closed by him this session) and only with the capture exclusion confirmed.
@@ -457,14 +486,14 @@ internal sealed class AppController : IDisposable
             var panel=Panel();
             if(!panel.Prepare())
             {
-                if(!canvasNoted){canvasNoted=true;telemetry.Event("canvas.unavailable",new(){["why"]="affinity"});Notice("Zeichnung nicht verfügbar · Windows nimmt das Fenster nicht aus der Aufnahme",Level.Warn);}
+                if(!canvasNoted){canvasNoted=true;telemetry.Event("canvas.unavailable",new(){["why"]="affinity"});Notice("Zeichnung nicht verfügbar · Windows nimmt das Fenster nicht aus der Aufnahme",Level.Warn,"affinity");}
                 return;
             }
             // CanvasPolicy decides (first diagram: to the front; minimised: stays minimised; closed: stays closed) and logs canvas.panel.
             bool opened=byUser?await panel.UserShow(why):await panel.Pending();
             if(opened)telemetry.Event("canvas.open",new(){["why"]=why,["ok"]=true,["restores"]=panel.ForegroundRestores});
         }
-        catch(Exception ex){telemetry.Event("canvas.error",new(){["type"]=ex.GetType().Name});}
+        catch(Exception ex){telemetry.Event("canvas.error",Redact.Of(ex,new(){["type"]=ex.GetType().Name}));}
     }
     void OnCanvasPending(){if(!bridge.VoiceOn)return;   // a drawing from the text chat, or one replayed at page load, opens nothing
         _=ShowCanvas(false,"pending");}
@@ -501,8 +530,8 @@ internal sealed class AppController : IDisposable
             }
             if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,info,fg,grid,monitor,sid,ct);
         }
-        catch(OperationCanceledException){}
-        catch{schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",new(){["where"]="watch"});await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn);}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
+        catch(Exception ex){schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",Redact.Of(ex,new(){["where"]="watch",["status"]=StatusOf(ex)}));await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn,"watch-failed",ex);}
         finally{busy=false;}
     }
     // No frame this tick. Only a lock screen (or a window from the user's own list) is told to the user and the agent; everything else is retried on the next tick without a word.
@@ -515,10 +544,10 @@ internal sealed class AppController : IDisposable
         locked=why=="locked";excluded=why=="config-list";freshId=null;
         if(entering)
         {
-            if(locked){Notice("Bildschirm gesperrt");await ClearContext(sid,"locked");}
+            if(locked){Notice("Bildschirm gesperrt",Level.Active,"locked");await ClearContext(sid,"locked");}
             else
             {
-                Notice("Fenster ausgenommen (Liste)");ForgetLocal();
+                Notice("Fenster ausgenommen (Liste)",Level.Active,"config-list");ForgetLocal();
                 using var said=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/screen/private",new Dictionary<string,object?>{["why"]="excluded"},ct);   // the agent must not keep describing the previous window
             }
         }
@@ -537,22 +566,22 @@ internal sealed class AppController : IDisposable
             {
                 var clock=System.Diagnostics.Stopwatch.StartNew();
                 var found=await Task.Run(()=>Ocr.FindIds(copy,ct),ct);long ms=clock.ElapsedMilliseconds;
-                briefing.NoteScreenText(found.Text);   // kept in memory for the start briefing; cleared with the picture
                 var confirmed=await client.Exists(found.Ids,ct);
                 if(gen!=ocrGen||!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg){ocrGrid=null;return;}   // the picture moved on: look again
+                briefing.NoteScreenText(found.Text);   // kept in memory for the start briefing; only for a picture that is still current (a Reset cleared the earlier one), cleared with the picture
                 ocrIds=confirmed;var merged=DevicePayloads.Merge(ocrIds,visionIds);
                 await PostScreen(sid,DevicePayloads.Screen(merged,process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
                 if(gen!=ocrGen||!Active||ct.IsCancellationRequested)return;
-                telemetry.Event("screen.ocr",new(){["ms"]=ms,["engine"]=found.Engine,["candidates"]=found.Ids.Length,["confirmed"]=confirmed.Length});
+                telemetry.Event("screen.ocr",new(){["ms"]=ms,["engine"]=found.Engine,["winrt"]=found.WinRtFailure??"",["candidates"]=found.Ids.Length,["confirmed"]=confirmed.Length});
                 SetIds(merged,process,"ocr");frameProcess=process;schedule.Success(Environment.TickCount64);
                 if(terms.Length==0)terms=await client.Dictionary(ct);
             }
         }
-        catch(OperationCanceledException){}
-        catch(Exception) when(gen==ocrGen)
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
+        catch(Exception ex) when(gen==ocrGen)
         {
-            ocrGrid=null;schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",new(){["where"]="ocr"});
-            await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn);
+            ocrGrid=null;schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",Redact.Of(ex,new(){["where"]="ocr",["status"]=StatusOf(ex)}));
+            await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn,"ocr-failed",ex);
         }
         finally{if(gen==ocrGen)ocrRunning=false;}
     }
@@ -612,11 +641,18 @@ internal sealed class AppController : IDisposable
         try
         {
             var clock=System.Diagnostics.Stopwatch.StartNew();
-            var thumb=await Task.Run(()=>FeedbackThumb.Make(shot,FeedbackOverlay.ThumbWidthPx));
-            var (shown,problem)=ScreenFlash.Show(monitor,thumb);
-            telemetry.Event("screen.feedback",shown?new(){["reason"]=name,["shown"]=true,["ms"]=clock.ElapsedMilliseconds}:new(){["reason"]=name,["shown"]=false,["why"]=problem});
+            var thumb=await Task.Run(()=>FeedbackThumb.Make(shot,FeedbackOverlay.ThumbWidthPx));   // the only part that needs the picture; the window is built after the upload has started
+            _=bridge.Dispatcher.BeginInvoke(new System.Action(()=>
+            {
+                try
+                {
+                    var (shown,problem)=ScreenFlash.Show(monitor,thumb);
+                    telemetry.Event("screen.feedback",shown?new(){["reason"]=name,["shown"]=true,["ms"]=clock.ElapsedMilliseconds}:new(){["reason"]=name,["shown"]=false,["why"]=problem});
+                }
+                catch(Exception ex){telemetry.Event("screen.feedback",Redact.Of(ex,new(){["reason"]=name,["shown"]=false,["why"]="error:"+ex.GetType().Name}));}
+            }));
         }
-        catch(Exception ex){telemetry.Event("screen.feedback",new(){["reason"]=name,["shown"]=false,["why"]="error:"+ex.GetType().Name});}
+        catch(Exception ex){telemetry.Event("screen.feedback",Redact.Of(ex,new(){["reason"]=name,["shown"]=false,["why"]="error:"+ex.GetType().Name}));}
     }
     // `ids` in the gateway's reply: a#... the vision model read on the picture and the registry confirmed.
     static string[] VisionIds(RawReply reply)=>reply.Json is {} j&&j.RootElement.ValueKind==System.Text.Json.JsonValueKind.Object&&j.RootElement.TryGetProperty("ids",out var list)&&list.ValueKind==System.Text.Json.JsonValueKind.Array
@@ -650,13 +686,13 @@ internal sealed class AppController : IDisposable
                 if(clean is null)
                 {
                     string why=privacy.LastSkip is {Length:>0} w?w:"capture-failed";Trace(false,why);
-                    Notice(why switch{"locked"=>"Markierung nicht gesendet · Bildschirm gesperrt","config-list"=>"Markierung nicht gesendet · Fenster ausgenommen (Liste)","not-active"=>"Markierung nicht gesendet · Sitzung nicht aktiv",_=>"Markierung nicht gesendet · Aufnahme fehlgeschlagen"},Level.Warn);
+                    Notice(why switch{"locked"=>"Markierung nicht gesendet · Bildschirm gesperrt","config-list"=>"Markierung nicht gesendet · Fenster ausgenommen (Liste)","not-active"=>"Markierung nicht gesendet · Sitzung nicht aktiv",_=>"Markierung nicht gesendet · Aufnahme fehlgeschlagen"},Level.Warn,"highlight:"+why);
                     continue;
                 }
                 using(clean)
                 {
                     var made=HighlightBuilder.Build(d,clean);
-                    if(made is null){Trace(false,"offscreen");Notice("Markierung nicht gesendet · außerhalb des Bildschirms",Level.Warn);continue;}
+                    if(made is null){Trace(false,"offscreen");Notice("Markierung nicht gesendet · außerhalb des Bildschirms",Level.Warn,"offscreen");continue;}
                     foreach(var other in batch)other.Fade();
                     await GiveFeedback(clean,d.Monitor,ShotReason.Highlight);
                     var body=DevicePayloads.Highlight(made.Png,made.Jpeg,made.Bbox,ids);
@@ -665,25 +701,26 @@ internal sealed class AppController : IDisposable
                     int bytes=made.Png.Length+made.Jpeg.Length;
                     if(reply.Ok)
                     {
-                        Trace(true,"sent",bytes);Notice("Markierung gesendet");
+                        Trace(true,"sent",bytes);Notice("Markierung gesendet",Level.Active,"sent");
                         var more=VisionIds(reply);if(more.Length>0){visionIds=DevicePayloads.Merge(visionIds,more);SetIds(DevicePayloads.Merge(ocrIds,visionIds),"","highlight");}
                     }
-                    else if(reply.Status==409){Trace(false,"no-session",bytes);Notice("Keine aktive Stimme · Markierung nicht gesendet",Level.Warn);}
-                    else{Trace(false,"rejected-"+reply.Status,bytes);Notice($"Markierung nicht gesendet · Desk antwortet {reply.Status}",Level.Warn);}
+                    else if(reply.Status==409){Trace(false,"no-session",bytes);Notice("Keine aktive Stimme · Markierung nicht gesendet",Level.Warn,"no-session");}
+                    else{Trace(false,"rejected-"+reply.Status,bytes);Notice($"Markierung nicht gesendet · Desk antwortet {reply.Status}",Level.Warn,"rejected-"+reply.Status);}
                 }
             }
             foreach(var d in batch)d.Fade();   // idempotent; also after a failure the strokes go away on their own
             if(!ct.IsCancellationRequested)await Task.Delay(Math.Max(0,(int)(DrawOverlay.FadeMs-(Environment.TickCount64-t0))),ct);
         }
-        catch(OperationCanceledException){}
-        catch(Exception ex){Trace(false,"error:"+ex.GetType().Name);Notice("Markierung nicht gesendet · Verbindung prüfen",Level.Warn);}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
+        catch(Exception ex){Trace(false,"error:"+ex.GetType().Name);Diag.Fail("highlight",ex,new(){["status"]=StatusOf(ex)});Notice("Markierung nicht gesendet · Verbindung prüfen",Level.Warn,"highlight-error",ex);}
         finally{foreach(var d in batch)d.Close();}
     }
     public void Dispose()
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);
-        telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);
-        disposed=true;computer.Dispose();computerOverlay.Dispose();canvas?.Terminate();activity?.Close();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
+        disposed=true;computer.Dispose();computerOverlay.Dispose();canvas?.Terminate();activity?.Close();ScreenFlash.CloseCurrent();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
+        // After the dictation and the captions are gone: their last events (dictation.fail stage=shutdown) are in the queue the flush and the final save see.
+        telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);telemetry.Dispose();
         foreach(var d in drawings)d.Close();drawings.Clear();tray.Visible=false;tray.Dispose();epoch.Dispose();
     }
 }

@@ -9,6 +9,9 @@ internal static class Program
     [STAThread] public static int Main(string[] args)
     {
         KeyboardHook? hook=null;
+        // Whatever kills the process is written to the log first (and the queue file, so the next start ships it to the Desk).
+        AppDomain.CurrentDomain.UnhandledException+=(_,e)=>Diag.Crash("unhandled",e.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException+=(_,e)=>Diag.Fail("unobserved-task",e.Exception.GetBaseException());   // not fatal: logged and observed
         AppDomain.CurrentDomain.ProcessExit+=(_,_)=>{hook?.Dispose();};
         try
         {
@@ -53,7 +56,7 @@ internal static class Program
             {
                 // A second start (double click on the exe) is a request to see the app: ask the running one to open the Desk.
                 Native.AllowSetForegroundWindow(-1); // let the running instance bring its window to the front for this click
-                try{using var running=EventWaitHandle.OpenExisting(showName);running.Set();}catch{ /* the first instance is still starting */ }
+                try{using var running=EventWaitHandle.OpenExisting(showName);running.Set();}catch(Exception ex){Diag.Fail("show-request",ex);}   // the first instance is still starting
                 return 0;
             }
             using var showRequest=new EventWaitHandle(false,EventResetMode.AutoReset,showName);
@@ -61,7 +64,7 @@ internal static class Program
             var config=ScreenConfig.Load();using var client=new DeviceClient(config);
             var bridge=new AgentBridge(config,client);app.MainWindow=bridge;var toast=new StatusToast();
             hook=new KeyboardHook(new HotkeyBindings(config.Hotkeys));using var controller=new AppController(config,client,bridge,hook,toast);
-            app.DispatcherUnhandledException+=(_,e)=>{hook.Dispose();e.Handled=false;};
+            app.DispatcherUnhandledException+=(_,e)=>{Diag.Crash("dispatcher",e.Exception);hook.Dispose();e.Handled=false;};
             app.Exit+=(_,_)=>{hook.Dispose();toast.Close();};
             new Thread(()=>{while(showRequest.WaitOne())bridge.Dispatcher.BeginInvoke(new System.Action(bridge.ShowDesk));}){IsBackground=true,Name="ScreenAgent show request"}.Start();
             bridge.StartHidden();app.Run();return 0;
@@ -70,9 +73,11 @@ internal static class Program
         {
             if(args.FirstOrDefault()?.StartsWith("--selftest")==true){Console.WriteLine(JsonSerializer.Serialize(new{error=ex.ToString()}));return 1;}
             // A GUI-subsystem exe has no console: say what is wrong where the user can see it, and keep a log.
+            Diag.Crash("startup",ex);
             string log=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","startup-error.log");
-            try{Directory.CreateDirectory(Path.GetDirectoryName(log)!);File.WriteAllText(log,DateTime.Now.ToString("s")+"\r\n"+ex);}catch{ /* the box below still tells */ }
+            try{Directory.CreateDirectory(Path.GetDirectoryName(log)!);File.WriteAllText(log,DateTime.Now.ToString("s")+"\r\n"+ex);}catch(Exception logEx){Diag.Fail("startup-error-log",logEx);}   // the box below still tells
             string what=ex is InvalidDataException?"Die Einstellungen in config.json sind ungültig (%APPDATA%\\ScreenAgent\\config.json):\r\n\r\n"+ex.Message:ex.Message;
+            Diag.Event("ui.window",new(){["window"]="start-failed",["exType"]=ex.GetType().Name,["msg"]=Redact.Message(what)});
             Native.MessageBox(IntPtr.Zero,"Screen Agent konnte nicht starten.\r\n\r\n"+what+"\r\n\r\nDetails: "+log,"Screen Agent",0x10|0x10000|0x40000);
             return 1;
         }
@@ -124,11 +129,11 @@ internal static class Program
                 bool pass=pasted&&unicode&&paste=="Jev und JevBench"&&result=="Jev und JevBench Jev und JevBench";
                 Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status=pass?"passed":"failed",clipboard=paste,unicode=result,pasted,unicodeSent=unicode,foreground,focused,modifiersUp}));exit=pass?0:1;
             }
-            catch(Exception ex){Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status="failed",error=ex.Message}));exit=1;}
+            catch(Exception ex){Console.WriteLine(JsonSerializer.Serialize(new{test="inject",status="failed",error=ex.Message}));exit=1;}   // selftest: the console line is the log
             finally
             {
                 // Owned child only; no unrelated Notepad instances are closed.
-                if(notepad is not null){try{if(!notepad.HasExited)notepad.Kill();}catch{}notepad.Dispose();}app.Shutdown(exit);
+                if(notepad is not null){try{if(!notepad.HasExited)notepad.Kill();}catch{ /* selftest cleanup */ }notepad.Dispose();}app.Shutdown(exit);
             }
         };
         app.Run();return exit;

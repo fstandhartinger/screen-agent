@@ -20,14 +20,18 @@ internal sealed class ActivityOverlay : Window
         }
     }
     static readonly System.Windows.Media.Color Dark=System.Windows.Media.Color.FromArgb(225,34,34,40),Orange=System.Windows.Media.Color.FromRgb(255,150,60),Green=System.Windows.Media.Color.FromRgb(61,220,132),Purple=System.Windows.Media.Color.FromRgb(168,120,255);
+    static SolidColorBrush Frozen(System.Windows.Media.Color c,double opacity=1){var b=new SolidColorBrush(c){Opacity=opacity};b.Freeze();return b;}
+    static readonly SolidColorBrush DarkBrush=Frozen(Dark),GreenBrush=Frozen(Green),OrangeBrush=Frozen(Orange),PurpleFull=Frozen(Purple),PurpleDim=Frozen(Purple,0.35);
     readonly ActivityBoard board=new();
     readonly Row[] rows;
     readonly Func<int> reserve;
+    readonly bool requireExclusion;
+    (int,int,int) placed;
     public bool CaptureExcluded {get;private set;}
     // reserve: pixels held free above the bottom edge (the status note stands there).
     public ActivityOverlay(Func<int> reserve,bool excludeFromCapture=true)
     {
-        this.reserve=reserve;
+        this.reserve=reserve;requireExclusion=excludeFromCapture;
         WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.NoResize;AllowsTransparency=true;Background=Brushes.Transparent;
         Topmost=true;ShowInTaskbar=false;ShowActivated=false;Focusable=false;SizeToContent=SizeToContent.WidthAndHeight;
         rows=Enumerable.Range(0,board.MaxRows).Select(_=>new Row()).ToArray();
@@ -52,19 +56,20 @@ internal sealed class ActivityOverlay : Window
     void Render()
     {
         long now=Environment.TickCount64;var view=board.View(now);
+        if(requireExclusion&&!CaptureExcluded){if(view.Count>0)OverlayStyle.RefusedOnce("activity");if(IsVisible)Hide();return;}   // not shown when a screenshot could catch it
         for(int i=0;i<rows.Length;i++)
         {
             var row=rows[i];
             if(i>=view.Count){row.Box.Visibility=Visibility.Collapsed;continue;}
             var v=view[i];
             row.Label.Text=v.Text;row.Box.Opacity=v.Opacity;row.Box.Visibility=Visibility.Visible;
-            row.Box.Background=new SolidColorBrush(Dark);
+            row.Box.Background=DarkBrush;
             switch(v.Kind)
             {
-                case RowKind.Done:row.Mark.Text="✓";row.Mark.Foreground=new SolidColorBrush(Green);row.Label.Foreground=Brushes.White;break;
-                case RowKind.Fail:row.Mark.Text="!";row.Mark.Foreground=new SolidColorBrush(Orange);row.Label.Foreground=new SolidColorBrush(Orange);break;
+                case RowKind.Done:row.Mark.Text="✓";row.Mark.Foreground=GreenBrush;row.Label.Foreground=Brushes.White;break;
+                case RowKind.Fail:row.Mark.Text="!";row.Mark.Foreground=OrangeBrush;row.Label.Foreground=OrangeBrush;break;
                 default:   // a dot that breathes: the only motion, and it never delays a row
-                    row.Mark.Text="●";row.Mark.Foreground=new SolidColorBrush(Purple){Opacity=(now/350)%2==0?1:0.35};row.Label.Foreground=Brushes.White;break;
+                    row.Mark.Text="●";row.Mark.Foreground=(now/350)%2==0?PurpleFull:PurpleDim;row.Label.Foreground=Brushes.White;break;
             }
         }
         if(view.Count==0){if(IsVisible)Hide();return;}
@@ -78,8 +83,11 @@ internal sealed class ActivityOverlay : Window
         var dpi=VisualTreeHelper.GetDpi(this);
         int w=(int)Math.Ceiling(ActualWidth*dpi.DpiScaleX),h=(int)Math.Ceiling(ActualHeight*dpi.DpiScaleY);
         if(w<=0||h<=0)return;
+        int res=reserve();var key=(w,h,res);
+        if(key==placed)return;   // the 100 ms tick re-renders; the window only moves when its size or the reserved height changed
+        placed=key;
         var work=StatusToast.Px(screen.WorkingArea);
-        work=new(work.X,work.Y,work.W,Math.Max(h,work.H-reserve()));
+        work=new(work.X,work.Y,work.W,Math.Max(h,work.H-res));
         var box=WindowPlacement.BottomRight(work,w,h,(int)Math.Round(14*dpi.DpiScaleX));
         Native.SetWindowPos(hwnd,IntPtr.Zero,box.X,box.Y,0,0,0x1|0x4|0x10);   // NOSIZE | NOZORDER | NOACTIVATE
     }

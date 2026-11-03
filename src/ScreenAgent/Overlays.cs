@@ -15,8 +15,12 @@ internal static class OverlayStyle
         long ex=Native.GetWindowLongPtr(h,-20).ToInt64();
         ex|=0x08000000L|0x80L|(clickThrough?0x20L:0L);
         Native.SetWindowLongPtr(h,-20,(IntPtr)ex);
-        return Native.SetWindowDisplayAffinity(h,excludeFromCapture?0x11u:0u)&&excludeFromCapture;
+        bool set=Native.SetWindowDisplayAffinity(h,excludeFromCapture?0x11u:0u);
+        return excludeFromCapture&&set&&Native.GetWindowDisplayAffinity(h,out uint now)&&now==0x11u;   // read back, not just accepted
     }
+    static readonly HashSet<string> refusedLogged=[];
+    // capture.exclusion-failed {window}: a window that would show up in the next screenshot is not shown. Once per kind of window.
+    public static void RefusedOnce(string window){lock(refusedLogged){if(!refusedLogged.Add(window))return;}Diag.Event("capture.exclusion-failed",new(){["window"]=window});}
     // WS_EX_TRANSPARENT: mouse input goes to whatever is below.
     public static void MakeClickThrough(Window w)
     {

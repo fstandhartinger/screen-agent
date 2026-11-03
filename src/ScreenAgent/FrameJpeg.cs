@@ -21,7 +21,7 @@ internal static class FrameJpeg
                 scaled.Save(stream,Codec,parameters);last=stream.ToArray();
                 if(last.Length<=FrameSizing.MaxBytes)return (last,w,h);
             }
-            if(attempt>=6)throw new InvalidDataException("Frame too large");
+            if(attempt>=6){Diag.Event("frame.encode.fail",new(){["why"]="too-large",["w"]=w,["h"]=h,["bytes"]=last.Length,["max"]=FrameSizing.MaxBytes,["srcW"]=source.Width,["srcH"]=source.Height});throw new InvalidDataException("Frame too large");}
             (w,h)=FrameSizing.Shrink(w,h);
         }
     }

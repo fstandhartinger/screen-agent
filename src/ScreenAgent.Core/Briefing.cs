@@ -26,9 +26,16 @@ public static class SecretFilter
         new(@"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*",RegexOptions.None,Limit),
         new(@"(?i)\b(api[_\-]?key|apikey|token|secret|password|passwd|authorization)(\s*[:=]\s*)(""?)[^\s""']{6,}",RegexOptions.None,Limit),
         new(@"\b[0-9a-fA-F]{32,}\b",RegexOptions.None,Limit),
+        new(@"\b[sr]k_(live|test)_[A-Za-z0-9]{16,}|\bwhsec_[A-Za-z0-9]{16,}",RegexOptions.None,Limit),   // Stripe
+        new(@"\bAIza[0-9A-Za-z_\-]{35}",RegexOptions.None,Limit),   // Google API key
+        new(@"\bhf_[A-Za-z0-9]{20,}",RegexOptions.None,Limit),   // Hugging Face
+        new(@"\b\d{8,10}:[A-Za-z0-9_\-]{35}\b",RegexOptions.None,Limit),   // Telegram bot token
+        new(@"(?i)\bbasic\s+[A-Za-z0-9+/=]{12,}",RegexOptions.None,Limit),
+        new(@"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)",RegexOptions.None,Limit),
+        new(@"(?i)\b(password|passwort|passwd|kennwort)\s+(is|ist)\s+\S{4,}",RegexOptions.None,Limit),   // "the password is hunter2"
     ];
     // Long base64-like runs, but only when they mix upper case, lower case and digits: plain paths and long words stay.
-    static readonly Regex Blob=new(@"[A-Za-z0-9+/_\-]{40,}={0,2}",RegexOptions.None,Limit);
+    static readonly Regex Blob=new(@"[A-Za-z0-9+/_\-]{32,}={0,2}",RegexOptions.None,Limit);
     public static string Redact(string? text)
     {
         if(string.IsNullOrEmpty(text))return "";
@@ -76,10 +83,14 @@ public static class BriefingCommand
 // Runs a section on its own background thread so a stalled network path or a slow UI Automation call can never hold anything else.
 public static class Timeboxed
 {
-    public static Task<T> Start<T>(Func<CancellationToken,T> work,CancellationToken ct,string name)
+    // A source whose thread is still stuck (a stalled UNC path, wsl.exe) is not started a second time: it is reported busy until it returns.
+    public sealed class SingleFlight{internal readonly System.Collections.Concurrent.ConcurrentDictionary<string,byte> Running=new();public bool IsRunning(string name)=>Running.ContainsKey(name);}
+    public sealed class SourceBusyException(string name):Exception("briefing source still running: "+name);
+    public static Task<T> Start<T>(Func<CancellationToken,T> work,CancellationToken ct,string name,SingleFlight? flight=null)
     {
         var tcs=new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        new Thread(()=>{try{tcs.TrySetResult(work(ct));}catch(Exception e){tcs.TrySetException(e);}}){IsBackground=true,Name="ScreenAgent briefing "+name}.Start();
+        if(flight is not null&&!flight.Running.TryAdd(name,0)){tcs.SetException(new SourceBusyException(name));return tcs.Task;}
+        new Thread(()=>{try{tcs.TrySetResult(work(ct));}catch(Exception e){tcs.TrySetException(e);}   /* handed to the task: the collector logs it per source */finally{flight?.Running.TryRemove(name,out _);}}){IsBackground=true,Name="ScreenAgent briefing "+name}.Start();
         return tcs.Task;
     }
 }
@@ -89,11 +100,11 @@ public static class BriefingGather
 {
     // The three sources run in parallel inside one budget (1.5 s). They get a cancel signal shortly before it ends so they can hand over what they have;
     // a source that is still stuck at the end (a UNC path that stalls) is abandoned and named as missing.
-    public static Gathered Run(Func<CancellationToken,Part<List<BriefingWindow>>> windows,Func<CancellationToken,Part<List<TabInfo>>> tabs,Func<CancellationToken,Part<MainSession>> main,int budgetMs=1500)
+    public static Gathered Run(Func<CancellationToken,Part<List<BriefingWindow>>> windows,Func<CancellationToken,Part<List<TabInfo>>> tabs,Func<CancellationToken,Part<MainSession>> main,int budgetMs=1500,Timeboxed.SingleFlight? flight=null)
     {
         var clock=System.Diagnostics.Stopwatch.StartNew();
         using var cts=new CancellationTokenSource();
-        var w=Timeboxed.Start(windows,cts.Token,"windows");var t=Timeboxed.Start(tabs,cts.Token,"tabs");var m=Timeboxed.Start(main,cts.Token,"main");
+        var w=Timeboxed.Start(windows,cts.Token,"windows",flight);var t=Timeboxed.Start(tabs,cts.Token,"tabs",flight);var m=Timeboxed.Start(main,cts.Token,"main",flight);
         cts.CancelAfter(Math.Max(1,budgetMs-200));
         var all=new Task[]{w,t,m};
         try{Task.WaitAll(all,Math.Max(1,budgetMs-(int)clock.ElapsedMilliseconds));}catch(AggregateException){ /* read per task below */ }
@@ -103,6 +114,7 @@ public static class BriefingGather
         T? Take<T>(Task<T> task,string name,string stage) where T:class
         {
             if(!task.IsCompleted){missing.Add(name+":timeout");failures.Add((stage,"timeout"));return null;}
+            if(task.IsFaulted&&task.Exception!.GetBaseException() is Timeboxed.SourceBusyException){missing.Add(name+":busy");failures.Add((stage,"busy"));return null;}
             if(task.IsFaulted){var e=task.Exception!.GetBaseException();bool late=e is OperationCanceledException;missing.Add(name+(late?":timeout":":error"));failures.Add((stage,late?"timeout":e.GetType().Name));return null;}
             return task.Result;
         }
@@ -190,7 +202,7 @@ public static class WslProbe
 public static class MainSessionSource
 {
     public const string DefaultPath=@"\\wsl.localhost\Ubuntu\home\flori";
-    const int MaxDirs=300;
+    const int MaxDirs=2000,NewestDirs=8;
     // Newest *.jsonl by modified time. `path` is a transcript file, a projects folder, an account folder (.claude*) or a home folder holding .claude* accounts.
     // Only directory listings, one level per step; the whole tree is never walked.
     public static (string File,DateTime Utc,string Source)? Newest(string path,CancellationToken ct)
@@ -200,7 +212,7 @@ public static class MainSessionSource
         var roots=new List<string>();
         foreach(var dir in Safe(()=>Directory.EnumerateDirectories(path,".claude*")))
         {
-            ct.ThrowIfCancellationRequested();
+            if(ct.IsCancellationRequested)return null;
             string projects=Path.Combine(dir,"projects");
             if(Directory.Exists(projects))roots.Add(projects);
         }
@@ -208,13 +220,14 @@ public static class MainSessionSource
         if(Directory.Exists(own))roots.Add(own);
         if(roots.Count==0)roots.Add(path);
         (string,DateTime,string)? best=null;
+        // Over 9P/SMB every listing costs a round trip: only the project folders touched most recently are looked into, and what was found when the clock runs out is kept.
         foreach(var root in roots)
         {
             var folders=new List<string>{root};
-            folders.AddRange(Safe(()=>Directory.EnumerateDirectories(root)).Take(MaxDirs));
+            folders.AddRange(Safe(()=>new DirectoryInfo(root).EnumerateDirectories()).Take(MaxDirs).OrderByDescending(d=>d.LastWriteTimeUtc).Take(NewestDirs).Select(d=>d.FullName));
             foreach(var folder in folders)
             {
-                ct.ThrowIfCancellationRequested();
+                if(ct.IsCancellationRequested)return best;
                 foreach(var f in Safe(()=>new DirectoryInfo(folder).EnumerateFiles("*.jsonl")))
                     if(f.Length>0&&(best is null||f.LastWriteTimeUtc>best.Value.Item2))best=(f.FullName,f.LastWriteTimeUtc,Label(f.FullName));
             }
@@ -230,11 +243,11 @@ public static class MainSessionSource
     static IEnumerable<T> Safe<T>(Func<IEnumerable<T>> list)
     {
         IEnumerator<T> e;
-        try{e=list().GetEnumerator();}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}
+        try{e=list().GetEnumerator();}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}   /* unreadable folder: skipped */
         using(e)
             while(true)
             {
-                try{if(!e.MoveNext())yield break;}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}
+                try{if(!e.MoveNext())yield break;}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}   /* unreadable entry: stop listing */
                 yield return e.Current;
             }
     }
@@ -253,7 +266,7 @@ public static class MainSessionSource
             using var stream=new FileStream(newest.Value.File,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete,4096,FileOptions.SequentialScan);
             messages=TranscriptTail.Read(stream,out s,ct);
         }
-        catch(Exception e) when(e is IOException or UnauthorizedAccessException){return new(null,"main-session:unreadable");}
+        catch(Exception e) when(e is IOException or UnauthorizedAccessException){return new(null,"main-session:unreadable");}   /* the reason is the result */
         stats?.Invoke(s);
         if(messages.Count==0)return new(null,"main-session:no-messages");
         return new(new(newest.Value.Source,newest.Value.Utc.ToString("o"),messages));
@@ -348,7 +361,7 @@ public static class TranscriptTail
             if(clean.Length==0)return null;
             return new(type,Str(root,"timestamp"),clean);
         }
-        catch(JsonException){return null;}
+        catch(JsonException){return null;}   /* not JSON: no value */
     }
     static string? Str(JsonElement e,string name)=>e.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;
     static bool Flag(JsonElement e,string name)=>e.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.True;
