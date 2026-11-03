@@ -119,8 +119,7 @@ internal static partial class ComputerSelftest
         var weiter=await Do(run,"action","chrome_click",new{@ref=w0.Value.Ref});string cw=CodeNow();
         Ok("'Weiter' on a listed domain: R2 whatever the label; the spoken text is built by the app and reads recipient, subject and body live; no code in it",Code(weiter)==ComputerCodes.NeedsConfirm&&Rule(weiter)=="sensitive-domain"&&Spoken(weiter).Contains("chef@example.org")&&Spoken(weiter).Contains("Quartalszahlen")&&Spoken(weiter).Contains("Zahlen sind im Anhang")&&!Spoken(weiter).Contains(cw)&&fx.Count("mail.localhost/send")==0,
             Brief(weiter)+" · "+Spoken(weiter));
-        var (_,ibs)=await Page(run,"mail.localhost","/inbox");var fwd=Find(ibs,"button","Weiterleiten");
-        var forward=await Do(run,"action","chrome_click",new{@ref=Need(fwd,"fwd")});   // the "Weiter" ask is still open: a second proposal is refused, it cannot replace the question he is reading
+        var forward=await Do(run,"action","chrome_click",new{@ref=w0.Value.Ref});   // the "Weiter" ask is still open: a second proposal is refused, it cannot replace the question he is reading
         bool stillOpen=Ui(()=>overlay.AskVisible);
         var dropOld=await Do(run,"void",hash:Hash(weiter));
         var oldAnswer=await Do(run,"confirm",hash:Hash(weiter),digits:"ja "+Digits(cw));
@@ -158,6 +157,7 @@ internal static partial class ComputerSelftest
         var compFill=await Do(run,"action","chrome_fill",new{@ref=area!,text="rm -rf /"});
         var cNode=agent.CdpForTests!.Node(area!);string? cVal=await agent.CdpForTests.Text(cNode!,CancellationToken.None);
         Ok("typing into an agent composer: R2 (nothing typed until confirmed)",Code(compFill)==ComputerCodes.NeedsConfirm&&Rule(compFill)=="composer"&&string.IsNullOrEmpty(cVal),Brief(compFill)+" value="+cVal);
+        await Do(run,"void",hash:Hash(compFill));
         int keysBefore=UiaDriver.KeysSent;
         var wins=await Do(run,"action","ui_windows");
         var chromeWin=Regex.Matches(Res(wins),@"^(\S+) chrome ""Composer",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
@@ -325,7 +325,7 @@ internal static partial class ComputerSelftest
         await Page(run,"site.localhost","/out");   // the link to evil.localhost is on this page, so the open is an R2 (a host he did not name needs a link of the page)
         var physOpen=await Do(run,"action","chrome_open",new{url=U("evil.localhost","/")});
         string physId=LastId;
-        ComputerGuard.Current!.PhysicalConfirm();   // what the hook sets when the chord is pressed on the keyboard (injected chords are ignored)
+        await Task.Delay(1700);ComputerGuard.Current!.PhysicalConfirm();   // what the hook sets when the chord is pressed on the keyboard (injected chords are ignored)
         JsonElement phys=default;bool got=false;for(int i=0;i<50&&!(got=Late.TryGetValue(physId,out phys));i++)await Task.Delay(100);
         Ok("physical confirm chord (flag path): the app confirms by itself and posts a second result to the action's own id",Code(physOpen)==ComputerCodes.NeedsConfirm&&got&&Code(phys)==ComputerCodes.Done,got?Brief(phys):"no second result");
         await End(run);
@@ -370,6 +370,7 @@ internal static partial class ComputerSelftest
             var more=Find(ls,"link","Mehr");
             var linkClick=await Do(rj,"action","chrome_click",new{@ref=Need(more,"more")});
             Ok("F1 link: a link to another origin asks (the live target is read in the page), the domain is spoken, nothing was requested",Code(linkClick)==ComputerCodes.NeedsConfirm&&Rule(linkClick)=="link-out-of-scope"&&Spoken(linkClick).Contains("evil.localhost")&&fx.Count("evil.localhost")==0,Brief(linkClick)+" · "+Spoken(linkClick));
+            await Do(rj,"void",hash:Hash(linkClick));
             var redir=await Do(rj,"action","chrome_open",new{url=U("site.localhost","/redir")});
             await Task.Delay(900);
             string redirTab="";using(var d=JsonDocument.Parse(Res(redir)[(Res(redir).IndexOf('\n')+1)..]))foreach(var t in d.RootElement.EnumerateArray())redirTab=t.GetProperty("tab").GetString()!;
@@ -415,6 +416,7 @@ internal static partial class ComputerSelftest
             var ask=await Do(rm,"action","chrome_click",new{@ref=Need(weiter2,"weiter2")});string cm=CodeNow();
             string sp=Spoken(ask);
             Ok("F5 form words: the contenteditable body, the recipient chip and the subject are in the question, as quoted page text; the search box is not",Code(ask)==ComputerCodes.NeedsConfirm&&sp.Contains("Seitentext, nicht von dir gesprochen")&&sp.Contains("„Die Zahlen sind im Anhang")&&sp.Contains("„chef@example.org“")&&sp.Contains("Quartalszahlen")&&!sp.Contains("suche nach xyz"),sp);
+            await Do(rm,"void",hash:Hash(ask));   // an open ask refuses the next proposal
             var subjRef=Find(ms2,"textbox","Betreff");
             string longText=string.Join(" ",Enumerable.Repeat("Bitte alles genau so senden",8))[..200];
             var fill200=await Do(rm,"action","chrome_fill",new{@ref=Need(subjRef,"Betreff"),text=longText});string c200=CodeNow();
@@ -461,8 +463,8 @@ internal static partial class ComputerSelftest
                 foreign=(await other.Open(U("mail.localhost","/inbox"))).TargetId;await Task.Delay(500);
                 await other.Call("Target.activateTarget",new(){["targetId"]=foreign},null);await Task.Delay(700);
                 var wl=await Do(rp,"action","ui_windows");
-                var chromeWin2=Regex.Matches(Res(wl),@"^(\S+) chrome ""Posteingang",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
-                if(chromeWin2 is null)Skip("F2 browser window checks","the Chrome window did not show the foreign tab's title on this runner");
+                var chromeWin2=Regex.Matches(Res(wl),@"^(\S+) chrome ""(?:Posteingang|ausgeblendet)",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
+                if(chromeWin2 is null)Skip("F2 browser window checks","the Chrome window of the foreign tab was not listed on this runner (its title is hidden: the tab is out of the scope)");
                 else
                 {
                     var tree=await Do(rp,"action","ui_tree",new{window=chromeWin2});

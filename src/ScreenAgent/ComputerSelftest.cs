@@ -183,6 +183,7 @@ internal static partial class ComputerSelftest
     static async Task<string> Open(string run,string host,string path)
     {
         var r=await Do(run,"action","chrome_open",new{url=P+host+":"+fx.Port+path});
+        if(Code(r)==ComputerCodes.NeedsConfirm&&Rule(r)=="tainted"){await Task.Delay(100);r=await Do(run,"confirm",hash:Hash(r),digits:"ja "+Digits(CodeNow()));}   // after a sensitive read every open asks
         if(Code(r)!=ComputerCodes.Done)throw new InvalidOperationException("open "+host+path+" -> "+Brief(r));
         await Task.Delay(700);return TabIdOf(Res(r),host);
     }
