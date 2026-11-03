@@ -504,7 +504,7 @@ internal sealed class ComputerAgent:IDisposable
                     r.NoteRead(ComputerPolicy.ReadOrigin(proc,shotUrl));
                     string img=Shot(h);
                     // S4: the tab is looked up again after the capture; a page that flipped to another target or URL in between is not returned.
-                    if(isBrowser&&!ComputerPolicy.SameTab(shotTab,shotUrl,Cdp(out _) is {} c2&&c2.TabForWindow(proc,title).GetAwaiter().GetResult() is {} t2?(t2.TargetId,t2.Url):((string?)null,(string?)null)))return "ausgeblendet";
+                    if(isBrowser&&!ComputerPolicy.SameTab(shotTab,shotUrl,Cdp(out string? _w) is {} c2&&c2.TabForWindow(proc,title).GetAwaiter().GetResult() is {} t2?(t2.TargetId,t2.Url):((string?)null,(string?)null)))return "ausgeblendet";
                     return img;
                 },()=>("",""),proc,false,true,sens),null);
             }
