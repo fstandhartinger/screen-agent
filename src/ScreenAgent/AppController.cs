@@ -32,7 +32,7 @@ internal sealed class AppController : IDisposable
     readonly System.Windows.Forms.ToolStripMenuItem statusItem=new(){Enabled=false},sessionItem=new(),pauseItem=new(),computerItem=new("Computer-Steuerung erlauben");
     readonly ComputerAgent computer;
     readonly ComputerOverlay computerOverlay;
-    bool? scopeSent;bool scopePosting;long scopeRetryAt;
+    bool? scopeSent;bool scopePosting;long scopeRetryAt,scopeRefreshAt;   // the gateway keeps the scope in memory only: re-posted every 2 min, after a failed poll and at every new session
     string? contextSid;
     long unmuteRetryAt;
     bool voiceSyncing;
@@ -99,7 +99,7 @@ internal sealed class AppController : IDisposable
         }));
         if(config.HotkeyNote is {} hotkeyNote)telemetry.Event("config.note",new(){["why"]=hotkeyNote});
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
-        bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();computer.Stop("session");};
+        bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();scopeRefreshAt=0;computer.Stop("session");};
         hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
         {
             if(audio!=null)return;
@@ -111,7 +111,7 @@ internal sealed class AppController : IDisposable
         {
             try
             {
-                if(client.Paired&&scopeSent!=config.ComputerUse&&!scopePosting&&Environment.TickCount64>=scopeRetryAt)_=PostComputerScope(config.ComputerUse);
+                if(client.Paired&&(scopeSent!=config.ComputerUse||config.ComputerUse&&Environment.TickCount64>=scopeRefreshAt)&&!scopePosting&&Environment.TickCount64>=scopeRetryAt)_=PostComputerScope(config.ComputerUse);
                 // Their own guards: a throw in the subtitles or the activity rows must not starve the session logic below (and is logged, once per 30 s per type).
                 try{captions.Update(audio!=null,bridge.VoiceOn,micMuted);}
                 catch(Exception ex){TickFailed("captions",ex);}   // logged: tick.error
@@ -441,7 +441,7 @@ internal sealed class AppController : IDisposable
         {
             using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var reply=await client.Raw(HttpMethod.Post,"api/device/computer",new{enabled=on},cts.Token);
-            if(reply.Ok)scopeSent=on;else{scopeRetryAt=Environment.TickCount64+30000;telemetry.Event("computer.scope.failed",new(){["status"]=reply.Status,["enabled"]=on});}
+            if(reply.Ok){scopeSent=on;scopeRefreshAt=Environment.TickCount64+120000;}else{scopeRetryAt=Environment.TickCount64+30000;telemetry.Event("computer.scope.failed",new(){["status"]=reply.Status,["enabled"]=on});}
         }
         catch(Exception e){scopeRetryAt=Environment.TickCount64+30000;telemetry.Event("computer.scope.failed",new(){["status"]=0,["type"]=e.GetType().Name});}
         finally{scopePosting=false;}
@@ -471,10 +471,10 @@ internal sealed class AppController : IDisposable
                 if(reply.Ok&&reply.Json is {} pj&&PromptCommand.Parse(pj.RootElement) is {} request)_=promptChannel.Handle(sid,request,ct);   // typing runs on its own; the long poll is parked again at once
                 else if(reply.Ok&&reply.Json is {} j&&j.RootElement.TryGetProperty("fresh",out var f)&&f.ValueKind==System.Text.Json.JsonValueKind.True&&j.RootElement.TryGetProperty("id",out var id)&&id.ValueKind==System.Text.Json.JsonValueKind.String)
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
-                else if(!reply.Ok)await Task.Delay(3000,ct);
+                else if(!reply.Ok){scopeRefreshAt=0;await Task.Delay(3000,ct);}   // a gateway restart shows here first: the scope is posted again on the next tick
             }
             catch(OperationCanceledException){return;}   /* cancelled */
-            catch(Exception ex){telemetry.Event("screen.commands.fail",Redact.Of(ex));try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}   /* cancelled */}
+            catch(Exception ex){scopeRefreshAt=0;telemetry.Event("screen.commands.fail",Redact.Of(ex));try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}   /* cancelled */}
         }
     }
     // Drawing panel. Auto-open only when allowed (config, not closed by him this session) and only with the capture exclusion confirmed.

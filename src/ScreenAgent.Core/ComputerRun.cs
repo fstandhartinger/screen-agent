@@ -65,7 +65,7 @@ public sealed class ActionBinding
     public static string Digest(IEnumerable<string> values)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\u0001',values)))).ToLowerInvariant()[..16];
 }
 public sealed record PendingAsk(string Tool,string Hash,string Spoken,string Code,long At,ActionBinding Binding,JsonElement Args,string Class,string Rule);
-public sealed record RunCaps(long MaxMs=10*60_000,int MaxActions=150,int StepReport=25,long PendingMs=60_000,int MaxAsks=3,int MaxExpiries=2,long IdleMs=60_000,long GatewayQuietMs=30_000);
+public sealed record RunCaps(long MaxMs=10*60_000,int MaxActions=150,int StepReport=25,long PendingMs=60_000,int MaxAsks=3,int MaxExpiries=2,long IdleMs=60_000,long GatewayQuietMs=15_000);
 public enum RunState { Running, HandsOn, Paused, Closed }
 // The app owns the run. The kill flag is set from the keyboard hook callback (an Interlocked write: no allocation, no lock, no I/O) and the input worker looks at it before every SendInput batch and CDP call.
 public sealed class ComputerRun
@@ -97,7 +97,7 @@ public sealed class ComputerRun
     public bool IsPaused=>Volatile.Read(ref paused)!=0;
     public bool IsClosed=>Volatile.Read(ref closed)!=0;
     public RunState State=>IsClosed||Revoked?RunState.Closed:IsHandsOn?RunState.HandsOn:IsPaused?RunState.Paused:RunState.Running;
-    public string StateName=>State switch{RunState.Running=>"running",RunState.HandsOn=>"handson",RunState.Paused=>"paused",_=>Revoked?"killed":"closed"};
+    public string StateName=>State switch{RunState.Running=>"running",RunState.HandsOn=>"handson",RunState.Paused=>"paused",_=>Revoked?"killed":"ended"};
     // From the hook callback: nothing but an Interlocked write. The run token is revoked for good; the gateway cannot resume it.
     public void Kill(string via)
     {

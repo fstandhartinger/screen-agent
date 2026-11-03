@@ -251,7 +251,7 @@ internal static partial class ComputerSelftest
                 await Task.Delay(350);var killAt=Stopwatch.StartNew();ComputerGuard.Kill("selftest-flag");
                 var killed=await typing;long killMs=killAt.ElapsedMilliseconds;
                 await Task.Delay(700);string? partial=NotepadText(nh);
-                var next=await Do(run,"action","ui_windows");var restart=await Do(run,"start",goal:"weiter",seq:1).ContinueWith(t=>t.Result);
+                var next=await Do(run,"action","ui_windows");var restart=await Do(run,"start",goal:"weiter",seq:1,extend:true).ContinueWith(t=>t.Result);
                 Ok("kill (hook flag path): the typing loop stops between batches, the run ends, the token cannot be revived",Code(killed)==ComputerCodes.Killed&&(partial?.Length??0)<back!.Length+2000&&Code(restart)==ComputerCodes.Killed&&!Ui(()=>overlay.Visible)&&ComputerGuard.Current is null,
                     "typing: "+Brief(killed)+"; later: "+Brief(next)+"; restart: "+Brief(restart),("typedChars",(partial?.Length??0)-back.Length),("killToResultMs",killMs));
                 Ok("kill: a stopped action loop did not type the rest",(partial?.Length??0)-back.Length<2000,"",("typedChars",(partial?.Length??0)-back.Length));
@@ -286,7 +286,7 @@ internal static partial class ComputerSelftest
         Ok("injected keys and injected mouse input never count as hands-on",!injectedHandsOn);
         cur.HandsOn();   // the flag the hook callback sets on a physical key or mouse event
         var ho=await Do(run,"action","ui_windows");
-        var back2=await Do(run,"start",goal:"weiter bitte",seq:1);var ok2=await Do(run,"action","ui_windows",seq:2);
+        var back2=await Do(run,"start",goal:"weiter bitte",seq:1,extend:true);var ok2=await Do(run,"action","ui_windows",seq:2);
         Ok("hands-on (flag path): the action is refused with 'handson'; only a new spoken final (start again) resumes",Code(ho)==ComputerCodes.HandsOn&&Code(back2)==ComputerCodes.Done&&Code(ok2)==ComputerCodes.Done,Brief(ho)+" then "+Brief(ok2));
         await End(run);
         // ===== Run I: sid, scope switch, caps, physical confirm =====
@@ -295,12 +295,13 @@ internal static partial class ComputerSelftest
         Ok("a command for another session id and a scope switched off in the tray are both refused",Code(wrongSid)==ComputerCodes.Refused&&Rule(wrongSid)=="sid"&&Code(off)==ComputerCodes.Denied&&Rule(off)=="off",Brief(wrongSid)+" / "+Brief(off));
         run=await Start("Öffne site.localhost");int okCount=0;JsonElement last=default;
         for(int i=0;i<26;i++){last=await Do(run,"action","ui_windows",seq:i+1);if(Code(last)==ComputerCodes.Done)okCount++;}
-        var resume=await Do(run,"start",goal:"weiter",seq:30);var afterResume=await Do(run,"action","ui_windows",seq:31);
+        var resume=await Do(run,"start",goal:"weiter",seq:30,extend:true);var afterResume=await Do(run,"action","ui_windows",seq:31);
         Ok("25 steps, then a stop that needs a new final of his",okCount==25&&Rule(last)=="step-report"&&Code(resume)==ComputerCodes.Done&&Code(afterResume)==ComputerCodes.Done,"done="+okCount+" 26th: "+Brief(last));
         var physOpen=await Do(run,"action","chrome_open",new{url=P+"evil.localhost:"+port+"/weiter"});
+        string physId=LastId;
         ComputerGuard.Current!.PhysicalConfirm();   // what the hook sets when the chord is pressed on the keyboard (injected chords are ignored)
-        var phys=await Do(run,"confirm",hash:Hash(physOpen),digits:"");
-        Ok("physical confirm chord (flag path): the ask runs without a spoken code, once",Code(physOpen)==ComputerCodes.NeedsConfirm&&Code(phys)==ComputerCodes.Done,Brief(phys));
+        JsonElement phys=default;bool got=false;for(int i=0;i<50&&!(got=Late.TryGetValue(physId,out phys));i++)await Task.Delay(100);
+        Ok("physical confirm chord (flag path): the app confirms by itself and posts a second result to the action's own id",Code(physOpen)==ComputerCodes.NeedsConfirm&&got&&Code(phys)==ComputerCodes.Done,got?Brief(phys):"no second result");
         await End(run);
         // ===== logging =====
         string log=File.Exists(logFile)?File.ReadAllText(logFile):"";

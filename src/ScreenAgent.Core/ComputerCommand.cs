@@ -1,12 +1,19 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 namespace ScreenAgent.Core;
-// One command of the poll: {computer:{id:"c<16 hex>",run:"r<16 hex>",seq,op:"start|stop|action|confirm|beat",...}}.
-public sealed record ComputerCommand(string Id,string Run,int Seq,string Op,string? Sid,string Goal,string[] ScopeWords,string Tool,JsonElement Args,string Hash,string Digits,string State);
+// One command of the poll: {computer:{id:"c<16 hex>",run:"r<16 hex>",seq,op:"start|stop|action|confirm|beat",...}}. start+extend:true = a new spoken final appends to the open run; stop carries reason (log only).
+// The exact messages both sides speak are in testdata/computer-contract.json (this repo and agent-desk keep the same file).
+public sealed record ComputerCommand(string Id,string Run,int Seq,string Op,string? Sid,string Goal,string[] ScopeWords,string Tool,JsonElement Args,string Hash,string Digits,string State,bool Extend=false,string Reason="");
 public static class ComputerWire
 {
     public static readonly string[] Ops=["start","stop","action","confirm","beat"];
     public const int MaxResultBytes=512*1024;
+    // The arguments each tool takes. A known tool with any other argument is malformed and never executed (closed by default); an unknown tool is refused by the app as unknown-tool.
+    public static readonly Dictionary<string,string[]> ToolArgs=new()
+    {
+        ["ui_windows"]=[],["ui_tree"]=["window"],["ui_click"]=["ref"],["ui_type"]=["ref","text"],["key"]=["key"],["scroll"]=["dy","window","tab"],["window_focus"]=["window"],["screenshot"]=["window"],
+        ["chrome_tabs"]=[],["chrome_open"]=["url"],["chrome_snapshot"]=["tab"],["chrome_read"]=["tab"],["chrome_click"]=["ref"],["chrome_fill"]=["ref","text"]
+    };
     static readonly Regex CommandId=new("^c[0-9a-f]{16}$",RegexOptions.Compiled),RunId=new("^r[0-9a-f]{16}$",RegexOptions.Compiled),HashRx=new("^[0-9a-f]{8,64}$",RegexOptions.Compiled);
     static string Str(JsonElement m,string key,int max)
     {
@@ -32,8 +39,10 @@ public static class ComputerWire
         if(op=="confirm"&&!HashRx.IsMatch(hash)){why="hash";return null;}
         string tool=Str(m,"tool",32);
         if(op=="action"&&(tool.Length==0||!tool.All(c=>char.IsAsciiLetterOrDigit(c)||c=='_'))){why="tool";return null;}
-        return new(id,run,seq,op,m.TryGetProperty("sid",out _)?Str(m,"sid",80):null,Str(m,"goal",2000),words,tool,args,hash,Str(m,"digits",80),Str(m,"state",16));
+        if(op=="action"&&ToolArgs.TryGetValue(tool,out var known)&&args.ValueKind==JsonValueKind.Object&&args.EnumerateObject().Any(p=>Array.IndexOf(known,p.Name)<0)){why="args";return null;}
+        return new(id,run,seq,op,m.TryGetProperty("sid",out _)?Str(m,"sid",80):null,Str(m,"goal",2000),words,tool,args,hash,Str(m,"digits",80),Str(m,"state",16),m.TryGetProperty("extend",out var ex)&&ex.ValueKind==JsonValueKind.True,CleanReason(Str(m,"reason",40)));
     }
+    static string CleanReason(string s)=>new string(s.Where(c=>char.IsAsciiLetterOrDigit(c)||c is '-' or '_' or ':').ToArray());
     public static string? ArgString(JsonElement args,string name,int max=2000)
     {
         if(args.ValueKind!=JsonValueKind.Object||!args.TryGetProperty(name,out var v))return null;
@@ -44,18 +53,34 @@ public static class ComputerWire
     public static int? ArgInt(JsonElement args,string name)=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.Number&&v.TryGetInt32(out var i)?i:null;
     public static bool ArgBool(JsonElement args,string name)=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.True;
     public sealed record NeedsConfirm(string hash,string spoken);
-    // {ok,code,class,rule,result?,needs_confirm?:{hash,spoken},run_state?}. result is cut so the whole JSON stays within 512 kB.
-    public static Dictionary<string,object?> Result(bool ok,string code,string? cls,string rule,string? result=null,NeedsConfirm? ask=null,string? runState=null)
+    public const int MaxJpegChars=300*1024,MaxSpoken=1100;
+    // Facts about the action for the gateway's activity line and trace: the label (letters and digits, cut), the domain (eTLD+1) and the process. A screenshot travels as `jpeg` (plain base64).
+    public sealed record ResultMeta(string? Target=null,string? Domain=null,string? Process=null,string? Jpeg=null);
+    // {ok,code,class?,rule?,result?:{text?,target?,domain?,process?,jpeg?},needs_confirm?:{hash,spoken},run_state?}. Empty class and rule are left out. The text is cut so the whole JSON stays within 512 kB.
+    public static Dictionary<string,object?> Result(bool ok,string code,string? cls,string rule,string? result=null,NeedsConfirm? ask=null,string? runState=null,ResultMeta? meta=null)
     {
-        var d=new Dictionary<string,object?>{["ok"]=ok,["code"]=code,["class"]=cls,["rule"]=rule};
-        if(result is not null)d["result"]=Fit(result);
-        if(ask is not null)d["needs_confirm"]=new{hash=ask.hash,spoken=ask.spoken};
+        var d=new Dictionary<string,object?>{["ok"]=ok,["code"]=code};
+        if(!string.IsNullOrEmpty(cls))d["class"]=cls;
+        if(!string.IsNullOrEmpty(rule))d["rule"]=rule;
+        string? jpeg=meta?.Jpeg;
+        if(jpeg is not null&&jpeg.Length>MaxJpegChars){jpeg=null;result="Bild zu groß, nicht übertragen.";}
+        if(result is not null||meta is not null)
+        {
+            var o=new Dictionary<string,object?>();
+            if(result is not null)o["text"]=Fit(result,jpeg?.Length??0);
+            if(!string.IsNullOrEmpty(meta?.Target))o["target"]=meta!.Target;
+            if(!string.IsNullOrEmpty(meta?.Domain))o["domain"]=meta!.Domain;
+            if(!string.IsNullOrEmpty(meta?.Process))o["process"]=meta!.Process;
+            if(jpeg is not null)o["jpeg"]=jpeg;
+            if(o.Count>0)d["result"]=o;
+        }
+        if(ask is not null)d["needs_confirm"]=new{hash=ask.hash,spoken=ask.spoken.Length<=MaxSpoken?ask.spoken:ask.spoken[..MaxSpoken]};
         if(runState is not null)d["run_state"]=runState;
         return d;
     }
-    public static string Fit(string result)
+    public static string Fit(string result,int reserved=0)
     {
-        const int budget=MaxResultBytes-2048;
+        int budget=MaxResultBytes-2048-reserved;
         if(System.Text.Encoding.UTF8.GetByteCount(result)<=budget)return result;
         // JSON escaping can double the size: cut by characters until the escaped form fits.
         int n=Math.Min(result.Length,budget/2);

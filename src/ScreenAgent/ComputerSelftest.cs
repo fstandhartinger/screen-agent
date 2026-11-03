@@ -78,6 +78,8 @@ internal static partial class ComputerSelftest
     sealed class Check{public string Name="";public bool Pass;public string Why="";public Dictionary<string,object?> Facts=[];}
     static readonly List<Check> Checks=[];
     static readonly ConcurrentDictionary<string,TaskCompletionSource<JsonElement>> Replies=new();
+    static readonly ConcurrentDictionary<string,JsonElement> Late=new();   // a second result for a command id (the physical confirm)
+    static string LastId="";
     static readonly ConcurrentQueue<string> Telemetry=new();
     static readonly ConcurrentQueue<string> Posted=new();
     static Fixtures fx=null!;
@@ -108,11 +110,11 @@ internal static partial class ComputerSelftest
     // ---- plumbing
     static string Hex()=>Guid.NewGuid().ToString("N")[..16];
     static string NewRun()=>"r"+Hex();
-    static async Task<JsonElement> Do(string run,string op,string? tool=null,object? args=null,string? goal=null,string? hash=null,string? digits=null,string? onSid=null,int seq=0)
+    static async Task<JsonElement> Do(string run,string op,string? tool=null,object? args=null,string? goal=null,string? hash=null,string? digits=null,string? onSid=null,int seq=0,bool extend=false)
     {
-        string id="c"+Hex();var tcs=new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);Replies[id]=tcs;
+        string id="c"+Hex();var tcs=new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);Replies[id]=tcs;LastId=id;
         var m=new Dictionary<string,object?>{["id"]=id,["run"]=run,["seq"]=seq,["op"]=op};
-        if(tool is not null)m["tool"]=tool;if(args is not null)m["args"]=args;if(goal is not null)m["goal"]=goal;if(hash is not null)m["hash"]=hash;if(digits is not null)m["digits"]=digits;
+        if(extend)m["extend"]=true;if(tool is not null)m["tool"]=tool;if(args is not null)m["args"]=args;if(goal is not null)m["goal"]=goal;if(hash is not null)m["hash"]=hash;if(digits is not null)m["digits"]=digits;
         using var doc=JsonDocument.Parse(JsonSerializer.Serialize(new{computer=m}));
         var cmd=ComputerWire.Parse(doc.RootElement,out string why)??throw new InvalidOperationException("selftest command invalid: "+why);
         agent.Handle(onSid??sid,cmd);
@@ -121,7 +123,7 @@ internal static partial class ComputerSelftest
     static string S(JsonElement e,string name)=>e.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString()??"":"";
     static string Code(JsonElement e)=>S(e,"code");
     static string Rule(JsonElement e)=>S(e,"rule");
-    static string Res(JsonElement e)=>S(e,"result");
+    static string Res(JsonElement e)=>e.TryGetProperty("result",out var r)&&r.ValueKind==JsonValueKind.Object?S(r,"text")+(S(r,"jpeg").Length>0?"data:image/jpeg;base64,"+S(r,"jpeg"):""):S(e,"result");
     static string Hash(JsonElement e)=>e.TryGetProperty("needs_confirm",out var n)?S(n,"hash"):"";
     static string Spoken(JsonElement e)=>e.TryGetProperty("needs_confirm",out var n)?S(n,"spoken"):"";
     static string Brief(JsonElement e)=>Code(e)+"/"+S(e,"class")+"/"+Rule(e);
@@ -179,7 +181,7 @@ internal static partial class ComputerSelftest
             {
                 var json=JsonSerializer.Serialize(body);Posted.Enqueue(json);
                 using var doc=JsonDocument.Parse(json);
-                if(url.EndsWith("/result")&&Replies.TryRemove(url.Split('/')[^2],out var tcs))tcs.TrySetResult(doc.RootElement.Clone());
+                if(url.EndsWith("/result")){string cid=url.Split('/')[^2];if(Replies.TryRemove(cid,out var tcs))tcs.TrySetResult(doc.RootElement.Clone());else Late[cid]=doc.RootElement.Clone();}
                 return Task.FromResult(true);
             },(t,d)=>Telemetry.Enqueue(t+" "+JsonSerializer.Serialize(TraceSanitizer.Clean(d))),gate,policy,overlay,hook,()=>sid,()=>voice,()=>enabled,()=>false,null,
                 new ChromeCdp.ConnectOptions(profile,false),logFile,app.Dispatcher);

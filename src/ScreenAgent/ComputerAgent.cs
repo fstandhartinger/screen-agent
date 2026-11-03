@@ -37,6 +37,7 @@ internal sealed class ComputerAgent:IDisposable
     ChromeCdp? cdp;
     string? cdpFailure;
     bool pendingHere,handsOnNoted,confirmKeyNoted,hotkeyChecked;
+    Work? pendingWork;
     Func<ActionBinding?,string>? pendingExec;
     Plan? pendingPlan;
     long lastBeat;
@@ -72,7 +73,7 @@ internal sealed class ComputerAgent:IDisposable
     {
         try
         {
-            if(cmd.Op=="stop"&&run is {} r&&r.Id==cmd.Run&&runSid==sid){r.Kill("gateway-stop");EndRun("stop");_=Result(sid,cmd,Reply(true,ComputerCodes.Done,null,"stop",null,null,"closed"));return;}
+            if(cmd.Op=="stop"&&run is {} r&&r.Id==cmd.Run&&runSid==sid){r.Kill("gateway-stop");Log("computer.stop.command",new(){["run"]=r.Id,["reason"]=cmd.Reason});EndRun("stop");_=Result(sid,cmd,Reply(true,ComputerCodes.Done,null,"stop",null,null,"ended"));return;}
             if(cmd.Op=="beat"&&run is {} b&&b.Id==cmd.Run&&runSid==sid){b.Seen();_=Beat(sid,b);return;}
             queue.Add(new(sid,cmd));
         }
@@ -86,8 +87,8 @@ internal sealed class ComputerAgent:IDisposable
             catch(Exception e){Log("computer.error",new(){["type"]=e.GetType().Name,["reason"]=e.Message.Length>100?e.Message[..100]:e.Message});_=Result(w.Sid,w.Cmd,Reply(false,ComputerCodes.Unclear,null,"error",null,null,run?.StateName));}
         }
     }
-    static Dictionary<string,object?> Reply(bool ok,string code,ActionClass? cls,string rule,string? result,ComputerWire.NeedsConfirm? ask,string? runState)
-        =>ComputerWire.Result(ok,code,cls?.ToString(),rule,result,ask,runState);
+    static Dictionary<string,object?> Reply(bool ok,string code,ActionClass? cls,string rule,string? result,ComputerWire.NeedsConfirm? ask,string? runState,ComputerWire.ResultMeta? meta=null)
+        =>ComputerWire.Result(ok,code,cls?.ToString(),rule,result,ask,runState,meta);
     async Task Result(string sid,ComputerCommand cmd,Dictionary<string,object?> body)
     {
         for(int i=0;i<2;i++){try{if(await post("api/device/session/"+Uri.EscapeDataString(sid)+"/computer/"+cmd.Id+"/result",body))return;}catch{ }await Task.Delay(400);}   // two tries; the gateway times the command out and the run logs the lost result
@@ -127,9 +128,10 @@ internal sealed class ComputerAgent:IDisposable
         bool here=goal.Contains("hier",StringComparison.OrdinalIgnoreCase)||goal.Contains("diese seite",StringComparison.OrdinalIgnoreCase)||goal.Contains("diesen tab",StringComparison.OrdinalIgnoreCase);
         lock(sync)
         {
+            if(cmd.Extend&&run is not {IsClosed:false}){Send(w,Reply(false,ComputerCodes.NoRun,null,"no-run",null,null,null));return;}   // an extension needs the open run
             if(run is {IsClosed:false} cur)
             {
-                if(cur.Id!=cmd.Run||runSid!=w.Sid){Send(w,Reply(false,ComputerCodes.Refused,null,"run-exists",null,null,cur.StateName));return;}
+                if(cur.Id!=cmd.Run||runSid!=w.Sid||!cmd.Extend){Send(w,Reply(false,ComputerCodes.Refused,null,"run-exists",null,null,cur.StateName));return;}   // the same run id without extend:true is not an extension
                 if(cur.Revoked){Send(w,Reply(false,ComputerCodes.Killed,null,"killed",null,null,"killed"));return;}
                 cur.Extend(goal,more);pendingHere|=here;handsOnNoted=false;uia?.Windows();   // all refs die: a new snapshot is needed
                 Log("computer.run.extend",new(){["run"]=cur.Id,["goal"]=ComputerRedact.Goal(goal),["hosts"]=cur.Scope.Hosts.Count});
@@ -137,7 +139,7 @@ internal sealed class ComputerAgent:IDisposable
                 Send(w,Reply(true,ComputerCodes.Done,null,"extend",ScopeText(cur),null,cur.StateName));return;
             }
             var nr=new ComputerRun(cmd.Run,goal,more);
-            run=nr;runSid=w.Sid;pendingHere=here;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;cdp=null;cdpFailure=null;pendingExec=null;pendingPlan=null;
+            run=nr;runSid=w.Sid;pendingHere=here;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;cdp=null;cdpFailure=null;pendingExec=null;pendingPlan=null;pendingWork=null;
             uia=new UiaDriver(policy,()=>nr.Revoked);
             ComputerGuard.Attach(nr);hook?.ComputerRunStarted();
         }
@@ -158,11 +160,11 @@ internal sealed class ComputerAgent:IDisposable
         lock(sync){revokedRuns.Add(r.Id);if(revokedRuns.Count>64)revokedRuns.Clear();}
         ComputerGuard.Attach(null);hook?.ComputerRunEnded();
         try{cdp?.Dispose();}catch{ }   // disposing at the end of a run
-        cdp=null;pendingExec=null;pendingPlan=null;
+        cdp=null;pendingExec=null;pendingPlan=null;pendingWork=null;
         try{ui.Invoke(()=>overlay.Hide());}catch{ }   // the overlay thread is gone: nothing to hide
         if(killed)Log("computer.kill",new(){["run"]=r.Id,["via"]=r.KillVia??why});
         Log("computer.run.stop",new(){["run"]=r.Id,["why"]=killed?(r.KillVia??why):why,["actions"]=r.Actions,["asks"]=r.Asks,["ms"]=Environment.TickCount64-r.StartedAt});
-        if(sid is not null)_=post("api/device/session/"+Uri.EscapeDataString(sid)+"/computer/beat",new{run=r.Id,state=killed?"killed":"closed",why=killed?(r.KillVia??why):why});
+        if(sid is not null)_=post("api/device/session/"+Uri.EscapeDataString(sid)+"/computer/beat",new{run=r.Id,state=killed?"killed":"ended",why=killed?(r.KillVia??why):why});
         notice?.Invoke(killed?"Computer-Steuerung gestoppt":"Computer-Steuerung beendet");
     }
     // The session ended (page reload, disconnect) or he turned the scope off in the tray.
@@ -184,13 +186,14 @@ internal sealed class ComputerAgent:IDisposable
         else if(d!=IntPtr.Zero)Native.CloseDesktop(d);
         r.Pause(muted());
         if(r.Due() is {} why){r.Close(why);EndRun(why);return;}
-        if(r.ExpirePending()){Log("computer.confirm.expired",new(){["run"]=r.Id});ui.BeginInvoke(()=>overlay.ClearAsk());pendingExec=null;pendingPlan=null;if(r.IsClosed){EndRun("expired-twice");return;}}
+        if(r.ExpirePending()){Log("computer.confirm.expired",new(){["run"]=r.Id});ui.BeginInvoke(()=>overlay.ClearAsk());pendingExec=null;pendingPlan=null;pendingWork=null;if(r.IsClosed){EndRun("expired-twice");return;}}
         if(r.IsHandsOn&&!handsOnNoted)
         {
             handsOnNoted=true;Log("computer.handson",new(){["run"]=r.Id});
             ui.BeginInvoke(()=>overlay.Update("Du bist dran, sag weiter",r.Actions,150));notice?.Invoke("Du bist dran, sag weiter");_=Beat(sid,r);
         }
-        if(r.PhysicalConfirmed&&r.Pending is not null&&!confirmKeyNoted){confirmKeyNoted=true;_=post("api/device/session/"+Uri.EscapeDataString(sid)+"/computer/beat",new{run=r.Id,state="confirm-key",hash=r.Pending.Hash});}
+        // The chord was pressed on the keyboard: the app runs the confirm itself and posts the result as a SECOND result to the action's own command id (the gateway accepts it once, within 120 s).
+        if(r.PhysicalConfirmed&&r.Pending is {} pend&&pendingWork is {} pw&&!confirmKeyNoted){confirmKeyNoted=true;try{queue.Add(new(pw.Sid,pw.Cmd with{Op="confirm",Hash=pend.Hash,Digits=""}));}catch(InvalidOperationException){ }}   // the queue was completed by a stop
         if(r.Pending is null)confirmKeyNoted=false;
         if(Environment.TickCount64-lastBeat>=5000||lastState!=r.StateName){lastState=r.StateName;_=Beat(sid,r);}
     }
@@ -248,7 +251,7 @@ internal sealed class ComputerAgent:IDisposable
         }
         // A window with administrator rights in front: our input would not reach it, and we do not try. The run closes.
         if(Native.GetForegroundWindow() is var f&&f!=IntPtr.Zero&&ComputerNative.ElevatedAbove(UiaDriver.Root(f))&&UiaDriver.ProcessOf(UiaDriver.Root(f)) is not "")
-        {r.Close("elevated");Log("computer.refused",new(){["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=tool,["class"]="R3",["rule"]="elevated"});Send(w,Reply(false,ComputerCodes.Refused,ActionClass.R3,"elevated",null,null,"closed"));EndRun("elevated");return;}
+        {r.Close("elevated");Log("computer.refused",new(){["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=tool,["class"]="R3",["rule"]="elevated"});Send(w,Reply(false,ComputerCodes.Refused,ActionClass.R3,"elevated",null,null,"ended"));EndRun("elevated");return;}
         Plan plan;Verdict v;
         try
         {
@@ -289,7 +292,7 @@ internal sealed class ComputerAgent:IDisposable
         string hash=binding.Hash(),code=ConfirmCode.Draw();
         var ask=new PendingAsk(w.Cmd.Tool,hash,say.Spoken,code,Environment.TickCount64,pure,w.Cmd.Args,v.Class.ToString(),v.Rule);
         if(r.Propose(ask) is {} stop){Send(w,Reply(false,stop.Code,v.Class,stop.Rule,null,null,r.StateName));EndRun(stop.Rule);return;}
-        pendingExec=plan.Exec;pendingPlan=plan;confirmKeyNoted=false;
+        pendingExec=plan.Exec;pendingPlan=plan;pendingWork=w;confirmKeyNoted=false;
         ui.Invoke(()=>overlay.Ask(code,say.Spoken));
         // The code is on the overlay only: it is in neither the log nor the reply.
         Log("computer.confirm.ask",new(data){["hash"]=hash,["spoken"]=say.ForLog});
@@ -300,7 +303,7 @@ internal sealed class ComputerAgent:IDisposable
         var cmd=w.Cmd;
         var res=r.Confirm(cmd.Hash,cmd.Digits,out var ask);
         var exec=pendingExec;var plan=pendingPlan;
-        if(res!=ComputerRun.ConfirmResult.HashMismatch){pendingExec=null;pendingPlan=null;ui.BeginInvoke(()=>overlay.ClearAsk());}
+        if(res!=ComputerRun.ConfirmResult.HashMismatch){pendingExec=null;pendingPlan=null;pendingWork=null;ui.BeginInvoke(()=>overlay.ClearAsk());}
         string hash=ask?.Hash??cmd.Hash;
         switch(res)
         {
@@ -316,6 +319,9 @@ internal sealed class ComputerAgent:IDisposable
         var data=new Dictionary<string,object?>{["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=ask.Tool,["class"]=ask.Class,["rule"]=ask.Rule,["hash"]=hash,["target"]=Labels.Clean(plan.Target),["chars"]=plan.Ctx.Text?.Length??0};
         Execute(w,r,plan,new Verdict(Enum.Parse<ActionClass>(ask.Class),ask.Rule),data,ask.Binding,Stopwatch.StartNew());
     }
+    const string JpegPrefix="data:image/jpeg;base64,";
+    static string? Field(Dictionary<string,object?> d,string k)=>d.TryGetValue(k,out var v)&&v is string s&&s.Length>0?s:null;
+    static ComputerWire.ResultMeta Meta(Dictionary<string,object?> d,string? jpeg)=>new(Field(d,"target"),Field(d,"domain"),Field(d,"process"),jpeg);
     void Execute(Work w,ComputerRun r,Plan plan,Verdict v,Dictionary<string,object?> data,ActionBinding? expected,Stopwatch sw)
     {
         IDisposable? slot=null;
@@ -328,10 +334,12 @@ internal sealed class ComputerAgent:IDisposable
             }
             if(r.Revoked)throw new OperationCanceledException("run revoked");
             string result=plan.Exec(expected);
+            string? jpeg=null;
+            if(result.StartsWith(JpegPrefix,StringComparison.Ordinal)){jpeg=result[JpegPrefix.Length..];result="Bildschirmfoto folgt als Bild.";}
             r.Counted();
             ui.BeginInvoke(()=>overlay.Update("läuft",r.Actions,150,w.Cmd.Tool));
             Log("computer.action",new(data){["ok"]=true,["ms"]=sw.ElapsedMilliseconds,["phase"]="done"});
-            Send(w,Reply(true,ComputerCodes.Done,v.Class,v.Rule,plan.Data?Data(result):result,null,r.StateName));
+            Send(w,Reply(true,ComputerCodes.Done,v.Class,v.Rule,plan.Data&&jpeg is null?Data(result):result,null,r.StateName,Meta(data,jpeg)));
         }
         catch(OperationCanceledException)
         {
