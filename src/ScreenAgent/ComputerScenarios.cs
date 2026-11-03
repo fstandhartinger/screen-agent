@@ -535,7 +535,10 @@ internal static partial class ComputerSelftest
             await Task.Delay(800);
             string popId="";
             using(var other=await ChromeCdp.Connect(new(profileDir,false),()=>false,(_,_)=>{},CancellationToken.None))
-                foreach(var t in await other.Targets())if(t.TargetId!=ft6&&(t.Url.EndsWith("/secret")||t.Url.EndsWith("/inject")))popId=t.TargetId;
+            {   // the popup is the tab whose opener is the flip page (older tabs of earlier scenarios may also show /inject)
+                var targets=await other.Call("Target.getTargets",null,null);
+                foreach(var t in targets.GetProperty("targetInfos").EnumerateArray())if(t.TryGetProperty("openerId",out var op)&&op.GetString()==ft6)popId=t.GetProperty("targetId").GetString()!;
+            }
             var otherSample=new List<string>();
             int n6Leaks=0,inScopeReads=0,hiddenReads=0,scopeRefusals=0,otherAnswers=0;
             if(popId.Length>0)
@@ -549,7 +552,7 @@ internal static partial class ComputerSelftest
                     else if(Rule(rd)=="tab-scope")scopeRefusals++;
                     else{otherAnswers++;if(otherSample.Count<4&&!otherSample.Contains(Brief(rd)+" "+(txt.Length>60?txt[..60]:txt)))otherSample.Add(Brief(rd)+" "+(txt.Length>60?txt[..60]:txt));}
                 }
-            Ok("N6 popup flipping between origins: 120 reads, none returned the foreign page's text; reads of the in-scope page still work",popId.Length>0&&n6Leaks==0&&inScopeReads>0,"popup "+(popId.Length>0)+" click "+Brief(click6)+" others: "+string.Join(" | ",otherSample),
+            Ok("N6 popup flipping between origins: 120 reads, the popup really was on the foreign origin for some of them (hidden or refused), none returned its text; reads of the in-scope page still work",popId.Length>0&&n6Leaks==0&&inScopeReads>0&&hiddenReads+scopeRefusals>0,"popup "+(popId.Length>0)+" click "+Brief(click6)+" others: "+string.Join(" | ",otherSample),
                 ("n6Leaks",n6Leaks),("inScopeReads",inScopeReads),("hiddenReads",hiddenReads),("scopeRefusals",scopeRefusals),("otherAnswers",otherAnswers));
             await End(r6);
         }
