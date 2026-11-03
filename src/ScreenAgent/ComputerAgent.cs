@@ -541,7 +541,7 @@ internal sealed class ComputerAgent:IDisposable
                 string host=Domains.HostOf(url)??"?";
                 string? opens=Domains.HostOf(url) is {} oh&&!r.Scope.ContainsHost(oh)?oh:null;
                 return new(P(ctx,()=>new ActionBinding().Set("tool",tool).Set("url",url),_=>{var t=c.Open(url).GetAwaiter().GetResult();return c.TabListing([t]);},
-                    ()=>("Öffne eine Seite auf "+host+(Domains.Etld1(host)!=host?" (Domain "+Domains.Etld1(host)+")":"")+"."+ComputerSpeech.PathPart(url)+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Öffne "+Domains.Etld1(host)),host,false,false,false,true,opens),null);
+                    ()=>("Öffne eine Seite auf "+host+(Domains.Etld1(host)!=host?" (Domain "+Domains.Etld1(host)+")":"")+"."+ComputerSpeech.PathPart(url)+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Öffne "+Domains.Etld1(host)),host,false,true,false,true,opens),null);
             }
             case "chrome_snapshot":
             case "chrome_read":
