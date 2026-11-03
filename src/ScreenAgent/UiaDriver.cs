@@ -223,6 +223,7 @@ internal sealed class UiaDriver
             Native.Send(keys);Interlocked.Add(ref KeysSent,keys.Length);typed+=step.Chars.Length;
             Thread.Sleep(rnd.Next(6,11));
         }
+        Thread.Sleep(200);   // some editors take the keys on another thread
         string? back=Value(h.El);
         return "getippt:"+typed+(back is null?"":PromptText.Landed(back,text)?":gelandet":":nicht-bestätigt");
     }

@@ -208,7 +208,7 @@ internal static partial class ComputerSelftest
             {
                 int kb=UiaDriver.KeysSent;
                 var typed=await Do(run,"action","ui_type",new{@ref=editRef,text="Hallo Welt"});
-                string? back=NotepadText(nh);
+                await Task.Delay(600);string? back=NotepadText(nh);
                 Ok("R1: typing into the named app (Notepad) lands, proven by reading the editor",Code(typed)==ComputerCodes.Done&&back is not null&&back.Contains("Hallo Welt"),Brief(typed)+" · "+Res(typed),("text",back));
                 var tree2=await Do(run,"action","ui_tree",new{window=nw});editRef=Regex.Matches(Res(tree2),@"^(\S+) (?:Edit|Document) ",RegexOptions.Multiline).First().Groups[1].Value;
                 var nl=await Do(run,"action","ui_type",new{@ref=editRef,text="a\nb"});
@@ -227,6 +227,7 @@ internal static partial class ComputerSelftest
                 await End(run);
                 // ===== Run F: kill in the middle of a long typing loop (same flag path the hook callback sets) =====
                 run=await Start("Schreib was in den Editor");
+                var ws2=await Do(run,"action","ui_windows");nw=Regex.Matches(Res(ws2),@"^(\S+) (?i:notepad)",RegexOptions.Multiline).First().Groups[1].Value;
                 var t3=await Do(run,"action","ui_tree",new{window=nw});editRef=Regex.Matches(Res(t3),@"^(\S+) (?:Edit|Document) ",RegexOptions.Multiline).First().Groups[1].Value;
                 string long_=string.Concat(Enumerable.Repeat("0123456789abcdefghij ",100));   // 2100 > 2000: use 2000
                 long_=long_[..2000];
