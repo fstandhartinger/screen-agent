@@ -25,6 +25,12 @@ public class ComputerContractTests
         var e=Parse(Wire("extend"),out _)!;
         Assert.Equal("start",e.Op);Assert.True(e.Extend);Assert.Equal(s.Run,e.Run);Assert.Contains("github.com",e.Goal);
     }
+    [Fact] public void ResumeTaintAndVoidOfTheFixtureParse()
+    {
+        Assert.Equal("resume",Parse(Wire("resume"),out _)!.Op);
+        Assert.Equal("taint",Parse(Wire("taint"),out _)!.Op);
+        var v=Parse(Wire("void"),out _)!;Assert.Equal("void",v.Op);Assert.Equal("a1b2c3d4e5f60718",v.Hash);
+    }
     [Fact] public void StopCarriesItsReason(){var c=Parse(Wire("stop"),out _)!;Assert.Equal("stop",c.Op);Assert.Equal("voice-stop",c.Reason);}
     [Fact] public void BeatAndConfirm()
     {

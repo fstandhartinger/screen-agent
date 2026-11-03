@@ -227,6 +227,14 @@ public class ComputerFixRunTests
         for(int i=0;i<8;i++)Assert.Null(q.Propose(Ask("h"+i)));
         Assert.Equal("asks-cap",q.Propose(Ask("x"))!.Value.Rule);
     }
+    [Fact] public void TwoWrongCodesEndTheRun()
+    {
+        var r=new ComputerRun("r0123456789abcdef","goal",ComputerScope.From("example.org"));
+        r.Propose(Ask("h1"));Assert.Equal(ComputerRun.ConfirmResult.Wrong,r.Confirm("h1","ja 1 1",out _));Assert.False(r.IsClosed);
+        r.Propose(Ask("h2"));Assert.Equal(ComputerRun.ConfirmResult.Wrong,r.Confirm("h2","ja 2 2",out _));Assert.True(r.IsClosed);Assert.Equal("wrong-codes",r.ClosedWhy);
+        var q=new ComputerRun("r0123456789abcdef","goal",ComputerScope.From("example.org"));
+        q.Propose(Ask("h1"));q.Confirm("h1","ja 1 1",out _);q.Propose(Ask("h2"));Assert.Equal(ComputerRun.ConfirmResult.Ok,q.Confirm("h2","ja 4 7",out _));Assert.False(q.IsClosed);
+    }
     [Fact] public void Speakers_AnUnarmedRunRunsNothingButItsOwnStart()
     {
         var r=new ComputerRun("r0123456789abcdef","goal",ComputerScope.From("example.org"),null,null,armed:false);

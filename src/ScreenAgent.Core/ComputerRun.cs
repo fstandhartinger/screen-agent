@@ -84,6 +84,9 @@ public sealed class ComputerRun
     public int StepsSinceFinal {get;private set;}
     public int Asks {get;private set;}
     public int Expiries {get;private set;}
+    // A wrong code is a stranger's guess or a misheard number: two of them end the run (8 asks x 1/90 would otherwise be a real chance for a blind guess).
+    public int WrongCodes {get;private set;}
+    public const int MaxWrongCodes=2;
     public string? ClosedWhy {get;private set;}
     public PendingAsk? Pending {get;private set;}
     public ComputerRun(string id,string goal,ComputerScope scope,Func<long>? clock=null,RunCaps? caps=null,bool armed=true)
@@ -174,6 +177,7 @@ public sealed class ComputerRun
                 return ConfirmResult.Expired;
             }
             if(physicalGo||ConfirmCode.Matches(ask.Code,spokenDigits))return ConfirmResult.Ok;
+            if(ConfirmCode.Digits(spokenDigits) is not null&&++WrongCodes>=MaxWrongCodes)Close("wrong-codes");   // a bare "ja" is no guess; a number is
             return ConfirmResult.Wrong;
         }
     }
