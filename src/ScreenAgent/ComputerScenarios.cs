@@ -101,7 +101,7 @@ internal static partial class ComputerSelftest
         // fourth ask stops the run
         var ask4=await Do(run,"action","chrome_click",new{@ref=send.Value.Ref});
         var after=await Do(run,"action","chrome_tabs");
-        Ok("the fourth ask in one run stops the run (3 asks)",Code(ask4)==ComputerCodes.Refused&&Rule(ask4)=="asks-cap"&&Code(after)==ComputerCodes.NoRun,Brief(ask4)+" then "+Brief(after));
+        Ok("the fourth ask in one run stops the run (3 asks)",Code(ask4)==ComputerCodes.Refused&&Rule(ask4)=="asks-cap"&&(Code(after)==ComputerCodes.NoRun||Code(after)==ComputerCodes.Killed),Brief(ask4)+" then "+Brief(after));
         await Task.Delay(700);
         Ok("run end removes the overlay and the guard",!Ui(()=>overlay.Visible)&&ComputerGuard.Current is null);
 

@@ -73,7 +73,9 @@ internal sealed class ComputerOverlay:IDisposable
     }
     public void Hide()
     {
-        foreach(var f in frames)f.Close();frames.Clear();banner?.Close();banner=null;
+        foreach(var f in frames)f.Close();frames.Clear();
+        if(banner?.Content is Border b&&b.Child is StackPanel sp)sp.Children.Clear();   // the text blocks are reused by the next run
+        banner?.Close();banner=null;
     }
     public void Dispose()=>Hide();
 }

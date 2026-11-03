@@ -83,7 +83,7 @@ internal sealed class ComputerAgent:IDisposable
         foreach(var w in queue.GetConsumingEnumerable())
         {
             try{Process(w);}
-            catch(Exception e){Log("computer.error",new(){["type"]=e.GetType().Name});_=Result(w.Sid,w.Cmd,Reply(false,ComputerCodes.Unclear,null,"error",null,null,run?.StateName));}
+            catch(Exception e){Log("computer.error",new(){["type"]=e.GetType().Name,["reason"]=e.Message.Length>100?e.Message[..100]:e.Message});_=Result(w.Sid,w.Cmd,Reply(false,ComputerCodes.Unclear,null,"error",null,null,run?.StateName));}
         }
     }
     static Dictionary<string,object?> Reply(bool ok,string code,ActionClass? cls,string rule,string? result,ComputerWire.NeedsConfirm? ask,string? runState)
@@ -276,9 +276,11 @@ internal sealed class ComputerAgent:IDisposable
         ActionBinding binding;(string Spoken,string ForLog) say;
         try{binding=plan.Bind()??new ActionBinding().Set("tool",w.Cmd.Tool);say=plan.Describe();}
         catch(Exception e) when(e is StaleRefException or UiaStaleException or CdpException){Send(w,Reply(false,ComputerCodes.StaleRef,v.Class,"stale-ref",null,null,r.StateName));return;}
+        // The binding the action is checked against right before it runs is the pure one; the hash shown to the gateway also covers the rule and the arguments.
+        var pure=binding.Clone();
         binding.Set("rule",v.Rule).Set("args",w.Cmd.Args.ValueKind==JsonValueKind.Object?w.Cmd.Args.GetRawText():"");
         string hash=binding.Hash(),code=ConfirmCode.Draw();
-        var ask=new PendingAsk(w.Cmd.Tool,hash,say.Spoken,code,Environment.TickCount64,binding,w.Cmd.Args,v.Class.ToString(),v.Rule);
+        var ask=new PendingAsk(w.Cmd.Tool,hash,say.Spoken,code,Environment.TickCount64,pure,w.Cmd.Args,v.Class.ToString(),v.Rule);
         if(r.Propose(ask) is {} stop){Send(w,Reply(false,stop.Code,v.Class,stop.Rule,null,null,r.StateName));EndRun(stop.Rule);return;}
         pendingExec=plan.Exec;pendingPlan=plan;confirmKeyNoted=false;
         ui.Invoke(()=>overlay.Ask(code,say.Spoken));

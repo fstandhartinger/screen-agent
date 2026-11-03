@@ -47,6 +47,7 @@ public static class ConfirmCode
 public sealed class ActionBinding
 {
     public SortedDictionary<string,string> Fields {get;}=new(StringComparer.Ordinal);
+    public ActionBinding Clone(){var c=new ActionBinding();foreach(var (k,v) in Fields)c.Fields[k]=v;return c;}
     public ActionBinding Set(string key,object? value){Fields[key]=value?.ToString()??"";return this;}
     public string Hash()
     {
