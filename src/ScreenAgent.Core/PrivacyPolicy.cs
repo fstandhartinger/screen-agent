@@ -23,7 +23,7 @@ public sealed class PrivacyPolicy
     static bool TitleMatches(string title,string pattern)
     {
         try{return Regex.IsMatch(title,pattern,RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(50));}
-        catch(Exception e) when(e is ArgumentException or RegexMatchTimeoutException){return title.Contains(pattern,StringComparison.OrdinalIgnoreCase);}
+        catch(Exception e) when(e is ArgumentException or RegexMatchTimeoutException){return title.Contains(pattern,StringComparison.OrdinalIgnoreCase);}   /* bad pattern: plain substring */
     }
     // Lock screen, sign-in and UAC consent run on the secure desktop; there is simply no frame. Start menu, Alt-Tab and the shell are ordinary windows.
     public static bool LockedHost(string process) => new[]{"LockApp","LogonUI","consent"}.Contains(process,StringComparer.OrdinalIgnoreCase);

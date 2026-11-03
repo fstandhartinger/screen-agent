@@ -49,18 +49,20 @@ internal sealed class MainAgentPrompt
                 if(FindInput((IntPtr)c.Handle,SearchBudgetMs,ct) is {} hit){chosen=c;input=hit;break;}
             }
             hwnd=(IntPtr)chosen.Handle;wsl=CandidateOrder.Wsl(chosen);
+            log("main.prompt.step",new(){["step"]="window",["windows"]=windows,["ms"]=clock.ElapsedMilliseconds});   // the live activity overlay shows these steps
             Native.GetWindowThreadProcessId(hwnd,out uint pidRaw);int pid=(int)pidRaw;
             Debug?.Invoke($"candidates={found.Count} chosen={chosen.Handle:x} minimized={chosen.Minimized} elementFound={input is not null}");
             // c. In front.
             if(!WaitModifiersUp(2000,ct))return Finish(PromptCodes.Busy);
             if(!Front(hwnd,ct))return Finish(PromptCodes.NoForeground);
+            log("main.prompt.step",new(){["step"]="focus",["ms"]=clock.ElapsedMilliseconds});
             // d. Focus: the element when there is one, the palette otherwise or when the element did not take the focus.
             route="element";
             if(input is null&&FindInput(hwnd,1500,ct) is {} late)input=late;   // a minimized window shows nothing before it is restored
             bool ok=false;
             if(input is not null)
             {
-                try{input.SetFocus();}catch(Exception ex){Debug?.Invoke("SetFocus failed: "+ex.GetType().Name);}
+                try{input.SetFocus();}catch(Exception ex){Debug?.Invoke("SetFocus failed: "+ex.GetType().Name);Diag.Fail("prompt-setfocus",ex);}
                 ok=Verified(pid,1000,ct,out _);
             }
             if(!ok)
@@ -87,6 +89,7 @@ internal sealed class MainAgentPrompt
             if(!deadline.MayStartTyping(Now)){Debug?.Invoke("less than 8 s left");return Finish(PromptCodes.Interrupted);}
             // Re-verified right before the first key: the focus may have moved while the draft was being read.
             if(!StillTheBox(box,pid,true)){Debug?.Invoke("focus moved before the first key");return Finish(PromptCodes.WrongFocus);}
+            log("main.prompt.step",new(){["step"]="typing",["chars"]=text.Length,["ms"]=clock.ElapsedMilliseconds});
             Chord(Ctrl,KeyEnd);   // the caret goes behind whatever is there: a draft is never overwritten or cut
             if(!readable||existing.Trim().Length>0){if(!Type(" ",hwnd,pid,ct,box,false,ref typed,out string? sepFailed))return Finish(sepFailed!);typed=0;}   // an unreadable draft counts as a draft: the separator is harmless
             if(!Type(text,hwnd,pid,ct,box,false,ref typed,out string? failed))return Finish(failed!);
@@ -107,8 +110,8 @@ internal sealed class MainAgentPrompt
             if(read is null||!PromptText.Landed(read,text)){Debug?.Invoke("text gone after 500 ms");return Finish(PromptCodes.WrongFocus,false);}
             return Finish(PromptCodes.Typed,true);
         }
-        catch(OperationCanceledException){return Finish(PromptCodes.Interrupted);}
-        catch(Exception ex){Debug?.Invoke("unexpected "+ex);return Finish(PromptCodes.Interrupted);}
+        catch(OperationCanceledException){return Finish(PromptCodes.Interrupted);}   /* cancelled: Finish logs main.prompt.done with the code */
+        catch(Exception ex){Debug?.Invoke("unexpected "+ex);Diag.Fail("prompt-unexpected",ex,new(){["ms"]=clock.ElapsedMilliseconds,["route"]=route,["typed"]=typed});return Finish(PromptCodes.Interrupted);}
     }
     // ---- windows
     internal static List<CodeWindow> Enumerate()
@@ -122,7 +125,7 @@ internal sealed class MainAgentPrompt
             sb.Clear();Native.GetWindowText(h,sb,512);string title=sb.ToString();
             if(title.Length==0)return true;
             Native.GetWindowThreadProcessId(h,out uint pid);
-            if(!cache.TryGetValue(pid,out var name)){try{using var p=Process.GetProcessById((int)pid);name=p.ProcessName;}catch{name="";}cache[pid]=name;}
+            if(!cache.TryGetValue(pid,out var name)){try{using var p=Process.GetProcessById((int)pid);name=p.ProcessName;}catch(Exception){name="";}   /* the process is gone: no name */cache[pid]=name;}
             bool cloaked=Native.DwmGetWindowAttribute(h,14,out int cl,4)==0&&cl!=0;   // another virtual desktop
             list.Add(new((long)h,name,cls,title,Native.IsIconic(h),cloaked));
             return true;
@@ -134,12 +137,12 @@ internal sealed class MainAgentPrompt
         var until=Environment.TickCount64+budgetMs;
         Condition cond=names.Length==1?new PropertyCondition(AutomationElement.NameProperty,names[0]):new OrCondition(names.Select(n=>(Condition)new PropertyCondition(AutomationElement.NameProperty,n)).ToArray());
         AutomationElement root;
-        try{root=AutomationElement.FromHandle(hwnd);}catch{return null;}
+        try{root=AutomationElement.FromHandle(hwnd);}catch(Exception ex){Diag.Fail("prompt-uia-root",ex);return null;}
         while(true)
         {
             ct.ThrowIfCancellationRequested();
             long left=until-Environment.TickCount64;if(left<=0)return null;
-            var search=Task.Run(()=>{try{return root.FindFirst(TreeScope.Descendants,cond);}catch{return null;}});
+            var search=Task.Run(()=>{try{return root.FindFirst(TreeScope.Descendants,cond);}catch(Exception ex){Diag.Fail("prompt-uia-find",ex);return null;}});
             if(!search.Wait((int)left,ct))return null;   // the search itself ran over the budget; abandon it
             if(search.Result is {} hit)return hit;
             ct.WaitHandle.WaitOne(250);
@@ -165,7 +168,7 @@ internal sealed class MainAgentPrompt
     {
         if(Native.IsIconic(h)){Native.ShowWindow(h,9);Thread.Sleep(200);}
         if(Native.GetForegroundWindow()==h&&Stable(h,600,ct))return true;
-        try{AutomationElement.FromHandle(h).SetFocus();}catch{ /* not every window takes it */ }
+        try{AutomationElement.FromHandle(h).SetFocus();}catch(Exception ex){Diag.Fail("prompt-front-focus",ex);}   /* not every window takes it */
         if(Stable(h,900,ct))return true;
         // Alt tap: Windows lets the process that just received input take the foreground. The neutral key between Alt down and up keeps the menu bar closed.
         // Alt is never left down: whatever throws in between, the finally sends its key-up.
@@ -195,7 +198,7 @@ internal sealed class MainAgentPrompt
             for(int i=0;p is not null&&i<80;i++){classes.Add(p.Current.ClassName??"");p=walker.GetParent(p);}
             return new(e,cur.ProcessId,cur.Name??"",classes);
         }
-        catch{return null;}
+        catch(Exception ex){Diag.Fail("prompt-focus-info",ex);return null;}
     }
     bool Verified(int pid,int waitMs,CancellationToken ct,out string why)
     {
@@ -224,7 +227,7 @@ internal sealed class MainAgentPrompt
             }
             return box.Current.HasKeyboardFocus;   // one cross-process call: the element we verified still has the keyboard focus
         }
-        catch{return false;}
+        catch(Exception ex){Diag.Fail("prompt-focus-verify",ex);return false;}
     }
     static bool InQuickInput(int pid)=>Focus() is {} f&&f.Pid==pid&&FocusRules.InQuickInput(f.Classes);
     // Esc goes out only while the palette (quick input) of that window has the focus right now; anywhere else it could cancel something (a terminal's running task).
@@ -286,7 +289,7 @@ internal sealed class MainAgentPrompt
             }
             return picked.Count==1?picked[0]:picked.Count==0?"":"?"+string.Join(" | ",picked);
         }
-        catch{return "";}
+        catch(Exception ex){Diag.Fail("prompt-read-picked",ex);return "";}
     }
     // ---- keys
     static Native.Input Key(ushort vk,bool up)=>Native.Key(vk,up,0,false,Native.Marker);
@@ -296,7 +299,7 @@ internal sealed class MainAgentPrompt
     // Key-up for every modifier among vks (Ctrl, Shift, Alt), best effort: an extra key-up of a key that is up changes nothing.
     static void ReleaseModifiers(params ushort[] vks)
     {
-        foreach(var v in vks)if(v is Ctrl or Shift or Alt)try{Native.Send(Key(v,true));}catch{ /* nothing more we can do */ }
+        foreach(var v in vks)if(v is Ctrl or Shift or Alt)try{Native.Send(Key(v,true));}catch(Exception ex){Diag.Fail("prompt-release-modifier",ex);}   /* nothing more we can do */
     }
     // One atomic batch: modifiers down in order, last key down and up, modifiers up in reverse. If SendInput fails part way, the modifiers are released.
     static void Chord(params ushort[] vks)
@@ -305,7 +308,7 @@ internal sealed class MainAgentPrompt
         foreach(var v in vks)list.Add(Key(v,false));
         for(int i=vks.Length-1;i>=0;i--)list.Add(Key(vks[i],true));
         try{SendKeys(list.ToArray());}
-        catch{ReleaseModifiers(vks);throw;}
+        catch{ReleaseModifiers(vks);throw;}   /* rethrown: the caller logs it */
     }
     // VK_PACKET batches. Before EVERY batch: the target is still in front, no physical modifier is held (it would turn typed characters into shortcuts) and the box we verified still has the
     // keyboard focus (one call). The first batch and every 300 characters repeat the full check with the ancestor walk. `palette`: typing into the quick input, which must have the focus.
@@ -336,7 +339,7 @@ internal sealed class MainAgentPrompt
                     SendKeys(keys);
                 }
             }
-            catch(System.ComponentModel.Win32Exception){failed=PromptCodes.Interrupted;return false;}
+            catch(System.ComponentModel.Win32Exception ex){Diag.Fail("prompt-sendinput",ex,new(){["typed"]=typed,["err"]=ex.NativeErrorCode});failed=PromptCodes.Interrupted;return false;}
             typed+=step.Chars.Length;sinceCheck+=step.Chars.Length;
             Thread.Sleep(rnd.Next(6,11));
         }
@@ -351,7 +354,7 @@ internal sealed class MainAgentPrompt
             if(f is not null&&f.Pid==pid&&FocusRules.MayType(f.Name,names,f.Classes)&&ReadBox(f.Element) is {} fresh)return fresh;
             return ReadBox(fallback);
         }
-        catch{return null;}
+        catch(Exception ex){Diag.Fail("prompt-readbox",ex);return null;}
     }
     // The user's own text in the box. An empty box reports its placeholder ("Ask Claude to edit…") as value AND as text, so the patterns alone cannot tell
     // "empty" from "a draft". Measured on the real extension: its Send button is disabled exactly while nothing sendable is in the box, and the placeholder is
@@ -365,7 +368,7 @@ internal sealed class MainAgentPrompt
         if(raw is null)return null;
         if(raw.Length==0)return raw;
         ct.ThrowIfCancellationRequested();
-        try{if(SendButton(el,ct) is {} send&&!send.Current.IsEnabled)return "";}catch(OperationCanceledException){throw;}catch{ /* fall through to the structure */ }
+        try{if(SendButton(el,ct) is {} send&&!send.Current.IsEnabled)return "";}catch(OperationCanceledException){throw;}catch(Exception ex){Diag.Fail("prompt-send-button",ex);}   /* falls through to the structure */
         ct.ThrowIfCancellationRequested();
         return PlaceholderOnly(el)?"":raw;
     }
@@ -402,7 +405,7 @@ internal sealed class MainAgentPrompt
             var inner=walker.GetFirstChild(only);
             return inner is not null&&inner.Current.ControlType==ControlType.Text&&walker.GetNextSibling(inner) is null;
         }
-        catch{return false;}
+        catch(Exception ex){Diag.Fail("prompt-structure",ex);return false;}
     }
     // Selftest diagnostics: what each pattern says (lengths and a short head, never used for decisions).
     internal static string Describe(AutomationElement el)
@@ -414,7 +417,7 @@ internal sealed class MainAgentPrompt
             string? text=el.TryGetCurrentPattern(TextPattern.Pattern,out var t)?((TextPattern)t).DocumentRange.GetText(-1):null;
             return $"value={Head(value)} text={Head(text)} help={Head(el.Current.HelpText)}";
         }
-        catch(Exception ex){return "describe failed: "+ex.GetType().Name;}
+        catch(Exception ex){return "describe failed: "+ex.GetType().Name;}   /* into the description text */
     }
     // Selftest diagnostics: the element, its children, ARIA properties and the text before the caret, to find out how an empty box differs from one with text.
     internal static string DescribeDeep(AutomationElement el)
@@ -429,7 +432,7 @@ internal sealed class MainAgentPrompt
                 sb.Append(new string(' ',depth*2)).Append(c.ControlType.ProgrammaticName.Replace("ControlType.","")).Append(" name='").Append(name).Append("' class='").Append(c.ClassName).Append("' content=").Append(c.IsContentElement).Append(" offscreen=").Append(c.IsOffscreen).Append(" rect=").Append(c.BoundingRectangle).Append(" aria='").Append(aria).Append("' status='").Append(c.ItemStatus).Append("'\n");
                 if(depth<3)for(var ch=TreeWalker.RawViewWalker.GetFirstChild(e);ch is not null;ch=TreeWalker.RawViewWalker.GetNextSibling(ch))One(ch,depth+1);
             }
-            catch(Exception ex){sb.Append("  (").Append(ex.GetType().Name).Append(")\n");}
+            catch(Exception ex){sb.Append("  (").Append(ex.GetType().Name).Append(")\n");}   /* into the description text */
         }
         One(el,0);
         try
@@ -447,7 +450,7 @@ internal sealed class MainAgentPrompt
                 sb.Append('\n');
             }
         }
-        catch(Exception ex){sb.Append("caret probe failed: ").Append(ex.GetType().Name).Append('\n');}
+        catch(Exception ex){sb.Append("caret probe failed: ").Append(ex.GetType().Name).Append('\n');}   /* into the description text */
         return sb.ToString();
     }
     // What the box shows now: the longer of ValuePattern and TextPattern; null when the element offers neither.

@@ -21,12 +21,22 @@ internal sealed class AgentBridge : Window
     public bool VoiceOn {get;private set;}
     public static volatile bool AllowMicForTests;
     public static string TestBrowserArgs="";
+    // How long WebView2 gets to start with the window hidden before it is shown off-screen (see StartHidden). The start-up probe varies it.
+    public static int StartupFallbackMs=6000;
     readonly SemaphoreSlim muteGate=new(1,1);
     public bool AllowClose {get;set;}
     public string? SessionId {get;private set;}
     public event System.Action? SessionChanged;
     // Drawing panel requests from the Desk page: "canvas-pending" (the agent has something on the board: open unless manual) and "canvas-panel-toggle" (the page's own button).
     public event System.Action? CanvasPending,CanvasToggle;
+    public event System.Action<bool>? MicState;   // the page says its mute button changed: muted
+    // Live activity from the Desk page (a tool started, finished, failed; the agent is thinking). Rejected: the message was dropped, the reason names the field.
+    public event System.Action<ActivityNote>? Activity;
+    public event System.Action<string>? ActivityRejected;
+    // Start-up milestones in ms since StartHidden: "environment", "controller", "page" (first page loaded). The app logs them as session.startup.
+    public event System.Action<string,long>? Milestone;
+    bool pageMarked;
+    void Mark(string name){if(startup.IsRunning)Milestone?.Invoke(name,startup.ElapsedMilliseconds);}
     internal CoreWebView2Environment? WebEnvironment {get;private set;}
     internal bool IsTrusted(string url)=>Trusted(url);
     internal Uri DeskOrigin=>origin;
@@ -78,8 +88,11 @@ internal sealed class AgentBridge : Window
             // The page keeps the voice session alive while this window is hidden: no background throttling.
             var options=new CoreWebView2EnvironmentOptions("--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"+TestBrowserArgs);
             InitStage="environment";
+            // The web session cookie is fetched while WebView2 starts (both take a while on a cold start), not after it.
+            Task<WebSession>? prefetch=client.Paired?client.WebSession(lifetime.Token):null;
+            prefetch?.ContinueWith(t=>_=t.Exception,TaskContinuationOptions.OnlyOnFaulted);
             var env=await CoreWebView2Environment.CreateAsync(null,profile,options);
-            WebEnvironment=env;
+            WebEnvironment=env;Mark("environment");
             if(lifetime.IsCancellationRequested)return;
             InitStage="controller";
             // Direct HWND hosting deliberately uses device pixels. WPF's old WebView2 control retained its
@@ -95,8 +108,9 @@ internal sealed class AgentBridge : Window
             // including the initial /device request that otherwise races a later synthetic fixture navigation.
             InstallTestResponses(browser);
             ResizeBrowser();
-            ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";
-            browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri))e.Cancel=true;else{SessionId=null;SessionChanged?.Invoke();}};
+            ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";Mark("controller");
+            browser.ProcessFailed+=(_,e)=>Diag.Event("webview.process.failed",new(){["kind"]=e.ProcessFailedKind.ToString(),["reason"]=e.Reason.ToString(),["exit"]=e.ExitCode,["stage"]=InitStage});
+            browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri)){e.Cancel=true;Diag.Event("nav.blocked",new(){["host"]=Uri.TryCreate(e.Uri,UriKind.Absolute,out var blocked)?blocked.Host:"?"});}else{SessionId=null;SessionChanged?.Invoke();}};
             browser.WebMessageReceived+=(_,e)=>
             {
                 if(!Trusted(e.Source))return;
@@ -117,28 +131,37 @@ internal sealed class AgentBridge : Window
                                 else if(m.TryGetProperty("state",out var state)&&state.GetString()=="error")voiceAck?.TrySetResult(false);
                             }
                             break;
+                        case "activity":
+                            if(ActivityParse.TryParse(m,out var activity,out string why))Activity?.Invoke(activity!);else ActivityRejected?.Invoke(why);
+                            break;
                         case "canvas-pending":CanvasPending?.Invoke();break;
                         case "canvas-panel-toggle":CanvasToggle?.Invoke();break;
+                        case "mic-state":if(m.TryGetProperty("muted",out var micMutedValue)&&micMutedValue.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)MicState?.Invoke(micMutedValue.GetBoolean());break;   // the page's own mute button
                         case "mute-ack":if(!m.TryGetProperty("on",out var on)||on.GetBoolean()==requestedMute)muteAck?.TrySetResult(true);break;
                     }
                 }
-                catch{ /* Invalid page message never changes device credentials. */ }
+                catch(Exception ex){Diag.Fail("web-message",ex);}   // an invalid page message never changes device credentials
             };
             browser.NewWindowRequested+=(_,e)=>{e.Handled=true;};
-            browser.NavigationCompleted+=(_,_)=>{ResizeBrowser();if(pairStatus is {} status)PairingStatus(status.state,status.text);};
+            browser.NavigationCompleted+=(_,e)=>{if(!e.IsSuccess)Diag.Event("nav.fail",new(){["error"]=e.WebErrorStatus.ToString(),["status"]=e.HttpStatusCode});ResizeBrowser();if(!pageMarked){pageMarked=true;Mark("page");}if(pairStatus is {} status)PairingStatus(status.state,status.text);};
             browser.PermissionRequested+=(_,e)=>
             {
                 // Explicit prompt for the Desk's own microphone request; WebView2 remembers the answer in its profile.
                 if(e.PermissionKind==CoreWebView2PermissionKind.Microphone&&AllowMicForTests)e.State=Trusted(e.Uri)?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
                 else if(e.PermissionKind==CoreWebView2PermissionKind.Microphone)
                     // Win32 box: topmost and foreground, so it cannot hide behind other windows while the Desk is hidden.
-                    e.State=Trusted(e.Uri)&&Native.MessageBox(IntPtr.Zero,"Darf Desk dein Mikrofon verwenden?","Screen Agent",0x4|0x20|0x10000|0x40000)==6?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
+                {
+                    bool trusted=Trusted(e.Uri);Diag.Event("ui.window",new(){["window"]="mic-permission",["trusted"]=trusted});
+                    bool yes=trusted&&Native.MessageBox(IntPtr.Zero,"Darf Desk dein Mikrofon verwenden?","Screen Agent",0x4|0x20|0x10000|0x40000)==6;
+                    Diag.Event("mic.permission",new(){["allowed"]=yes,["trusted"]=trusted});
+                    e.State=yes?CoreWebView2PermissionState.Allow:CoreWebView2PermissionState.Deny;
+                }
             };
             if(client.Paired)
             {
-                try{await OpenSignedIn(lifetime.Token);}
-                catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Unauthorized){client.Disconnect();OpenPairing();}
-                catch{OpenPairing();PairingStatus("error","Desk konnte nicht geladen werden. Bitte erneut verbinden.");}
+                try{await OpenSignedIn(lifetime.Token,prefetch);}
+                catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Unauthorized){Diag.Event("desk.unauthorized",new(){["stage"]="open"});client.Disconnect();OpenPairing();}
+                catch(Exception ex){Diag.Fail("desk-open",ex,new(){["status"]=(int?)(ex as HttpRequestException)?.StatusCode??0});OpenPairing();PairingStatus("error","Desk konnte nicht geladen werden. Bitte erneut verbinden.");}
             }
             else OpenPairing();
         }
@@ -146,6 +169,8 @@ internal sealed class AgentBridge : Window
         {
             InitErrorType=ex.GetType().Name;InitErrorHResult=ex.HResult;InitStage="failed";
             if(lifetime.IsCancellationRequested)return;
+            Diag.Fail("webview-init",ex,new(){["ms"]=startup.ElapsedMilliseconds});
+            Diag.Event("ui.window",new(){["window"]="desk-text",["why"]="webview-init"});
             Content=new System.Windows.Controls.TextBlock{Text="Desk konnte nicht geöffnet werden. Bitte prüfe deine Internetverbindung und die WebView2-Laufzeit.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(12)};
             ShowDesk(); // the user must see why nothing works
         }
@@ -156,7 +181,7 @@ internal sealed class AgentBridge : Window
     public void StartHidden()
     {
         startup.Restart();new WindowInteropHelper(this).EnsureHandle();Begin();
-        startupFallback=new DispatcherTimer{Interval=TimeSpan.FromSeconds(6)};
+        startupFallback=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(StartupFallbackMs)};
         startupFallback.Tick+=async (_,_)=>
         {
             startupFallback.Stop();
@@ -175,6 +200,8 @@ internal sealed class AgentBridge : Window
             {
                 if(lifetime.IsCancellationRequested)return;
                 InitErrorType=ex.GetType().Name;InitErrorHResult=ex.HResult;InitStage="fallback-failed";
+                Diag.Fail("webview-fallback",ex,new(){["ms"]=startup.ElapsedMilliseconds});
+                Diag.Event("ui.window",new(){["window"]="desk-text",["why"]="webview-fallback"});
                 // A DispatcherTimer's async-void handler must not surface an unhandled startup exception.
                 try
                 {
@@ -182,7 +209,7 @@ internal sealed class AgentBridge : Window
                     Content=new System.Windows.Controls.TextBlock{Text="Desk konnte nicht geöffnet werden. Bitte starte Screen Agent erneut.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(12)};
                     ShowDesk();
                 }
-                catch{ /* The sanitized initialization diagnostics remain available to CI. */ }
+                catch(Exception inner){Diag.Fail("webview-fallback-ui",inner);}   // the diagnostics stay available to CI
             }
         };
         startupFallback.Start();
@@ -220,11 +247,12 @@ internal sealed class AgentBridge : Window
     void PairingStatus(string state,string text)
     {
         pairStatus=(state,text);
+        if(state=="error")Diag.Event("ui.pairing",new(){["state"]=state,["msg"]=text});
         browser?.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="pairing-status",state,text}));
     }
-    async Task OpenSignedIn(CancellationToken ct)
+    async Task OpenSignedIn(CancellationToken ct,Task<WebSession>? prefetched=null)
     {
-        var session=await client.WebSession(ct);
+        var session=await (prefetched??client.WebSession(ct));
         pairStatus=null;
         ct.ThrowIfCancellationRequested();
         if(browser is null)return;
@@ -248,7 +276,7 @@ internal sealed class AgentBridge : Window
             if(client.Paired)
             {
                 try{await OpenSignedIn(run.Token);return;}
-                catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Unauthorized){client.Disconnect();}
+                catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Unauthorized){Diag.Event("desk.unauthorized",new(){["stage"]="pairing"});client.Disconnect();}
             }
             using var approval=new LoopbackApproval();
             var start=await client.StartPairing(approval.CallbackUrl,run.Token);
@@ -271,9 +299,9 @@ internal sealed class AgentBridge : Window
             }
             PairingStatus("error","Die Verbindung ist abgelaufen. Bitte noch einmal auf „Im Browser verbinden“ klicken.");
         }
-        catch(OperationCanceledException){if(!lifetime.IsCancellationRequested)PairingStatus("error","Verbindung abgebrochen oder abgelaufen. Bitte erneut verbinden.");}
-        catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Gone){PairingStatus("error","Die Verbindung ist abgelaufen. Bitte erneut verbinden.");}
-        catch{PairingStatus("error","Verbindung fehlgeschlagen. Bitte prüfe das Internet und versuche es erneut.");}
+        catch(OperationCanceledException){if(!lifetime.IsCancellationRequested){Diag.Event("pairing.fail",new(){["why"]="timeout-or-cancel"});PairingStatus("error","Verbindung abgebrochen oder abgelaufen. Bitte erneut verbinden.");}}
+        catch(HttpRequestException e) when(e.StatusCode==HttpStatusCode.Gone){Diag.Event("pairing.fail",new(){["why"]="gone",["status"]=410});PairingStatus("error","Die Verbindung ist abgelaufen. Bitte erneut verbinden.");}
+        catch(Exception ex){Diag.Fail("pairing",ex,new(){["status"]=(int?)(ex as HttpRequestException)?.StatusCode??0});PairingStatus("error","Verbindung fehlgeschlagen. Bitte prüfe das Internet und versuche es erneut.");}
         finally{if(ReferenceEquals(pairing,run))pairing=null;}
     }
     public void ShowDesk()
@@ -322,9 +350,12 @@ internal sealed class AgentBridge : Window
         try
         {
             browser.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="voice",on,provider=provider=="default"?"xai":provider}));
-            return await Task.WhenAny(ack.Task,Task.Delay(2000))==ack.Task&&await ack.Task;
+            var clock=Stopwatch.StartNew();
+            bool acked=await Task.WhenAny(ack.Task,Task.Delay(2000))==ack.Task;bool ok=acked&&await ack.Task;
+            if(!ok)Diag.Event("voice.ack.fail",new(){["on"]=on,["why"]=acked?"error-state":"timeout",["ms"]=clock.ElapsedMilliseconds});
+            return ok;
         }
-        catch{return false;}
+        catch(Exception ex){Diag.Fail("voice-post",ex,new(){["on"]=on});return false;}
         finally{if(voiceAck==ack)voiceAck=null;}
     }
     public async Task<bool> Mute(bool on)
@@ -340,9 +371,12 @@ internal sealed class AgentBridge : Window
         try
         {
             browser.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="mute",on}));
-            return await Task.WhenAny(ack.Task,Task.Delay(500))==ack.Task&&await ack.Task;
+            var clock=Stopwatch.StartNew();
+            bool acked=await Task.WhenAny(ack.Task,Task.Delay(500))==ack.Task;bool ok=acked&&await ack.Task;
+            if(!ok)Diag.Event("mute.ack.fail",new(){["on"]=on,["why"]=acked?"error-state":"timeout",["ms"]=clock.ElapsedMilliseconds});
+            return ok;
         }
-        catch{return false;}
+        catch(Exception ex){Diag.Fail("mute-post",ex,new(){["on"]=on});return false;}
         finally{if(muteAck==ack)muteAck=null;}
     }
     // Global mic mute (Ctrl+Win+Shift+M): the Desk page owns the state (window.__deskVoice, see web voiceController). null = no running voice session or no such API.

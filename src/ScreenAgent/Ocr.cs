@@ -19,7 +19,7 @@ internal static class Ocr
             var text=(await engine.RecognizeAsync(bitmap)).Text;
             return new("winrt",text,ArtifactMatcher.Find(text),null);
         }
-        catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8} {ex.Message}";}
+        catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8} {Redact.Message(ex.Message,80)}";Diag.Fail("ocr-winrt-file",ex);}
         NativeOcrLibraries.Ensure();
         using var tess=new Tesseract.TesseractEngine(Path.Combine(AppContext.BaseDirectory,"tessdata"),"eng+deu",Tesseract.EngineMode.LstmOnly);
         using var pix=Tesseract.Pix.LoadFromFile(path);
@@ -40,7 +40,7 @@ internal static class Ocr
             var engine=OcrEngine.TryCreateFromLanguage(new Language("en-US"))??OcrEngine.TryCreateFromUserProfileLanguages()??throw new InvalidOperationException("No WinRT OCR language installed");
             string text=(await engine.RecognizeAsync(bitmap)).Text;return new("winrt",text,ArtifactMatcher.Find(text),null);
         }
-        catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8}";}
+        catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8}";Diag.Fail("ocr-winrt-memory",ex);}   // Tesseract takes over below
         return ReadTesseractMemory(png) with{WinRtFailure=failure};
     }
     // The ids on the Desk's pages are small, faint and monospaced: whole-screen OCR misreads them (real pages at 100-200 %: 2 of 11 read right).
@@ -92,8 +92,9 @@ internal static class Ocr
             return result.Lines.SelectMany(l=>l.Words).Where(w=>bounds.IntersectsWith(new((int)w.BoundingRect.X,(int)w.BoundingRect.Y,(int)Math.Ceiling(w.BoundingRect.Width),(int)Math.Ceiling(w.BoundingRect.Height))))
                 .SelectMany(w=>ArtifactMatcher.Find(w.Text)).Distinct().ToArray();
         }
-        catch
+        catch(Exception ex)
         {
+            Diag.Fail("ocr-ids-intersecting",ex);   // Tesseract takes over
             NativeOcrLibraries.Ensure();
             using var tess=new Tesseract.TesseractEngine(Path.Combine(AppContext.BaseDirectory,"tessdata"),"eng+deu",Tesseract.EngineMode.LstmOnly);
             using var pix=Tesseract.Pix.LoadFromMemory(png);using var page=tess.Process(pix);using var words=page.GetIterator();

@@ -6,6 +6,8 @@ namespace ScreenAgent;
 // The drawing panel: a small window beside the user's work that shows the board the agent draws on (Desk page /?panel=canvas). It is left out of every screen
 // capture (otherwise the picture the agent gets would contain its own drawing), so it is never opened when Windows does not confirm that. Its browser is a second
 // controller of the Desk window's environment: same profile, same cookies. Opening never takes the focus away from what the user is working in.
+// It has a taskbar button. It comes to the front only the first time a diagram shows up by itself in this app run; minimised by the user it stays minimised
+// (new diagrams only update the page) until he clicks the taskbar button. CanvasPolicy decides, this class does it and tells the policy what the window really did.
 internal sealed class CanvasPanel : Window
 {
     readonly AgentBridge bridge;
@@ -13,7 +15,11 @@ internal sealed class CanvasPanel : Window
     CoreWebView2? browser;
     readonly DispatcherTimer saveTimer=new(){Interval=TimeSpan.FromMilliseconds(600)};
     long ignoreMovesUntil;
-    bool initStarted,hiding,allowClose,navigating;
+    bool initStarted,hiding,allowClose,navigating,internalState;
+    readonly CanvasPolicy policy;
+    readonly Action<string,Dictionary<string,object?>>? log;
+    public PanelState PanelState=>policy.State;
+    public bool FrontDone=>policy.FrontDone;
     public static string StateFile=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","canvas-panel.json");
     // True once Windows has confirmed WDA_EXCLUDEFROMCAPTURE (read back, not just accepted).
     public bool AffinityOk {get;private set;}
@@ -22,10 +28,10 @@ internal sealed class CanvasPanel : Window
     public int ForegroundRestores {get;private set;}
     // The user closed the panel (window close button); not raised when the app hides it itself.
     public event System.Action? ClosedByUser;
-    public CanvasPanel(AgentBridge bridge)
+    public CanvasPanel(AgentBridge bridge,bool manual=false,Action<string,Dictionary<string,object?>>? log=null)
     {
-        this.bridge=bridge;
-        Title="Screen Agent · Zeichnung";Topmost=true;ShowActivated=false;ShowInTaskbar=false;ResizeMode=ResizeMode.CanResize;WindowStyle=WindowStyle.SingleBorderWindow;
+        this.bridge=bridge;this.log=log;policy=new(manual);
+        Title="Screen Agent · Zeichnung";Topmost=true;ShowActivated=false;ShowInTaskbar=true;ResizeMode=ResizeMode.CanResize;WindowStyle=WindowStyle.SingleBorderWindow;
         WindowStartupLocation=WindowStartupLocation.Manual;MinWidth=WindowPlacement.PanelMinWidthDip;MinHeight=WindowPlacement.PanelMinHeightDip;
         Width=WindowPlacement.PanelDefaultWidthDip;Height=WindowPlacement.PanelDefaultHeightDip;Background=new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(15,19,23));
         SourceInitialized+=(_,_)=>
@@ -36,12 +42,20 @@ internal sealed class CanvasPanel : Window
             HwndSource.FromHwnd(h)?.AddHook(WindowMessage);
         };
         IsVisibleChanged+=(_,_)=>ResizeBrowser();
-        Closing+=(_,e)=>{if(allowClose)return;e.Cancel=true;SaveBounds();bool wasOpen=IsVisible&&!hiding;Hide();if(wasOpen)ClosedByUser?.Invoke();};
+        Closing+=(_,e)=>{if(allowClose)return;e.Cancel=true;SaveBounds();bool wasOpen=IsVisible&&!hiding;Hide();if(wasOpen){policy.Hidden(true);Log("closed","user");ClosedByUser?.Invoke();}};
+        StateChanged+=(_,_)=>
+        {
+            ResizeBrowser();
+            if(internalState)return;   // the app restoring it itself is not the user's doing
+            if(WindowState==WindowState.Minimized&&IsVisible&&policy.State==PanelState.Open){policy.Minimized();Log("minimized","user");}
+            else if(WindowState!=WindowState.Minimized&&policy.State==PanelState.Minimized){policy.Restored();Log("restored","user");}
+        };
         Closed+=(_,_)=>controller?.Close();
         saveTimer.Tick+=(_,_)=>{saveTimer.Stop();SaveBounds();};
         SizeChanged+=(_,_)=>{ResizeBrowser();Moved();};
         LocationChanged+=(_,_)=>{controller?.NotifyParentWindowPositionChanged();Moved();};
     }
+    void Log(string action,string why){try{log?.Invoke("canvas.panel",new(){["action"]=action,["why"]=why});}catch{ /* the trace never breaks the panel */ }}
     void Moved(){if(IsVisible&&Environment.TickCount64>ignoreMovesUntil){saveTimer.Stop();saveTimer.Start();}}
     IntPtr WindowMessage(IntPtr hwnd,int msg,IntPtr wParam,IntPtr lParam,ref bool handled)
     {
@@ -52,21 +66,50 @@ internal sealed class CanvasPanel : Window
     // Creates the window handle (no show) and reports whether the capture exclusion holds.
     public bool Prepare(){_=Handle;return AffinityOk;}
     public bool IsOpen=>IsVisible&&WindowState!=WindowState.Minimized;
+    // The agent has a diagram. Whether that opens anything is the policy's call (first time: to the front; minimised, closed or open: nothing). true: the window was opened.
+    public Task<bool> Pending()=>Act(policy.Pending(),"pending");
+    // The user asked (tray, shortcut, Desk button): always honoured, a minimised window comes back.
+    public Task<bool> UserShow(string why)=>Act(policy.UserShow(),why);
+    public Task<bool> UserToggle(string why)=>Act(policy.UserToggle(),why);
+    public void SessionStarted()=>policy.SessionStarted();
+    async Task<bool> Act(PanelDecision d,string source)
+    {
+        switch(d.Act)
+        {
+            case PanelAct.None:
+                if(d.Why!="open")Log("ignored",source+":"+d.Why);   // not a state change, but it answers "why did nothing appear"
+                return false;
+            case PanelAct.Hide:HidePanel(true);return true;
+            default:
+                bool ok=await Open(d.Why,d.Act is PanelAct.ShowFront or PanelAct.Restore);
+                Log(ok?(d.Act==PanelAct.Restore?"restored":"shown"):"show-failed",source+":"+d.Why);
+                return ok;
+        }
+    }
     // Opens (or shows again) without activating. False: not opened (no confirmed capture exclusion, or the Desk's browser is not up yet).
-    public async Task<bool> Open()
+    // front: also raised to the top of the topmost windows (still never activated).
+    public async Task<bool> Open(string why="open",bool front=false)
     {
         if(!Prepare())return false;
         if(bridge.WebEnvironment is null)return false;
         IntPtr before=Native.GetForegroundWindow();
+        var stateBefore=policy.State;bool frontBefore=policy.FrontDone;
         hiding=false;
         if(!IsVisible)
         {
             Place(Handle);ShowActivated=false;Show();Place(Handle);
         }
-        if(WindowState==WindowState.Minimized)WindowState=WindowState.Normal;
+        if(WindowState==WindowState.Minimized){internalState=true;try{WindowState=WindowState.Normal;}finally{internalState=false;}}
+        policy.Opened(why);
+        if(front)Native.SetWindowPos(Handle,(IntPtr)(-1),0,0,0,0,0x1|0x2|0x10);   // TOPMOST | NOMOVE | NOSIZE | NOACTIVATE
         ResizeBrowser();
         if(!initStarted){initStarted=true;await InitBrowser();}
         else if(browser is not null&&!PageLoaded&&!navigating)Navigate();   // the page did not load (Desk down, offline): try again. A signed-out Desk page is no failure; it says so itself.
+        if(browser is null&&!initStarted)   // the browser could not be created: no blank window, and the "front" permission is not used up, so the next diagram tries again
+        {
+            hiding=true;Hide();hiding=false;policy.OpenFailed(stateBefore,frontBefore);
+            return false;
+        }
         // A browser that took the focus on creation gives it back.
         var now=Native.GetForegroundWindow();
         if(before!=IntPtr.Zero&&now!=before&&now==Handle){Native.SetForegroundWindow(before);ForegroundRestores++;}
@@ -77,7 +120,9 @@ internal sealed class CanvasPanel : Window
     public void HidePanel(bool byUser)
     {
         if(!IsVisible)return;
+        if(!byUser&&!policy.HideAtSessionEnd){Log("kept-minimized","session-end");return;}   // minimised by him: it stays in the taskbar, minimised, until he restores it
         SaveBounds();hiding=true;Hide();hiding=false;
+        policy.Hidden(byUser);Log(byUser?"closed":"hidden",byUser?"user":"session-end");
         if(byUser)ClosedByUser?.Invoke();
     }
     async Task InitBrowser()
@@ -93,8 +138,9 @@ internal sealed class CanvasPanel : Window
             controller.RasterizationScaleChanged+=(_,_)=>ResizeBrowser();
             browser=controller.CoreWebView2;
             bridge.InstallTestResponses(browser);
-            browser.NavigationStarting+=(_,e)=>{if(!bridge.IsTrusted(e.Uri))e.Cancel=true;};
-            browser.NavigationCompleted+=(_,e)=>{PageLoaded=e.IsSuccess;navigating=false;ResizeBrowser();};
+            browser.NavigationStarting+=(_,e)=>{if(!bridge.IsTrusted(e.Uri)){e.Cancel=true;Diag.Event("canvas.nav.blocked",new(){["host"]=Uri.TryCreate(e.Uri,UriKind.Absolute,out var blocked)?blocked.Host:"?"});}};
+            browser.ProcessFailed+=(_,e)=>Diag.Event("canvas.process.failed",new(){["kind"]=e.ProcessFailedKind.ToString(),["reason"]=e.Reason.ToString(),["exit"]=e.ExitCode});
+            browser.NavigationCompleted+=(_,e)=>{if(!e.IsSuccess)Diag.Event("canvas.nav.fail",new(){["error"]=e.WebErrorStatus.ToString(),["status"]=e.HttpStatusCode});PageLoaded=e.IsSuccess;navigating=false;ResizeBrowser();};
             browser.NewWindowRequested+=(_,e)=>{e.Handled=true;};
             browser.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;};
             ResizeBrowser();
@@ -102,7 +148,7 @@ internal sealed class CanvasPanel : Window
             Navigate();
             InitStage="ready";
         }
-        catch(Exception ex){InitStage="failed:"+ex.GetType().Name;initStarted=false;controller?.Close();controller=null;browser=null;}
+        catch(Exception ex){InitStage="failed:"+ex.GetType().Name;Diag.Fail("canvas-init",ex);initStarted=false;controller?.Close();controller=null;browser=null;}
     }
     void Navigate(){navigating=true;browser!.Navigate(new Uri(bridge.DeskOrigin,"/?panel=canvas").AbsoluteUri);}
     void ResizeBrowser()

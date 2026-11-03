@@ -14,8 +14,8 @@ internal sealed class PromptChannel
     public PromptChannel(DeviceClient client,Func<string,CancellationToken,PromptDeadline,Task<PromptResult>> run,Action<string,Dictionary<string,object?>> log,Action<string,string,int> fallback,Func<string,bool> sessionOk,InputGate? input=null)
     {this.client=client;this.run=run;this.log=log;this.fallback=fallback;this.sessionOk=sessionOk;this.input=input??new InputGate();}
     // A log that throws must never keep a prompt from running or the gate from opening again.
-    void Log(string type,Dictionary<string,object?> data){try{log(type,data);}catch{ }}
-    void Fallback(string code,string text,int chars){try{fallback(code,text,chars);}catch{ }}
+    void Log(string type,Dictionary<string,object?> data){try{log(type,data);}catch(Exception ex){Diag.Fail("prompt-log",ex);}}
+    void Fallback(string code,string text,int chars){try{fallback(code,text,chars);}catch(Exception ex){Diag.Fail("prompt-fallback",ex,new(){["code"]=code,["chars"]=chars});}}
     public async Task Handle(string sid,PromptRequest request,CancellationToken ct)
     {
         var deadline=PromptDeadline.FromNow();   // the Desk's long poll counts from here
@@ -46,7 +46,12 @@ internal sealed class PromptChannel
                 if(!ok)Fallback(result.Code,request.Text,result.Code==PromptCodes.Interrupted?result.Chars:0);
                 await Report(url,new{state=ok?"done":"failed",code=result.Code,landed=result.Landed,chars=result.Chars});
             }
-            catch{await Report(url,new{state="failed",code=PromptCodes.Interrupted,landed=(bool?)null,chars=0});}
+            catch(Exception ex)
+            {
+                if(ex is not OperationCanceledException)Diag.Fail("prompt-run",ex,new(){["ms"]=deadline.Left(Environment.TickCount64)});
+                Log("main.prompt.done",new(){["code"]=PromptCodes.Interrupted,["chars"]=0,["exType"]=ex.GetType().Name});
+                await Report(url,new{state="failed",code=PromptCodes.Interrupted,landed=(bool?)null,chars=0});
+            }
         }
         finally{if(inputHeld)input.EndPrompt();if(start==PromptStart.Accepted)gate.End();}   // a busy answer must not open the gate of the prompt that is running
     }
@@ -59,8 +64,9 @@ internal sealed class PromptChannel
                 using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);
                 if(reply.Ok||reply.Status is 404 or 409)return;
+                Log("main.prompt.report.fail",new(){["status"]=reply.Status,["attempt"]=attempt});
             }
-            catch{ /* one retry */ }
+            catch(Exception ex){Log("main.prompt.report.fail",new(){["attempt"]=attempt,["exType"]=ex.GetType().Name});}   // one retry
             await Task.Delay(500);
         }
     }

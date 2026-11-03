@@ -48,7 +48,7 @@ internal static class Native
     public static double ScaleAt(int x,int y)
     {
         try{var m=MonitorFromPoint(new Point{X=x,Y=y},2);return m!=IntPtr.Zero&&GetDpiForMonitor(m,0,out uint dx,out _)==0&&dx>0?dx/96.0:1.0;}
-        catch(Exception){return 1.0;}
+        catch(Exception){return 1.0;}   /* no DPI info: 100 % */
     }
     public static void Send(params Input[] inputs)
     { if(SendInput((uint)inputs.Length,inputs,Marshal.SizeOf<Input>())!=inputs.Length) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"SendInput refused"); }

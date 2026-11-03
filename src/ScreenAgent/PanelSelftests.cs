@@ -55,10 +55,11 @@ internal static class PanelSelftests
                 var refHandle=new System.Windows.Interop.WindowInteropHelper(reference).Handle;
                 IntPtr before=Native.GetForegroundWindow();
                 Case("reference-window-in-front",before!=IntPtr.Zero,new{refInFront=before==refHandle});
-                panel=new CanvasPanel(bridge);
+                var panelLog=new List<string>();
+                panel=new CanvasPanel(bridge,false,(type,data)=>panelLog.Add(type+":"+data["action"]+":"+data["why"]));
                 bool closedByUser=false;panel.ClosedByUser+=()=>closedByUser=true;
                 Case("affinity-confirmed-before-showing",panel.Prepare()&&!panel.IsVisible,new{panel.AffinityOk});
-                Case("panel-is-a-small-topmost-window",panel.Topmost&&!panel.ShowInTaskbar&&!panel.ShowActivated&&panel.ResizeMode==ResizeMode.CanResize&&panel.Title=="Screen Agent · Zeichnung"&&panel.MinWidth==320&&panel.MinHeight==240&&panel.Width==440&&panel.Height==340);
+                Case("panel-is-a-small-topmost-window-with-a-taskbar-button",panel.Topmost&&panel.ShowInTaskbar&&!panel.ShowActivated&&panel.ResizeMode==ResizeMode.CanResize&&panel.Title=="Screen Agent · Zeichnung"&&panel.MinWidth==320&&panel.MinHeight==240&&panel.Width==440&&panel.Height==340);
                 bool opened=await panel.Open();
                 Case("panel-opens",opened&&panel.IsOpen,new{panel.InitStage});
                 for(int i=0;i<200&&!panel.PageLoaded;i++)await Task.Delay(100);
@@ -69,7 +70,7 @@ internal static class PanelSelftests
                 Native.GetWindowDisplayAffinity(panel.Hwnd,out uint affinity);
                 Case("affinity-0x11-read-back",affinity==0x11,new{affinity});
                 long ex=Native.GetWindowLongPtr(panel.Hwnd,-20).ToInt64();
-                Case("panel-topmost-and-not-in-taskbar",(ex&0x8)!=0&&(ex&0x40000)==0,new{ex});
+                Case("panel-topmost-and-has-a-taskbar-button",(ex&0x8)!=0&&(ex&0x80)==0,new{ex});   // no WS_EX_TOOLWINDOW: Windows gives it a taskbar button
                 var rect=panel.ScreenRect;
                 var screens=System.Windows.Forms.Screen.AllScreens;
                 var works=screens.Select(s=>StatusToast.Px(s.WorkingArea)).ToArray();
@@ -104,6 +105,37 @@ internal static class PanelSelftests
                 Case("hide-by-the-app-is-not-a-close-by-the-user",!panel.IsVisible&&!closedByUser);
                 await panel.Open();await Task.Delay(400);var again2=panel.ScreenRect;
                 Case("saved-box-is-used-on-the-next-open",Math.Abs(again2.X-nx)<=2&&Math.Abs(again2.Y-ny)<=2&&Math.Abs(again2.Width-500)<=2&&Math.Abs(again2.Height-400)<=2&&Native.GetForegroundWindow()==before,new{again2.X,again2.Y,again2.Width,again2.Height});
+                // Minimised by the user: it stays minimised whatever the agent draws, the foreground never changes, until he restores it.
+                IntPtr fgNow=Native.GetForegroundWindow();
+                panel.WindowState=WindowState.Minimized;await Task.Delay(500);
+                Case("user-minimise-is-tracked",Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Minimized,new{state=panel.PanelState.ToString()});
+                bool p1=await panel.Pending(),p2=await panel.Pending();await Task.Delay(500);
+                Case("pending-while-minimised-changes-nothing",!p1&&!p2&&Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Minimized&&Native.GetForegroundWindow()==fgNow,
+                    new{p1,p2,iconic=Native.IsIconic(panel.Hwnd),fg=Native.GetForegroundWindow().ToInt64(),was=fgNow.ToInt64()});
+                Case("ignored-pending-is-logged-with-the-reason",panelLog.Contains("canvas.panel:ignored:pending:minimized"),new{panelLog});
+                // The end of a voice session leaves a minimised panel alone: still in the taskbar, still minimised, and the next session's diagram changes nothing.
+                panel.HidePanel(false);panel.SessionStarted();bool p4=await panel.Pending();await Task.Delay(300);
+                Case("session-end-keeps-a-minimised-panel-minimised",!p4&&panel.IsVisible&&Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Minimized&&panelLog.Contains("canvas.panel:kept-minimized:session-end"),new{p4,visible=panel.IsVisible,iconic=Native.IsIconic(panel.Hwnd),state=panel.PanelState.ToString()});
+                // The taskbar button brings it back (the equivalent here: the window state the click sets).
+                panel.WindowState=WindowState.Normal;await Task.Delay(500);
+                Case("restored-by-the-user-is-open-again",!Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Open&&panelLog.Contains("canvas.panel:restored:user"),new{state=panel.PanelState.ToString(),panelLog});
+                Case("pending-while-open-does-nothing",!await panel.Pending());
+                // Closed by the user: a pending diagram opens nothing; the tray or shortcut still does.
+                panel.Close();await Task.Delay(300);
+                bool p3=await panel.Pending();
+                Case("pending-after-user-close-stays-closed",!p3&&!panel.IsVisible,new{p3,visible=panel.IsVisible});
+                bool shown=await panel.UserShow("selftest");await Task.Delay(500);
+                Case("user-show-opens-it-after-a-close",shown&&panel.IsOpen,new{shown});
+                panel.WindowState=WindowState.Minimized;await Task.Delay(400);
+                bool back=await panel.UserShow("selftest");await Task.Delay(500);
+                Case("user-show-restores-a-minimised-panel",back&&!Native.IsIconic(panel.Hwnd)&&panel.PanelState==PanelState.Open,new{back,fg=Native.GetForegroundWindow().ToInt64(),was=before.ToInt64()});
+                // Front only the first time a diagram shows up by itself.
+                panel.HidePanel(false);
+                bool first=await panel.Pending();bool frontAfterFirst=panel.FrontDone;
+                panel.HidePanel(false);
+                bool pendingAgain=await panel.Pending();
+                Case("first-pending-opens-to-the-front-later-ones-open-without-raising",first&&frontAfterFirst&&pendingAgain&&panelLog.Contains("canvas.panel:shown:pending:first")&&panelLog.Contains("canvas.panel:shown:pending:again"),new{first,pendingAgain,panelLog});
+                Case("foreground-still-unchanged-at-the-end",Native.GetForegroundWindow()==before||Native.GetForegroundWindow()==fgNow,new{fg=Native.GetForegroundWindow().ToInt64(),before=before.ToInt64()});
                 try{File.Delete(CanvasPanel.StateFile);}catch{ }
                 exit=failed?1:0;
             }
