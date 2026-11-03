@@ -306,9 +306,9 @@ public class FixAppTests
     [InlineData("rk_"+"live_abcdefghijklmnop1234 x","live_abcdef")]
     [InlineData("AI"+"zaSyA-1234567890abcdefghijklmnopqrstuv end","zaSyA-12345")]
     [InlineData("token h"+"f_AbCdEfGhIjKlMnOpQrStUvWx","f_AbCdEf")]
-    [InlineData("bot 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw end","AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw")]
+    [InlineData("bot 123456789:"+"testtesttesttesttesttesttesttesttes end","testtesttesttesttesttesttesttesttes")]
     [InlineData("Authorization: Basic dXNlcjpwYXNzd29yZDEyMzQ=","dXNlcjpwYXNzd29yZDEyMzQ")]
-    [InlineData("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234\nabcd\n-----END RSA PRIVATE KEY----- tail","MIIEowIBAAKCAQEA1234")]
+    [InlineData("-----BEGIN RSA "+"PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234\nabcd\n-----END RSA "+"PRIVATE KEY----- tail","MIIEowIBAAKCAQEA1234")]
     [InlineData("the password is hunter2xyz, ok","hunter2xyz")]
     [InlineData("blob AbCdEfGhIjKlMnOpQrStUvWx0123456789 end","AbCdEfGhIjKlMnOpQrStUvWx0123456789")]   // 34 characters, mixed
     public void TheSecretFilterCatchesTheKeysHeIsLikelyToHave(string input,string secret)

@@ -109,6 +109,8 @@ public sealed class DictationJob
         {
             ct.ThrowIfCancellationRequested();
             attempt++;var t0=clock.ElapsedMilliseconds;ChunkReply reply;
+            // A digitally silent chunk inside a long recording: providers invent text for it (cake recipes in the 3 Nov test), so it is not sent.
+            if(AudioLevel.Peak(chunk.Samples)<=DictationGate.SilentPeak){log("dictation.chunk.silent",new(){["id"]=id,["index"]=chunk.Index,["seconds"]=Math.Round(chunk.Seconds,1)});return new(200,"");}
             try{reply=await send(request,ct);}
             catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
             catch(OperationCanceledException){reply=new(-1,Failure:"TimeoutException");}   /* in the reply; the job logs it */

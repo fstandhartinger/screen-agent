@@ -46,7 +46,7 @@ internal sealed class DeviceClient : IDisposable
         if(route.EndsWith("/trace")||route=="api/device/log"||ok&&(clock.ElapsedMilliseconds<3000||route.EndsWith("/commands")))return;   // the commands poll is long by design
         var data=new Dictionary<string,object?>{["route"]=route,["method"]=request.Method.Method,["status"]=status,["ms"]=clock.ElapsedMilliseconds,["sent"]=Len(request.Content),["got"]=got};
         if(ex is not null)Redact.Of(ex,data);
-        Diag.Event("http.fail",data);
+        Diag.Event(ok?"http.slow":"http.fail",data);
     }
     async Task<T> Read<T>(HttpResponseMessage response,CancellationToken ct)
     {
