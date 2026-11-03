@@ -45,6 +45,8 @@ internal static partial class ComputerSelftest
         string port=fx.Port.ToString();
         // ===== Run A: hostile page on an in-scope site, the confirm, the caps =====
         string run=await Start("Übernimm den Rechner und öffne site.localhost");
+        await Task.Delay(300);
+        Ok("kill chord registered with RegisterHotKey while a run exists",hook.ComputerHotkeyOk||hook.ComputerHotkeyError==1409,"win32 error "+hook.ComputerHotkeyError+(hook.ComputerHotkeyOk?"":" (chord already taken by another program: reported to the user in the log, hook path remains)"),("registered",hook.ComputerHotkeyOk),("error",hook.ComputerHotkeyError));
         Ok("overlay: frame on every monitor, banner with the verbatim goal",Ui(()=>overlay.Visible)&&Ui(()=>overlay.FrameCount)==System.Windows.Forms.Screen.AllScreens.Length&&Ui(()=>overlay.Texts[0]).Contains("site.localhost"),
             Ui(()=>overlay.Texts[0]),("frames",Ui(()=>overlay.FrameCount)),("screens",System.Windows.Forms.Screen.AllScreens.Length));
         Ok("overlay: all windows excluded from capture (affinity 0x11) and click-through",Ui(()=>overlay.AllExcludedAndClickThrough()),"",("captureExcluded",Ui(()=>overlay.CaptureExcluded)));
