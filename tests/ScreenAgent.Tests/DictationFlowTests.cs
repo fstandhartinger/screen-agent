@@ -93,7 +93,7 @@ public class DictationFlowTests
         using var rec=new DictationRecording(store,"notepad",(t,d)=>Log(ev,t,d),maxMinutes:2.0/60,headerFixSeconds:0.5);   // 2 s files
         rec.Warning+=warnings.Add;
         Assert.Single(Directory.GetFiles(dir,"*.wav"));Assert.Single(Directory.GetFiles(dir,"*.json"));
-        rec.Append(Pcm(1.5));Assert.True(Wav.Repair(Path.Combine(dir,rec.Meta.Files[0])).Pcm>=R);   // already on disk, header valid
+        rec.Append(Pcm(1.5));Assert.True(Wav.ReadBlocks(Path.Combine(dir,rec.Meta.Files[0])).Sum(b=>b.Length)>=R);   // already on disk, while the writer still has the file open
         rec.Append(Pcm(2));rec.Append(Pcm(1));
         Assert.Equal(2,rec.Meta.Files.Count);Assert.Contains(rec.Meta.Files[1],f=>true);Assert.Contains("-p2.wav",rec.Meta.Files[1]);
         Assert.Single(warnings);Assert.Contains("dictation.limit",ev);
