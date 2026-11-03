@@ -157,7 +157,7 @@ internal static class DictationSelftest
     }
     static void WindowChecks(DictationMeta meta)
     {
-        var app=new Application();
+        var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};   // closing the last test window must not end the run (the finally shuts down)
         app.Startup+=async (_,_)=>
         {
             try
