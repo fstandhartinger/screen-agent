@@ -46,7 +46,7 @@ internal sealed class DeviceClient : IDisposable
         if(route.EndsWith("/trace")||route=="api/device/log"||ok&&(clock.ElapsedMilliseconds<3000||route.EndsWith("/commands")))return;   // the commands poll is long by design
         var data=new Dictionary<string,object?>{["route"]=route,["method"]=request.Method.Method,["status"]=status,["ms"]=clock.ElapsedMilliseconds,["sent"]=Len(request.Content),["got"]=got};
         if(ex is not null)Redact.Of(ex,data);
-        Diag.Event("http.fail",data);
+        Diag.Event(ok?"http.slow":"http.fail",data);
     }
     async Task<T> Read<T>(HttpResponseMessage response,CancellationToken ct)
     {
@@ -161,8 +161,11 @@ internal sealed class DeviceClient : IDisposable
     }
     // One chunk of a dictation (or the whole of it: Only = no `chunk` field). A refusal is a ChunkReply with the gateway's status and code, a lost connection throws.
     // Providers: {groq:{ok,ms,status,reason},...} becomes "groq:ok", "openai:503".
+    public bool SkipSilentChunks {get;set;}=true;   // the selftest's recording holds digital silence between sentences and counts every request
     public async Task<ChunkReply> DictateChunk(ChunkRequest r,DictationContext baseContext,CancellationToken ct)
     {
+        // A digitally silent chunk inside a long recording: providers invent text for it (cake recipes in the 3 Nov test), so it is not sent.
+        if(SkipSilentChunks&&!r.Only&&AudioLevel.Peak(r.Chunk.Samples)<=DictationGate.SilentPeak){Diag.Event("dictation.chunk.silent",new(){["id"]=r.DictationId,["index"]=r.Chunk.Index,["seconds"]=Math.Round(r.Chunk.Seconds,1)});return new(200,"");}
         if(!Paired)return new(401,Code:"not-paired",Failure:"NotPaired");
         using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(r.Chunk.WavBytes);audio.Headers.ContentType=new("audio/wav");
         form.Add(audio,"audio","dictation.wav");form.Add(new StringContent(JsonSerializer.Serialize(baseContext with{fieldBefore=r.FieldBefore})),"context");
