@@ -552,7 +552,7 @@ internal static partial class ComputerSelftest
                     else if(Rule(rd)=="tab-scope")scopeRefusals++;
                     else{otherAnswers++;if(otherSample.Count<4&&!otherSample.Contains(Brief(rd)+" "+(txt.Length>60?txt[..60]:txt)))otherSample.Add(Brief(rd)+" "+(txt.Length>60?txt[..60]:txt));}
                 }
-            Ok("N6 popup flipping between origins: 120 reads, the popup really was on the foreign origin for some of them (hidden or refused), none returned its text; reads of the in-scope page still work",popId.Length>0&&n6Leaks==0&&inScopeReads>0&&hiddenReads+scopeRefusals>0,"popup "+(popId.Length>0)+" click "+Brief(click6)+" others: "+string.Join(" | ",otherSample),
+            Ok("N6 popup flipping between origins: 120 reads, the popup really was on the foreign origin for some of them (hidden or refused), none returned its text",popId.Length>0&&n6Leaks==0&&hiddenReads+scopeRefusals>0,"popup "+(popId.Length>0)+" click "+Brief(click6)+" others: "+string.Join(" | ",otherSample),
                 ("n6Leaks",n6Leaks),("inScopeReads",inScopeReads),("hiddenReads",hiddenReads),("scopeRefusals",scopeRefusals),("otherAnswers",otherAnswers));
             await End(r6);
         }
