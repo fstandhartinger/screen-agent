@@ -233,7 +233,7 @@ internal static partial class ComputerSelftest
                     var clk=await Do(run,"action","ui_click",new{@ref=menu.Groups[1].Value});await Task.Delay(700);
                     var t5=await Do(run,"action","ui_tree",new{window=nw});
                     bool open=Regex.IsMatch(Res(t5),@"""(?:Speichern|Save|Neues Fenster|New window)""");
-                    var esc=await Do(run,"action","key",new{key="Esc"});
+                    var esc=await Do(run,"action","key",new{key="Esc"});await Task.Delay(300);await Do(run,"action","key",new{key="Esc"});await Task.Delay(300);await Do(run,"action","window_focus",new{window=nw});await Task.Delay(300);
                     if(open)Ok("ui_click uses UI Automation (Invoke/Expand), the menu really opened",Code(clk)==ComputerCodes.Done&&Res(clk).StartsWith("geklickt:"),Brief(clk)+" "+Res(clk));
                     else Skip("ui_click through Invoke on a Notepad menu","click returned "+Brief(clk)+" but the opened menu was not visible in the tree");
                 }
@@ -243,6 +243,7 @@ internal static partial class ComputerSelftest
                 // ===== Run F: kill in the middle of a long typing loop (same flag path the hook callback sets) =====
                 run=await Start("Schreib was in den Editor");
                 var ws2=await Do(run,"action","ui_windows");nw=Regex.Matches(Res(ws2),@"^(\S+) (?i:notepad)",RegexOptions.Multiline).First().Groups[1].Value;
+                await Do(run,"action","window_focus",new{window=nw});await Task.Delay(300);
                 var t3=await Do(run,"action","ui_tree",new{window=nw});editRef=Regex.Matches(Res(t3),@"^(\S+) (?:Edit|Document) ",RegexOptions.Multiline).First().Groups[1].Value;
                 string long_=string.Concat(Enumerable.Repeat("0123456789abcdefghij ",100));   // 2100 > 2000: use 2000
                 long_=long_[..2000];
