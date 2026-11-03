@@ -131,13 +131,14 @@ public class ComputerFix2PolicyTests
         string huge=string.Join(" ",Enumerable.Repeat(new string('x',300),6));
         var long6=Enumerable.Range(1,6).Select(i=>("f"+i,string.Join(" ",Enumerable.Repeat(new string('w',300),15)))).ToList();
         Assert.True(ComputerSpeech.Fit(ComputerSpeech.FormLine(long6)+huge+huge).Length<=ComputerSpeech.MaxSpoken+8);
-        Assert.True(ComputerSpeech.Quote(new string('a',300)).Length<=ComputerSpeech.WordChars+6);
+        Assert.True(ComputerSpeech.Quote(new string('z',300)).Length<=ComputerSpeech.WordChars+6);
     }
     // ---- SHOULD: lists
     [Theory]
     [InlineData("https://www.berliner-sparkasse.de/")][InlineData("https://www.sskm.de/")][InlineData("https://www.haspa.de/")][InlineData("https://www.ksk-koeln.de/")][InlineData("https://www.apobank.de/")]
     [InlineData("https://www.bunq.com/")][InlineData("https://www.gls.de/")][InlineData("https://www.tomorrow.one/")][InlineData("https://www.meine-volksbank.de/")][InlineData("https://sparkassen-finanzportal.de/")]
     [InlineData("https://www.volksbank-xyz.example/")][InlineData("https://online.sparkasse.org/")]
+    [InlineData("https://www.haspa.com/")][InlineData("https://www.bunq.nl/")][InlineData("https://www.gls.eu/")][InlineData("https://www.tomorrow.com/")][InlineData("https://www.apobank.eu/")][InlineData("https://www.sskm.com/")][InlineData("https://www.ksk-nord.com/")]
     public void Lists_RealBankNamesAreReadDenied(string url)=>Assert.True(P.ReadDenied("chrome","Titel",url),url);
     [Theory]
     [InlineData("https://www.amazon.de/gp/buy/spc/handlers/display.html")][InlineData("https://www.booking.com/book")][InlineData("https://www.zalando.de/warenkorb/")][InlineData("https://www.ebay.de/")]
