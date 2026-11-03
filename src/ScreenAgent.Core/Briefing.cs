@@ -79,7 +79,7 @@ public static class Timeboxed
     public static Task<T> Start<T>(Func<CancellationToken,T> work,CancellationToken ct,string name)
     {
         var tcs=new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        new Thread(()=>{try{tcs.TrySetResult(work(ct));}catch(Exception e){tcs.TrySetException(e);}}){IsBackground=true,Name="ScreenAgent briefing "+name}.Start();
+        new Thread(()=>{try{tcs.TrySetResult(work(ct));}catch(Exception e){tcs.TrySetException(e);}   /* handed to the task: the collector logs it per source */}){IsBackground=true,Name="ScreenAgent briefing "+name}.Start();
         return tcs.Task;
     }
 }
@@ -230,11 +230,11 @@ public static class MainSessionSource
     static IEnumerable<T> Safe<T>(Func<IEnumerable<T>> list)
     {
         IEnumerator<T> e;
-        try{e=list().GetEnumerator();}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}
+        try{e=list().GetEnumerator();}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}   /* unreadable folder: skipped */
         using(e)
             while(true)
             {
-                try{if(!e.MoveNext())yield break;}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}
+                try{if(!e.MoveNext())yield break;}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException){yield break;}   /* unreadable entry: stop listing */
                 yield return e.Current;
             }
     }
@@ -253,7 +253,7 @@ public static class MainSessionSource
             using var stream=new FileStream(newest.Value.File,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete,4096,FileOptions.SequentialScan);
             messages=TranscriptTail.Read(stream,out s,ct);
         }
-        catch(Exception e) when(e is IOException or UnauthorizedAccessException){return new(null,"main-session:unreadable");}
+        catch(Exception e) when(e is IOException or UnauthorizedAccessException){return new(null,"main-session:unreadable");}   /* the reason is the result */
         stats?.Invoke(s);
         if(messages.Count==0)return new(null,"main-session:no-messages");
         return new(new(newest.Value.Source,newest.Value.Utc.ToString("o"),messages));
@@ -348,7 +348,7 @@ public static class TranscriptTail
             if(clean.Length==0)return null;
             return new(type,Str(root,"timestamp"),clean);
         }
-        catch(JsonException){return null;}
+        catch(JsonException){return null;}   /* not JSON: no value */
     }
     static string? Str(JsonElement e,string name)=>e.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;
     static bool Flag(JsonElement e,string name)=>e.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.True;

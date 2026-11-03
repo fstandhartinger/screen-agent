@@ -45,7 +45,7 @@ internal sealed class BriefingCollector
             if(body.Count==(commandId is null?0:1))return;   // nothing to say (a requested refresh is still answered, empty)
             await Post(sid,body,bytes,clock,ct);
         }
-        catch(OperationCanceledException){}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception e){log("briefing.fail",Redact.Of(e,new(){["stage"]="collect",["reason"]=e.GetType().Name}));}
         finally{Interlocked.Decrement(ref inFlight);}
     }
@@ -66,7 +66,7 @@ internal sealed class BriefingCollector
                     if(reply.Ok){log("briefing.sent",new(){["status"]=status,["attempts"]=attempt,["bytes"]=bytes,["ms"]=clock.ElapsedMilliseconds});return;}
                     reason="http-"+status;
                 }
-                catch(OperationCanceledException) when(ct.IsCancellationRequested){return;}
+                catch(OperationCanceledException) when(ct.IsCancellationRequested){return;}   /* cancelled */
                 catch(Exception e){reason=e is OperationCanceledException?"timeout":e.GetType().Name;Diag.Fail("briefing-source",e);}
             }
             bool retry=reason!="session-ended"&&(status==0||status is 404 or 409 or 429 or >=500)&&attempt<=RetryDelays.Length;
@@ -165,6 +165,6 @@ internal sealed class BriefingCollector
             copy.Wait(200);
             return p.ExitCode==0?WslProbe.Running(output.ToArray(),distro):null;
         }
-        catch{return null;}
+        catch(Exception ex){Diag.Fail("briefing-git",ex);return null;}
     }
 }

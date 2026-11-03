@@ -73,7 +73,7 @@ public sealed class DictationJob
                 done++;Progress?.Invoke();
             }
         }
-        catch(OperationCanceledException){failReason??="Abgebrochen";failed++;}
+        catch(OperationCanceledException){failReason??="Abgebrochen";failed++;}   /* kept as failReason; the manager logs it */
     }
     string FieldBefore()
     {
@@ -91,9 +91,9 @@ public sealed class DictationJob
             attempt++;var t0=clock.ElapsedMilliseconds;ChunkReply reply;
             try{reply=await send(request,ct);}
             catch(OperationCanceledException) when(ct.IsCancellationRequested){throw;}
-            catch(OperationCanceledException){reply=new(-1,Failure:"TimeoutException");}
-            catch(HttpRequestException ex){reply=new(0,Failure:ex.GetType().Name);}
-            catch(Exception ex){reply=new(0,Failure:ex.GetType().Name);}
+            catch(OperationCanceledException){reply=new(-1,Failure:"TimeoutException");}   /* in the reply; the job logs it */
+            catch(HttpRequestException ex){reply=new(0,Failure:ex.GetType().Name);}   /* in the reply; the job logs it */
+            catch(Exception ex){reply=new(0,Failure:ex.GetType().Name);}   /* in the reply; the job logs it */
             log("dictation.chunk",new(){["id"]=id,["index"]=chunk.Index,["bytes"]=chunk.Samples.Length*2+Wav.HeaderBytes,["seconds"]=Math.Round(chunk.Seconds,1),["ms"]=clock.ElapsedMilliseconds-t0,["status"]=reply.Status,["attempt"]=attempt,["providers"]=string.Join(',',reply.Providers??[]),["code"]=reply.Code??"",["exType"]=reply.Failure??"",["degraded"]=reply.Degraded,["overlap"]=chunk.OverlapSamples>0});
             if(reply.Ok)return reply;
             if(reply.Network)

@@ -38,8 +38,8 @@ internal sealed class KeyboardHook : IDisposable
             while(!stop.IsCancellationRequested)
             {
                 try{Drain();await Task.Delay(5,stop.Token);}
-                catch(OperationCanceledException){return;}
-                catch(Exception ex){Diag.Fail("hook-consumer",ex);try{await Task.Delay(100,stop.Token);}catch(OperationCanceledException){return;}}
+                catch(OperationCanceledException){return;}   /* cancelled */
+                catch(Exception ex){Diag.Fail("hook-consumer",ex);try{await Task.Delay(100,stop.Token);}catch(OperationCanceledException){return;}   /* cancelled */}
             }
         });
         // Reinstall proactively: Windows silently removes timed-out LL hooks, with no query API.

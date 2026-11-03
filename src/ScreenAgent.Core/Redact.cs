@@ -11,7 +11,7 @@ public static class Redact
     {
         if(string.IsNullOrEmpty(s))return "";
         try{s=Secret.Replace(Token.Replace(Profile.Replace(s,"~"),"<tok>"),"$1 <x>");}
-        catch(RegexMatchTimeoutException){return "<unreadable>";}
+        catch(RegexMatchTimeoutException){return "<unreadable>";}   /* fail closed: nothing of the string is kept */
         s=s.Replace('\r',' ').Replace('\n',' ').Trim();
         return s.Length<=max?s:s[..max];
     }

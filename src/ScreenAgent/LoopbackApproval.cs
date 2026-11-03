@@ -67,7 +67,7 @@ internal sealed class LoopbackApproval : IDisposable
                 if(proof is not null){listener.Stop();return proof;}
             }
             catch(OperationCanceledException) when(!ct.IsCancellationRequested){ /* A stalled local connection uses only its three-second slot. */ }
-            catch(IOException ex){Diag.Fail("loopback-approval",ex);}   // invalid local traffic cannot supply approval
+            catch(IOException){ /* invalid local traffic cannot supply approval; the pairing then times out and the caller logs pairing.fail */ }
         }
         throw new InvalidDataException("Local pairing approval unavailable");
     }

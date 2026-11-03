@@ -95,7 +95,7 @@ public sealed class AppConfig
         _=new HotkeyBindings(c.Hotkeys);
         return c;
     }
-    static bool Valid(Dictionary<string,string> keys){try{_=new HotkeyBindings(keys);return true;}catch(InvalidDataException){return false;}}
+    static bool Valid(Dictionary<string,string> keys){try{_=new HotkeyBindings(keys);return true;}catch(InvalidDataException){return false;}   /* invalid keys: the defaults apply, HotkeyNote says so */}
     AppConfig WithHotkeys(Dictionary<string,string> keys,bool migrated,string? note=null)=>new()
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,

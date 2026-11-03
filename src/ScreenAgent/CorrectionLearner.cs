@@ -46,7 +46,7 @@ internal sealed class CorrectionLearner
                 return; // One independent observation per injection, never one per poll.
             }
         }
-        catch(OperationCanceledException){}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception ex){Diag.Fail("learner",ex);}   // learning is optional; pending pairs stay for the next observation
     }
 }

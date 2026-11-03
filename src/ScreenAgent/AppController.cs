@@ -282,7 +282,7 @@ internal sealed class AppController : IDisposable
                 var st=Current();bool say=st.Level is Level.Warn or Level.Busy;   // "Sitzung startet …" at once, not a bare "an" and then seconds of nothing
                 if(hook.Session)Notice(say?st.Text:"Sitzung an",say?st.Level:Level.Active,"status");else Notice("Sitzung aus",Level.Idle);
             }
-            else Notice(hook.Paused?"Pausiert":"Fortgesetzt",hook.Paused?Level.Paused:Level.Active);
+            else Notice(hook.Paused?"Pausiert":"Fortgesetzt",hook.Paused?Level.Paused:Level.Active,"pause-toggle");
             return;
         }
         if(action==ActionKind.DrawStart&&Active&&drawings.Count==0)
@@ -338,7 +338,7 @@ internal sealed class AppController : IDisposable
             }
             finally{needsUnmute=true;}
         }
-        catch(OperationCanceledException){}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception ex)
         {
             telemetry.Event("dictation.fail",Redact.Of(ex,new(){["stage"]="audio-queue",["reason"]="exception"}));
@@ -417,8 +417,8 @@ internal sealed class AppController : IDisposable
                 {freshId=id.GetString();telemetry.Event("screen.fresh.request",new(){["id"]=freshId});}
                 else if(!reply.Ok)await Task.Delay(3000,ct);
             }
-            catch(OperationCanceledException){return;}
-            catch(Exception ex){telemetry.Event("screen.commands.fail",Redact.Of(ex));try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}}
+            catch(OperationCanceledException){return;}   /* cancelled */
+            catch(Exception ex){telemetry.Event("screen.commands.fail",Redact.Of(ex));try{await Task.Delay(3000,ct);}catch(OperationCanceledException){return;}   /* cancelled */}
         }
     }
     // Drawing panel. Auto-open only when allowed (config, not closed by him this session) and only with the capture exclusion confirmed.
@@ -475,7 +475,7 @@ internal sealed class AppController : IDisposable
             }
             if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,info,fg,grid,monitor,sid,ct);
         }
-        catch(OperationCanceledException){}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception ex){schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",Redact.Of(ex,new(){["where"]="watch",["status"]=StatusOf(ex)}));await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn,"watch-failed",ex);}
         finally{busy=false;}
     }
@@ -522,7 +522,7 @@ internal sealed class AppController : IDisposable
                 if(terms.Length==0)terms=await client.Dictionary(ct);
             }
         }
-        catch(OperationCanceledException){}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception ex) when(gen==ocrGen)
         {
             ocrGrid=null;schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",Redact.Of(ex,new(){["where"]="ocr",["status"]=StatusOf(ex)}));
@@ -649,7 +649,7 @@ internal sealed class AppController : IDisposable
             foreach(var d in batch)d.Fade();   // idempotent; also after a failure the strokes go away on their own
             if(!ct.IsCancellationRequested)await Task.Delay(Math.Max(0,(int)(DrawOverlay.FadeMs-(Environment.TickCount64-t0))),ct);
         }
-        catch(OperationCanceledException){}
+        catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception ex){Trace(false,"error:"+ex.GetType().Name);Diag.Fail("highlight",ex,new(){["status"]=StatusOf(ex)});Notice("Markierung nicht gesendet · Verbindung prüfen",Level.Warn,"highlight-error",ex);}
         finally{foreach(var d in batch)d.Close();}
     }

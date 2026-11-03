@@ -36,7 +36,7 @@ public static class Wav
             f.SetLength(HeaderBytes+pcm);f.Position=0;f.Write(Header(pcm));f.Flush(true);
             return new(true,true,pcm);
         }
-        catch(Exception ex){return new(false,false,0,ex.GetType().Name);}
+        catch(Exception ex){return new(false,false,0,ex.GetType().Name);}   /* the type is the result; the caller logs it */
     }
     // PCM of a repaired file in blocks, so a one-hour recording never has to sit in memory as one array.
     public static IEnumerable<short[]> ReadBlocks(string path,int blockSamples=Rate)

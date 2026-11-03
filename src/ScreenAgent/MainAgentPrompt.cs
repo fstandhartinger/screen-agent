@@ -110,7 +110,7 @@ internal sealed class MainAgentPrompt
             if(read is null||!PromptText.Landed(read,text)){Debug?.Invoke("text gone after 500 ms");return Finish(PromptCodes.WrongFocus,false);}
             return Finish(PromptCodes.Typed,true);
         }
-        catch(OperationCanceledException){return Finish(PromptCodes.Interrupted);}
+        catch(OperationCanceledException){return Finish(PromptCodes.Interrupted);}   /* cancelled: Finish logs main.prompt.done with the code */
         catch(Exception ex){Debug?.Invoke("unexpected "+ex);Diag.Fail("prompt-unexpected",ex,new(){["ms"]=clock.ElapsedMilliseconds,["route"]=route,["typed"]=typed});return Finish(PromptCodes.Interrupted);}
     }
     // ---- windows

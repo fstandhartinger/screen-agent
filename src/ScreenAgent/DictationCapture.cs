@@ -26,7 +26,7 @@ internal sealed class DictationCapture : IDisposable
     public async Task<Chunk?> Finish()
     {
         lock(gate){if(!stopping){stopping=true;capture.StopRecording();}}
-        try{await stopped.Task.WaitAsync(TimeSpan.FromSeconds(3));}catch(TimeoutException){CaptureError??="StopTimeout";}
+        try{await stopped.Task.WaitAsync(TimeSpan.FromSeconds(3));}catch(TimeoutException){CaptureError??="StopTimeout";}   /* recorded: DictationManager logs capture-stopped with it */
         return Recording.Stop();
     }
     public void Dispose(){try{capture.Dispose();}catch(Exception ex){Diag.Fail("dictation-capture-dispose",ex);}Recording.Dispose();}

@@ -19,7 +19,7 @@ public sealed class OrderedWork
 {
     Task tail=Task.CompletedTask;
     public Task Enqueue(Func<Task> work)=>tail=Run(tail,work);
-    static async Task Run(Task prior,Func<Task> work){try{await prior;}catch{} await work();}
+    static async Task Run(Task prior,Func<Task> work){try{await prior;}catch(Exception){ /* the earlier step reported its own failure */ } await work();}
 }
 // The first session after launch can take seconds (WebView2, the page, the microphone). While it starts the user is told so, and every phase is logged
 // as session.startup {phase, ms since the hotkey}, once per phase, so a slow start can be told apart afterwards.
