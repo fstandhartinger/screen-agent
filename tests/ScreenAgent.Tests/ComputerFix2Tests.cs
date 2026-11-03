@@ -165,6 +165,14 @@ public class ComputerFix2PolicyTests
     {
         Assert.False(ComputerPolicy.IsBrowser("noname"));Assert.True(ComputerPolicy.IsBrowser("noname","Chrome_WidgetWin_1"));Assert.True(ComputerPolicy.IsBrowser("noname","MozillaWindowClass"));Assert.False(ComputerPolicy.IsBrowser("noname","Notepad"));
     }
+    // ---- SHOULD: a title match is trusted only for the browser that owns the debugging port
+    [Fact] public void Title_OnlyTheBrowserThatOwnsTheDebugPortGetsATab()
+    {
+        Assert.True(ComputerPolicy.OwnsPort("chrome","chrome.exe"));Assert.True(ComputerPolicy.OwnsPort("chrome","Chrome"));
+        Assert.False(ComputerPolicy.OwnsPort("chrome","msedge"));Assert.False(ComputerPolicy.OwnsPort("msedge","chrome"));
+        Assert.True(ComputerPolicy.OwnsPort("","msedge"));   // owner not known (selftest with --remote-debugging-port)
+        Assert.True(ComputerSpeech.TabTitleMatches("Sparkasse - Microsoft Edge","Sparkasse"));   // the title alone cannot tell the browsers apart, which is why the owner is checked
+    }
     // ---- NIT: SVG links
     [Fact] public void Nit_AnSvgLinkTargetIsNeverReadAsRelative()
     {

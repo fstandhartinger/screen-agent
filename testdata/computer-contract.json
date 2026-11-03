@@ -666,6 +666,7 @@
   "computer.resume",
   "computer.run.extend.ask",
   "computer.tab.left_scope",
+  "computer.run.here",
   "computer.error"
  ],
  "hotkey": {

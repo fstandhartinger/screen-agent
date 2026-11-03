@@ -180,7 +180,7 @@ internal sealed class ComputerAgent:IDisposable
         var nr=new ComputerRun(cmd.Run,goal,more,null,null,armed:!asks);
         lock(sync)
         {
-            run=nr;runSid=w.Sid;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;try{cdp?.Dispose();}catch{ }cdp=null;cdpFailure=null;pendingExec=null;pendingPlan=null;pendingWork=null;lastGatewayGoal=goal;
+            run=nr;runSid=w.Sid;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;try{cdp?.Dispose();}catch{ }cdp=null;   /* disposing the socket of a closed run: nothing to report */cdpFailure=null;pendingExec=null;pendingPlan=null;pendingWork=null;lastGatewayGoal=goal;
             uia=new UiaDriver(policy,()=>nr.Revoked||nr.IsHandsOn||nr.IsClosed||nr.IsPaused);   // every driver and CDP call looks at this: hands-on, a close, a pause and the kill stop typing in flight
             ComputerGuard.Attach(nr);hook?.ComputerRunStarted();
         }

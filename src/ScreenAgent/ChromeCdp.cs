@@ -178,7 +178,7 @@ internal sealed class ChromeCdp:IDisposable
     }
     // The tab behind a window of `process`: only the browser that owns the debugging port can have it (a window of another browser with the same title gets no tab and no URL).
     public async Task<CdpTab?> TabForWindow(string process,string windowTitle,CancellationToken ct=default)
-        =>OwnerProcess.Length>0&&ComputerPolicy.ProcessName(process)!=OwnerProcess?null:await TabByTitle(windowTitle,ct);
+        =>ComputerPolicy.OwnsPort(OwnerProcess,process)?await TabByTitle(windowTitle,ct):null;
     public async Task<CdpTab> Open(string url,CancellationToken ct=default)
     {
         var r=await Call("Target.createTarget",new(){["url"]=url},null,ct);string id=r.GetProperty("targetId").GetString()!;own.Add(id);

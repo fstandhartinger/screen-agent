@@ -103,7 +103,7 @@ internal static partial class ComputerSelftest
         }
         // the ninth ask in one run stops the run (the start was the first)
         int proposals=0;JsonElement capAsk=default;
-        for(int i=0;i<10;i++){capAsk=await Do(run,"action","chrome_click",new{@ref=send.Value.Ref});proposals++;if(Rule(capAsk)=="asks-cap")break;}
+        for(int i=0;i<10;i++){capAsk=await Do(run,"action","chrome_click",new{@ref=send.Value.Ref});proposals++;if(Rule(capAsk)=="asks-cap")break;if(Code(capAsk)==ComputerCodes.NeedsConfirm)await Do(run,"void",hash:Hash(capAsk));}   // an open ask refuses the next proposal, so each is dropped first
         var after=await Do(run,"action","chrome_tabs");
         Ok("the ninth ask in one run stops the run (8 asks, the start counts as one)",Code(capAsk)==ComputerCodes.Refused&&Rule(capAsk)=="asks-cap"&&proposals<=5&&(Code(after)==ComputerCodes.NoRun||Code(after)==ComputerCodes.Killed),Brief(capAsk)+" after "+proposals+" more asks, then "+Brief(after));
         await Task.Delay(700);
@@ -120,9 +120,11 @@ internal static partial class ComputerSelftest
         Ok("'Weiter' on a listed domain: R2 whatever the label; the spoken text is built by the app and reads recipient, subject and body live; no code in it",Code(weiter)==ComputerCodes.NeedsConfirm&&Rule(weiter)=="sensitive-domain"&&Spoken(weiter).Contains("chef@example.org")&&Spoken(weiter).Contains("Quartalszahlen")&&Spoken(weiter).Contains("Zahlen sind im Anhang")&&!Spoken(weiter).Contains(cw)&&fx.Count("mail.localhost/send")==0,
             Brief(weiter)+" · "+Spoken(weiter));
         var (_,ibs)=await Page(run,"mail.localhost","/inbox");var fwd=Find(ibs,"button","Weiterleiten");
-        var forward=await Do(run,"action","chrome_click",new{@ref=Need(fwd,"fwd")});
+        var forward=await Do(run,"action","chrome_click",new{@ref=Need(fwd,"fwd")});   // the "Weiter" ask is still open: a second proposal is refused, it cannot replace the question he is reading
+        bool stillOpen=Ui(()=>overlay.AskVisible);
+        var dropOld=await Do(run,"void",hash:Hash(weiter));
         var oldAnswer=await Do(run,"confirm",hash:Hash(weiter),digits:"ja "+Digits(cw));
-        Ok("a mail asking to forward credentials: R2; a new proposal voids the old ask (its hash is dead); nothing sent",Code(forward)==ComputerCodes.NeedsConfirm&&Code(oldAnswer)==ComputerCodes.Denied&&fx.Count("mail.localhost/send")==0&&fx.Count("mail.localhost/send?from=forward")==0,Brief(forward)+" / old: "+Brief(oldAnswer));
+        Ok("while an ask is open a new proposal is refused (ask-open) and does not replace it or its code on the overlay; once it is voided its code is dead; nothing sent",Code(forward)==ComputerCodes.Refused&&Rule(forward)=="ask-open"&&stillOpen&&Code(dropOld)==ComputerCodes.Done&&Code(oldAnswer)==ComputerCodes.Denied&&fx.Count("mail.localhost/send")==0,Brief(forward)+" / old: "+Brief(oldAnswer));
         var (bt2,bs2)=await Page(run,"mail.localhost","/compose");var w2=Find(bs2,"button","Weiter");
         var swapAsk=await Do(run,"action","chrome_click",new{@ref=Need(w2,"w2")});string cs=CodeNow();
         fx.Swap="1";await Task.Delay(1500);
@@ -138,7 +140,8 @@ internal static partial class ComputerSelftest
         await End(run);
 
         // ===== Run C: outside the scope =====
-        run=await Start("Öffne site.localhost");
+        run=await Start("Öffne "+U("site.localhost","/out"));   // evil.localhost is reachable only by a link of the page: a host he did not name needs his words or a link (N1)
+        await Page(run,"site.localhost","/out");
         var openEvil=await Do(run,"action","chrome_open",new{url=U("evil.localhost","/")});string ce=CodeNow();
         Ok("navigating out of the scope is R2 and the domain is spoken",Code(openEvil)==ComputerCodes.NeedsConfirm&&Rule(openEvil)=="open-out-of-scope"&&Spoken(openEvil).Contains("evil.localhost"),Brief(openEvil)+" · "+Spoken(openEvil));
         var evilTab=await Confirm(run,openEvil);await Task.Delay(800);
@@ -315,10 +318,11 @@ internal static partial class ComputerSelftest
         var wrongSid=await Do(NewRun(),"start",goal:"Öffne site.localhost",onSid:"andere-sitzung");
         enabled=false;var off=await Do(NewRun(),"start",goal:"Öffne site.localhost");enabled=true;
         Ok("a command for another session id and a scope switched off in the tray are both refused",Code(wrongSid)==ComputerCodes.Refused&&Rule(wrongSid)=="sid"&&Code(off)==ComputerCodes.Denied&&Rule(off)=="off",Brief(wrongSid)+" / "+Brief(off));
-        run=await Start("Öffne site.localhost");int okCount=0;JsonElement last=default;
+        run=await Start("Öffne "+U("site.localhost","/out"));int okCount=0;JsonElement last=default;
         for(int i=0;i<26;i++){last=await Do(run,"action","ui_windows",seq:i+1);if(Code(last)==ComputerCodes.Done)okCount++;}
         var resume=await Do(run,"resume",seq:30);var afterResume=await Do(run,"action","ui_windows",seq:31);
         Ok("25 steps, then a stop that needs a new final of his",okCount==25&&Rule(last)=="step-report"&&Code(resume)==ComputerCodes.Done&&Code(afterResume)==ComputerCodes.Done,"done="+okCount+" 26th: "+Brief(last));
+        await Page(run,"site.localhost","/out");   // the link to evil.localhost is on this page, so the open is an R2 (a host he did not name needs a link of the page)
         var physOpen=await Do(run,"action","chrome_open",new{url=U("evil.localhost","/")});
         string physId=LastId;
         ComputerGuard.Current!.PhysicalConfirm();   // what the hook sets when the chord is pressed on the keyboard (injected chords are ignored)
@@ -348,13 +352,14 @@ internal static partial class ComputerSelftest
             bool afterScope=agent.Run!.Scope.ContainsHost("mail.localhost"),afterHead=Ui(()=>overlay.Texts[0]).Contains("mail.localhost");
             Ok("an extension asks too: scope and goal change only after the code, then the overlay shows the new goal",Code(ext)==ComputerCodes.NeedsConfirm&&Rule(ext)=="run-extend"&&!beforeScope&&!beforeHead&&Code(extDone)==ComputerCodes.Done&&afterScope&&afterHead,Brief(ext)+" · before "+beforeScope+"/"+beforeHead+" after "+afterScope+"/"+afterHead);
             // void: the gateway dropped the ask; the code, the overlay and the chord are dead
-            var vo=await Do(rs,"action","chrome_open",new{url=U("evil.localhost","/")},seq:3);string cv=CodeNow();
+            var (_,vib)=await Page(rs,"mail.localhost","/inbox");var vfw=Find(vib,"button","Weiterleiten");
+            var vo=await Do(rs,"action","chrome_click",new{@ref=Need(vfw,"vfw")},seq:3);string cv=CodeNow();
             var voided=await Do(rs,"void",hash:Hash(vo),seq:4);
             bool askGone=!Ui(()=>overlay.AskVisible);
             ComputerGuard.Current!.PhysicalConfirm();   // a chord press after the void
             var late=await Do(rs,"confirm",hash:Hash(vo),digits:"ja "+Digits(cv),seq:5);
             await Task.Delay(1200);
-            Ok("void: the ask and the overlay code are gone at once; the right code and the chord afterwards run nothing",Code(vo)==ComputerCodes.NeedsConfirm&&Code(voided)==ComputerCodes.Done&&askGone&&Code(late)==ComputerCodes.Denied&&fx.Count("evil.localhost")==0,Brief(vo)+" · "+Brief(voided)+" · "+Brief(late));
+            Ok("void: the ask and the overlay code are gone at once; the right code and the chord afterwards run nothing",Code(vo)==ComputerCodes.NeedsConfirm&&Code(voided)==ComputerCodes.Done&&askGone&&Code(late)==ComputerCodes.Denied&&fx.Count("mail.localhost/send?from=forward")==0,Brief(vo)+" · "+Brief(voided)+" · "+Brief(late));
             await End(rs);
         }
         // ===== F1: link click, 302, location= by script, data in the path, form post to another origin, read in the own tab after a redirect =====
@@ -466,6 +471,83 @@ internal static partial class ComputerSelftest
                 }
             }
             await End(rp);
+        }
+        // ===== f-fix2 N1: data in a host name or a port is refused before any request leaves; the same URLs are fine when the page itself links to them =====
+        {
+            string r1=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/inject"));
+            var sub=await Do(r1,"action","chrome_open",new{url=P+"u0vdukvux21bsuw.site.localhost:"+port+"/"});
+            var deep=await Do(r1,"action","chrome_open",new{url=P+"u0vd.ukvu.x21b.suw.site.localhost:"+port+"/"});
+            var otherPort=await Do(r1,"action","chrome_open",new{url=P+"site.localhost:"+(fx.Port>=65000?fx.Port-5:fx.Port+5)+"/"});
+            await Task.Delay(600);
+            var tabsN1=await Do(r1,"action","chrome_tabs");
+            Ok("N1 subdomain and port exfil: data in the host name or a foreign port of a scope host is refused (url-host); the server never saw such a Host header; no tab appeared",
+                new[]{sub,deep,otherPort}.All(x=>Code(x)==ComputerCodes.Refused&&Rule(x)=="url-host")&&!fx.SawHost("u0vdukvux21bsuw.site.localhost")&&!fx.SawHost("u0vd.ukvu.x21b.suw.site.localhost")&&!Res(tabsN1).Contains("u0vdukvux21bsuw"),
+                string.Join(" | ",new[]{sub,deep,otherPort}.Select(Brief)));
+            await End(r1);
+        }
+        // ===== f-fix2 N4: a hostile Enter on a bank-listed (localhost) name with a focused field with an IBAN: refused, nothing is read aloud, no key goes out =====
+        {
+            string r4=await Start("Übernimm den Rechner und öffne "+U("sparkasse-test.localhost","/login"));
+            await Do(r4,"action","chrome_open",new{url=U("sparkasse-test.localhost","/login")});
+            await Task.Delay(1000);
+            var wl4=await Do(r4,"action","ui_windows");
+            string? bankWin=Regex.Matches(Res(wl4),@"^(\S+) chrome ""ausgeblendet""",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
+            bool front4=false;if(bankWin is not null){var fr=await Do(r4,"action","window_focus",new{window=bankWin});front4=Code(fr)==ComputerCodes.Done;await Task.Delay(500);}
+            if(!front4)Skip("N4 Enter on a read-denied page","Chrome could not be brought to the front on this runner; covered by Core tests of the policy");
+            else
+            {
+                int k4=UiaDriver.KeysSent;
+                var enter4=await Do(r4,"action","key",new{key="Enter"});
+                string all4=JsonSerializer.Serialize(enter4);
+                Ok("N4 Enter on a bank-listed page with a focused field: refused (R3), neither the IBAN nor the amount is in the reply, no key was sent, no ask on the overlay",
+                    Code(enter4)==ComputerCodes.Refused&&Rule(enter4) is "read-denied" or "key-no-focus"&&!all4.Contains("DE00")&&!all4.Contains("4999")&&UiaDriver.KeysSent==k4&&!Ui(()=>overlay.AskVisible),Brief(enter4));
+            }
+            await End(r4);
+        }
+        // ===== f-fix2 N3: "hier" resolves the front tab's host at the start and the start ASKS and names it (it used to start with an empty scope, no ask, and add the host later) =====
+        {
+            string r3=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/fields4"));
+            await Page(r3,"site.localhost","/fields4");
+            var wl3=await Do(r3,"action","ui_windows");
+            string? hereWin=Regex.Matches(Res(wl3),@"^(\S+) chrome ""FelderVier",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
+            bool front3=false;if(hereWin is not null){var fr=await Do(r3,"action","window_focus",new{window=hereWin});front3=Code(fr)==ComputerCodes.Done;await Task.Delay(600);}
+            await End(r3);
+            if(!front3)Skip("N3 'hier' start ask","Chrome could not be brought to the front on this runner; covered by Core tests (ResolveHere)");
+            else
+            {
+                string rH=NewRun();
+                var stH=await Do(rH,"start",goal:"klick hier auf weiter");
+                var preH=await Do(rH,"action","ui_windows");
+                Ok("N3 'hier' as the whole scope: the start asks (run-start), the question names the host of the front tab, the run is unarmed until the code",
+                    Code(stH)==ComputerCodes.NeedsConfirm&&Rule(stH)=="run-start"&&Spoken(stH).Contains("site.localhost")&&Code(preH)==ComputerCodes.Refused&&Rule(preH)=="not-armed",Brief(stH)+" · "+Spoken(stH)+" · "+Brief(preH));
+                await End(rH);
+            }
+        }
+        // ===== f-fix2 N6: a page that opens a popup and flips it between an in-scope and a foreign origin: whatever chrome_read answers, it is never the foreign text =====
+        {
+            fx.FlipMs=300;
+            string r6=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/flip")+" und "+U("site.localhost","/inject"));
+            var (ft6,fs6)=await Page(r6,"site.localhost","/flip");
+            var pop=Find(fs6,"button","Popup");
+            var click6=await Do(r6,"action","chrome_click",new{@ref=Need(pop,"pop")});
+            await Task.Delay(800);
+            string popId="";
+            using(var other=await ChromeCdp.Connect(new(profileDir,false),()=>false,(_,_)=>{},CancellationToken.None))
+                foreach(var t in await other.Targets())if(t.TargetId!=ft6&&(t.Url.EndsWith("/secret")||t.Url.EndsWith("/inject")))popId=t.TargetId;
+            int n6Leaks=0,inScopeReads=0,hiddenReads=0,scopeRefusals=0,otherAnswers=0;
+            if(popId.Length>0)
+                for(int i=0;i<120;i++)
+                {
+                    var rd=await Do(r6,"action","chrome_read",new{tab=popId});string txt=Res(rd);
+                    if(txt.Contains("GEHEIM-MARKER-N6"))n6Leaks++;
+                    else if(Code(rd)==ComputerCodes.Done&&txt.Contains("Ignoriere"))inScopeReads++;
+                    else if(txt.Contains("ausgeblendet"))hiddenReads++;
+                    else if(Rule(rd)=="tab-scope")scopeRefusals++;
+                    else otherAnswers++;
+                }
+            Ok("N6 popup flipping between origins: 120 reads, none returned the foreign page's text; reads of the in-scope page still work",popId.Length>0&&n6Leaks==0&&inScopeReads>0,"popup "+(popId.Length>0)+" click "+Brief(click6),
+                ("n6Leaks",n6Leaks),("inScopeReads",inScopeReads),("hiddenReads",hiddenReads),("scopeRefusals",scopeRefusals),("otherAnswers",otherAnswers));
+            await End(r6);
         }
         // ===== no kill path, no run: an agent without a keyboard hook refuses to start =====
         {

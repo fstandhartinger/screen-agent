@@ -270,6 +270,8 @@ public sealed class ComputerPolicy
     public static string ProcessName(string? p){p=(p??"").Trim().ToLowerInvariant();return p.EndsWith(".exe")?p[..^4]:p;}
     public static bool ComposerOrSensitiveProcess(string process){string p=ProcessName(process);return ComposerApps.Contains(p)||SensitiveApps.Contains(p);}
     public static bool IsBrowser(string process)=>Browsers.Contains(ProcessName(process));
+    // A window of `process` may be matched to a tab only when that browser owns the debugging port (owner "" = not known, as with --remote-debugging-port in the selftest).
+    public static bool OwnsPort(string owner,string process)=>owner.Length==0||ProcessName(process)==ProcessName(owner);
     public static bool IsBrowser(string process,string? windowClass)=>IsBrowser(process)||(windowClass is not null&&BrowserClasses.Contains(windowClass));
     public static readonly string[] ReadTools=["ui_windows","ui_tree","screenshot","chrome_tabs","chrome_snapshot","chrome_read","server_read"];
     public static readonly string[] AllTools=["ui_windows","ui_tree","ui_click","ui_type","key","scroll","window_focus","screenshot","chrome_tabs","chrome_open","chrome_snapshot","chrome_click","chrome_fill","chrome_read","server_read"];
