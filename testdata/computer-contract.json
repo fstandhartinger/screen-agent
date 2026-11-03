@@ -661,7 +661,12 @@
   "computer.refused",
   "computer.kill",
   "computer.handson",
-  "computer.scope"
+  "computer.scope",
+  "computer.taint",
+  "computer.resume",
+  "computer.run.extend.ask",
+  "computer.tab.left_scope",
+  "computer.error"
  ],
  "hotkey": {
   "note": "A physical Ctrl+Win+Shift+Y (not injected) confirms the pending ask in the app: the app runs the action and POSTs a SECOND result to the id of the action command that returned needs-confirm. The gateway accepts it once, within 120 s, and never sends digits:'' itself.",

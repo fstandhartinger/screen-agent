@@ -417,7 +417,7 @@ internal sealed class ComputerAgent:IDisposable
             if(plan.Mutates&&cdp is {Open_:true} cd)
             {   // F1: re-read every tab of the run; an origin that left the scope (302, location=, a link) takes the tab's Own flag and its refs
                 int lost=cd.Revalidate(r.Scope,CancellationToken.None).GetAwaiter().GetResult();
-                if(lost>0)Log("computer.tab.left-scope",new(){["run"]=r.Id,["tabs"]=lost});
+                if(lost>0)Log("computer.tab.left_scope",new(){["run"]=r.Id,["tabs"]=lost});
             }
             if(plan.Counts){r.Counted();ui.BeginInvoke(()=>overlay.Update("läuft",r.Actions,150,w.Cmd.Tool));}
             Log("computer.action",new(data){["ok"]=true,["ms"]=sw.ElapsedMilliseconds,["phase"]="done"});
