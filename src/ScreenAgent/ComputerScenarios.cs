@@ -422,25 +422,27 @@ internal static partial class ComputerSelftest
         }
         // ===== F4: an Enter that asks is bound to the focused field; another field in focus when the code comes aborts it; Enter in a search box in scope runs =====
         {
-            string rn=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/fields"));
-            var (nt,ns)=await Page(rn,"site.localhost","/fields");
+            string rn=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/fields4"));
+            var (nt,ns)=await Page(rn,"site.localhost","/fields4");
             var fName=Find(ns,"textbox","Name");var fOrt=Find(ns,"textbox","Ort");var fSuche=ns.Split('\n').Select(l=>Regex.Match(l,@"^(\S+) (?:textbox|searchbox) ""[^""]*"" .*\[suche\]")).FirstOrDefault(m=>m.Success)?.Groups[1].Value;
             var cName=fName is null?default:await Do(rn,"action","chrome_click",new{@ref=fName.Value.Ref});
             var winsN=await Do(rn,"action","ui_windows");
-            var winRef=Regex.Matches(Res(winsN),@"^(\S+) chrome ""Felder",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
+            var winRef=Regex.Matches(Res(winsN),@"^(\S+) chrome ""FelderVier",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
             bool front=false;if(winRef is not null){var fr=await Do(rn,"action","window_focus",new{window=winRef});front=Code(fr)==ComputerCodes.Done;await Task.Delay(500);}
             if(!front||fSuche is null||fOrt is null)Skip("F4 key binding","Chrome could not be brought to the front on this runner or the page did not load as expected");
             else
             {
                 int k0=UiaDriver.KeysSent;
-                var enter=await Do(rn,"action","key",new{key="Enter"});string ck=CodeNow();
+                var enter=await Do(rn,"action","key",new{key="Enter"});string ck=Code(enter)==ComputerCodes.NeedsConfirm?CodeNow():"00";
                 Ok("F4: Enter asks and names the focused field; no key was sent yet",Code(enter)==ComputerCodes.NeedsConfirm&&Rule(enter)=="enter"&&Spoken(enter).Contains("Taste enter im Feld")&&Spoken(enter).Contains("Name")&&UiaDriver.KeysSent==k0,Brief(enter)+" · "+Spoken(enter));
                 await Do(rn,"action","chrome_click",new{@ref=fOrt.Value.Ref});   // another field takes the focus before he answers
-                var stale=await Do(rn,"confirm",hash:Hash(enter),digits:"ja "+Digits(ck));
+                var stale=Code(enter)==ComputerCodes.NeedsConfirm?await Do(rn,"confirm",hash:Hash(enter),digits:"ja "+Digits(ck)):enter;
                 Ok("F4: the focus moved to another field before the code: aborted, no key sent",Code(stale)==ComputerCodes.StaleRef&&UiaDriver.KeysSent==k0,Brief(stale));
                 var cS=await Do(rn,"action","chrome_click",new{@ref=fSuche});
                 var enterS=await Do(rn,"action","key",new{key="Enter"});
                 Ok("F4: Enter in a search box of the scope is R1 (the focus is read, SearchBox is set for keys)",Code(enterS)==ComputerCodes.Done&&Rule(enterS)=="enter-search"&&UiaDriver.KeysSent>k0,Brief(enterS));
+                var shotIn=await Do(rn,"action","screenshot",new{window=winRef});
+                Ok("F2: a screenshot of a browser window with a verified in-scope URL is taken (or says that another window lies over it); never anything else",Code(shotIn)==ComputerCodes.Done&&(Res(shotIn).StartsWith("data:image/jpeg")||Res(shotIn).StartsWith("ausgeblendet (ein anderes Fenster")),Brief(shotIn)+" · "+(Res(shotIn).Length>80?Res(shotIn)[..80]:Res(shotIn)));
             }
             await End(rn);
         }
