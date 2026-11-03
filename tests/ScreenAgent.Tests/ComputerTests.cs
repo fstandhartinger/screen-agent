@@ -28,7 +28,8 @@ public class ComputerPolicyTests
         Assert.Equal(ActionClass.R1,P.Classify(new("scroll"){Process="chrome",Url="https://example.com/"},e).Class);
         Assert.Equal(ActionClass.R1,P.Classify(new("window_focus"){Process="notepad"},e).Class);
         var c=P.Classify(Chrome("chrome_click","https://example.com/","Weiter"),e);Assert.Equal((ActionClass.R2,"no-scope"),(c.Class,c.Rule));
-        Assert.Equal(ActionClass.R2,P.Classify(Chrome("chrome_open","https://example.com/") with{OpenUrl="https://example.com/"},e).Class);
+        Assert.Equal("url-host",P.Classify(Chrome("chrome_open","https://example.com/") with{OpenUrl="https://example.com/"},e).Rule);   // N1: with nothing named, a host needs his words or a link of the page
+        Assert.Equal(ActionClass.R2,P.Classify(Chrome("chrome_open","https://example.com/") with{OpenUrl="https://example.com/",UrlInWords=true},e).Class);
     }
     [Fact] public void InScopeClickIsR1()
     {
@@ -144,8 +145,10 @@ public class ComputerPolicyTests
         ComputerScope sc=Scope("öffne example.org");
         Assert.Equal((ActionClass.R1,"open-in-scope"),(P.Classify(new("chrome_open"){OpenUrl="https://example.org/"},sc).Class,P.Classify(new("chrome_open"){OpenUrl="https://example.org/"},sc).Rule));
         Assert.Equal("url-path",P.Classify(new("chrome_open"){OpenUrl="https://example.org/a/b"},sc).Rule);   // F1: data in the path leaves just like data in a query
+        Assert.Equal("url-host",P.Classify(new("chrome_open"){OpenUrl="https://u0vdukvux21bsuw.example.org/"},sc).Rule);   // N1: data in the host name
         Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://example.org/a/b",UrlInWords=true},sc).Class);
-        Assert.Equal("open-out-of-scope",P.Classify(new("chrome_open"){OpenUrl="https://evil.example/"},sc).Rule);
+        Assert.Equal("url-host",P.Classify(new("chrome_open"){OpenUrl="https://evil.example/"},sc).Rule);   // a host he did not name needs his words or a link of the page
+        Assert.Equal("open-out-of-scope",P.Classify(new("chrome_open"){OpenUrl="https://evil.example/",UrlInWords=true},sc).Rule);
         Assert.Equal("url-query",P.Classify(new("chrome_open"){OpenUrl="https://evil.example/?d=secret"},sc).Rule);
         Assert.Equal("url-query",P.Classify(new("chrome_open"){OpenUrl="https://example.org/#token=abc"},sc).Rule);
         Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://example.org/search?q=a",UrlInWords=true},sc).Class);
@@ -236,14 +239,24 @@ public class ComputerRunTests
     [Fact] public void EightAsksThenStop()
     {
         var (r,c)=Make();
-        for(int i=0;i<8;i++)Assert.Null(r.Propose(Ask(c,"h"+i)));
+        for(int i=0;i<8;i++){Assert.Null(r.Propose(Ask(c,"h"+i)));r.Void();}
         Assert.Equal("asks-cap",r.Propose(Ask(c,"h9"))!.Value.Rule);Assert.True(r.IsClosed);
     }
-    [Fact] public void NewProposalVoidsTheOldOne()
+    // N-chord: while an ask is open a new proposal is refused (it would replace the question he is reading and a chord press could confirm the new one unseen); an expired one gives way.
+    [Fact] public void AnOpenAskRefusesANewProposal()
     {
-        var (r,c)=Make();r.Propose(Ask(c,"h1"));r.Propose(Ask(c,"h2"));
-        Assert.Equal(ComputerRun.ConfirmResult.HashMismatch,r.Confirm("h1","47",out _));
-        Assert.Equal(ComputerRun.ConfirmResult.Ok,r.Confirm("h2","47",out var ask));Assert.Equal("h2",ask!.Hash);
+        var (r,c)=Make();Assert.Null(r.Propose(Ask(c,"h1")));
+        Assert.Equal(("refused","ask-open"),r.Propose(Ask(c,"h2")));Assert.False(r.IsClosed);Assert.Equal(1,r.Asks);
+        Assert.Equal(ComputerRun.ConfirmResult.HashMismatch,r.Confirm("h2","47",out _));
+        Assert.Equal(ComputerRun.ConfirmResult.Ok,r.Confirm("h1","47",out var ask));Assert.Equal("h1",ask!.Hash);
+        Assert.Null(r.Propose(Ask(c,"h3")));c.Now+=60_001;Assert.Null(r.Propose(Ask(c,"h4")));   // an expired ask does not block
+    }
+    [Fact] public void TheChordIsIgnoredForOneAndAHalfSecondsAfterTheAskAppears()
+    {
+        var (r,c)=Make();r.Propose(Ask(c,"h1"));
+        r.PhysicalConfirm();Assert.False(r.PhysicalConfirmed);Assert.NotEqual(ComputerRun.ConfirmResult.Ok,r.Confirm("h1",null,out _));
+        r.Propose(Ask(c,"h2"));c.Now+=1499;r.PhysicalConfirm();Assert.False(r.PhysicalConfirmed);
+        c.Now+=1;r.PhysicalConfirm();Assert.True(r.PhysicalConfirmed);Assert.Equal(ComputerRun.ConfirmResult.Ok,r.Confirm("h2",null,out _));
     }
     [Fact] public void CodeIsOneUse()
     {
@@ -267,13 +280,13 @@ public class ComputerRunTests
     }
     [Fact] public void PhysicalConfirmCounts()
     {
-        var (r,c)=Make();r.Propose(Ask(c));r.PhysicalConfirm();
+        var (r,c)=Make();r.Propose(Ask(c));c.Now+=2000;r.PhysicalConfirm();
         Assert.Equal(ComputerRun.ConfirmResult.Ok,r.Confirm("h1",null,out _));
         r.Propose(Ask(c,"h2"));Assert.NotEqual(ComputerRun.ConfirmResult.Ok,r.Confirm("h2",null,out _));   // the physical flag was used up
     }
     [Fact] public void PhysicalConfirmDoesNotCarryOverToNewAsk()
     {
-        var (r,c)=Make();r.Propose(Ask(c,"h1"));r.PhysicalConfirm();r.Propose(Ask(c,"h2"));
+        var (r,c)=Make();r.Propose(Ask(c,"h1"));c.Now+=2000;r.PhysicalConfirm();r.Void();r.Propose(Ask(c,"h2"));
         Assert.NotEqual(ComputerRun.ConfirmResult.Ok,r.Confirm("h2",null,out _));
     }
     [Fact] public void IdleAndGatewayQuiet()

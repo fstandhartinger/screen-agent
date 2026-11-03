@@ -105,6 +105,10 @@ public sealed class ComputerRun
     // A sensitive read (or a server_read reported by the gateway) happened: every outward action asks from here on. It can only be raised, never lowered.
     public bool Tainted=>Volatile.Read(ref tainted)!=0;
     public void Taint(){Interlocked.Exchange(ref tainted,1);}
+    // Origins the run has read (ComputerPolicy.ReadOrigin): a click, fill or type on another origin asks. Grows only.
+    readonly HashSet<string> readOrigins=new(StringComparer.Ordinal);
+    public void NoteRead(string origin){lock(gate){if(readOrigins.Count<64)readOrigins.Add(origin);}}
+    public string[] ReadOrigins{get{lock(gate)return readOrigins.ToArray();}}
     /// <summary>The go after hands-on or after the 25-step stop: adds no scope and no goal, voids a pending ask. The gateway sends it only for a real spoken sentence.</summary>
     public void Resume(){lock(gate){Interlocked.Exchange(ref handsOn,0);StepsSinceFinal=0;Pending=null;Interlocked.Exchange(ref physical,0);lastAction=clock();}}
     public RunState State=>IsClosed||Revoked?RunState.Closed:IsHandsOn?RunState.HandsOn:IsPaused?RunState.Paused:RunState.Running;
@@ -118,7 +122,9 @@ public sealed class ComputerRun
     public void HandsOn(){Interlocked.Exchange(ref handsOn,1);}
     public void Pause(bool on){Interlocked.Exchange(ref paused,on?1:0);}
     // He pressed the confirm chord on the keyboard (the hook only passes keys that are not injected): the pending ask may run on the next confirm command.
-    public void PhysicalConfirm(){Interlocked.Exchange(ref physical,1);}
+    // Ignored in the first 1.5 s after the ask appeared (a chord he was already pressing for something else must not confirm a question he has not read).
+    public const int ChordDelayMs=1500;
+    public void PhysicalConfirm(){if(Pending is {} p&&clock()-p.At>=ChordDelayMs)Interlocked.Exchange(ref physical,1);}
     public bool PhysicalConfirmed=>Volatile.Read(ref physical)!=0;
     public void Close(string why){lock(gate){ClosedWhy??=why;Pending=null;}Interlocked.Exchange(ref closed,1);}
     public void Seen(){Interlocked.Exchange(ref lastGateway,clock());}
@@ -127,7 +133,7 @@ public sealed class ComputerRun
     {
         lock(gate)
         {
-            Goal=(Goal+" / "+goal).Length>600?Goal:Goal+" / "+goal;
+            string g=Goal+" / "+goal;Goal=g.Length>600?g[..599]+"…":g;   // the overlay shows what the scope now covers, cut at the end
             foreach(var h in more.Hosts)Scope.Hosts.Add(h);foreach(var a in more.Apps)Scope.Apps.Add(a);
             StepsSinceFinal=0;Interlocked.Exchange(ref handsOn,0);Pending=null;Interlocked.Exchange(ref physical,0);lastAction=clock();
         }
@@ -151,11 +157,12 @@ public sealed class ComputerRun
         }
     }
     public void Counted(){lock(gate){Actions++;StepsSinceFinal++;lastAction=clock();}}
-    // An R2 proposal. A new one voids the old one; the fourth ask stops the run.
+    // An R2 proposal. While an ask is open (and not expired) no other is accepted: the open one is the one he is looking at, and the chord must not confirm a question that replaced it unseen.
     public (string Code,string Rule)? Propose(PendingAsk ask)
     {
         lock(gate)
         {
+            if(Pending is {} open&&clock()-open.At<=Caps.PendingMs)return (ComputerCodes.Refused,"ask-open");
             if(Asks>=Caps.MaxAsks){Close("asks-cap");return (ComputerCodes.Refused,"asks-cap");}
             Asks++;Pending=ask;Interlocked.Exchange(ref physical,0);lastAction=clock();return null;
         }

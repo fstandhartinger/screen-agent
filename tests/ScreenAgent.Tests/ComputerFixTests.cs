@@ -40,10 +40,10 @@ public class ComputerFixPolicyTests
             Assert.Equal((ActionClass.R2,"tainted"),(P.Classify(c,sc).Class,P.Classify(c,sc).Rule));
             Assert.Equal(ActionClass.R1,P.Classify(c with{Tainted=false},sc).Class);
         }
-        Assert.Equal(ActionClass.R1,P.Classify(new("chrome_open"){OpenUrl="https://example.org/",Tainted=true},sc).Class);   // an open carries no data: path and query are refused unless he spoke them
+        Assert.Equal((ActionClass.R2,"tainted"),(P.Classify(new("chrome_open"){OpenUrl="https://example.org/",Tainted=true},sc).Class,P.Classify(new("chrome_open"){OpenUrl="https://example.org/",Tainted=true},sc).Rule));   // N-covert: after a sensitive read even an in-scope open asks
         Assert.Equal("url-path",P.Classify(new("chrome_open"){OpenUrl="https://example.org/Zm9v",Tainted=true},sc).Rule);
         Assert.Equal(ActionClass.R0,P.Classify(Chrome("chrome_read","https://example.org/") with{Tainted=true},sc).Class);
-        Assert.Equal(ActionClass.R1,P.Classify(new ActionContext("scroll"){Process="chrome",Url="https://example.org/",Tainted=true},sc).Class);
+        Assert.Equal(ActionClass.R2,P.Classify(new ActionContext("scroll"){Process="chrome",Url="https://example.org/",Tainted=true},sc).Class);   // a scroll offset is a covert channel
     }
     [Fact] public void F1_ReadingASensitiveTargetTaints()
     {
@@ -76,7 +76,7 @@ public class ComputerFixPolicyTests
         Assert.Equal(ActionClass.R3,P.Classify(Chrome("chrome_click","https://passwords.google.com/","Anzeigen"),Scope("öffne passwords.google.com")).Class);
         var sc=Scope("öffne google");
         Assert.True(sc.ContainsHost("www.google.com"));Assert.False(sc.ContainsHost("mail.google.com"));Assert.False(sc.ContainsHost("docs.google.com"));Assert.False(sc.ContainsHost("sites.google.com"));
-        Assert.Equal("out-of-scope",P.Classify(Chrome("chrome_click","https://docs.google.com/forms/d/x","Weiter"),sc).Rule);
+        Assert.Equal("sensitive-domain",P.Classify(Chrome("chrome_click","https://docs.google.com/forms/d/x","Weiter"),sc).Rule);   // documents are on the storage list now
         Assert.Equal("sensitive-domain",P.Classify(Chrome("chrome_click","https://mail.google.com/","Compose"),sc).Rule);
     }
     [Theory]
@@ -162,7 +162,7 @@ public class ComputerFixInputTests
     static PendingAsk Ask(string hash="h1")=>new("chrome_click",hash,"Klick","47",Environment.TickCount64,new ActionBinding(),default,"R2","label-send");
     [Fact] public void A_TheRealOrderCtrlWinShiftYIsAConfirmAndNotHandsOn()
     {
-        var r=new ComputerRun("r0123456789abcdef","g",ComputerScope.From("example.org"));r.Propose(Ask());
+        long now=0;var r=new ComputerRun("r0123456789abcdef","g",ComputerScope.From("example.org"),()=>now);r.Propose(new("chrome_click","h1","Klick","47",now,new ActionBinding(),default,"R2","label-send"));now+=2000;
         var k=new Keys{Run=r};
         k.Press(0xa2);k.Press(0x5b);k.Press(0xa0);   // left Ctrl, left Win, left Shift (the specific codes the hook reports) 
         Assert.False(r.IsHandsOn,"a modifier press alone is not a hand on the keyboard");
@@ -225,7 +225,7 @@ public class ComputerFixRunTests
         r.Propose(At("a"));now+=61_000;Assert.True(r.ExpirePending());Assert.False(r.IsClosed);
         r.Propose(At("b"));now+=61_000;Assert.True(r.ExpirePending());Assert.True(r.IsClosed);Assert.Equal("expired-twice",r.ClosedWhy);
         var q=new ComputerRun("r0123456789abcdef","goal",ComputerScope.From("example.org"));
-        for(int i=0;i<8;i++)Assert.Null(q.Propose(Ask("h"+i)));
+        for(int i=0;i<8;i++){Assert.Null(q.Propose(Ask("h"+i)));q.Void();}
         Assert.Equal("asks-cap",q.Propose(Ask("x"))!.Value.Rule);
     }
     [Fact] public void TwoWrongCodesEndTheRun()
@@ -316,7 +316,8 @@ public class ComputerFixReadmeTests
     {
         string r=Readme();
         foreach(var e in ComputerPolicy.MoneyPrefixes)Assert.True(r.Contains("`"+e+"*`"),"README is missing the pattern "+e);
-        foreach(var list in new[]{ComputerPolicy.Money,ComputerPolicy.MoneyLabels,ComputerPolicy.Mail,ComputerPolicy.Social,ComputerPolicy.Infra,ComputerPolicy.Composers,ComputerPolicy.PasswordHosts,ComputerPolicy.PasswordApps,ComputerPolicy.SensitiveApps,ComputerPolicy.ComposerApps,ComputerPolicy.Shells,ComputerPolicy.SystemTools,ComputerPolicy.SecurityApps})
+        foreach(var e in ComputerPolicy.MoneyContains)Assert.True(r.Contains("`*"+e+"*`"),"README is missing the pattern *"+e+"*");
+        foreach(var list in new[]{ComputerPolicy.Storage,ComputerPolicy.Shops,ComputerPolicy.Browsers,ComputerPolicy.BrowserClasses,ComputerPolicy.Money,ComputerPolicy.MoneyLabels,ComputerPolicy.Mail,ComputerPolicy.Social,ComputerPolicy.Infra,ComputerPolicy.Composers,ComputerPolicy.PasswordHosts,ComputerPolicy.PasswordApps,ComputerPolicy.SensitiveApps,ComputerPolicy.ComposerApps,ComputerPolicy.Shells,ComputerPolicy.SystemTools,ComputerPolicy.SecurityApps})
             foreach(var e in list)Assert.True(r.Contains("`"+e+"`"),"README is missing the list entry "+e);
         foreach(var must in new[]{"`sparkasse-*`","`vr*`","`volksbank-*`","`www.google.com`","\"ComputerSensitive\"","eight questions"})Assert.Contains(must,r);
     }

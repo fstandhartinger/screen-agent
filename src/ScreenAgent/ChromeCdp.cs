@@ -26,6 +26,8 @@ internal sealed class ChromeCdp:IDisposable
     Task? reader;
     public string BrowserVersion {get;private set;}="";
     public int Port {get;private set;}
+    // The process that owns the debugging port ("chrome", "msedge"), when the connect could tell. Only its windows are matched to tabs: another browser's window with the same title gets no URL.
+    public string OwnerProcess {get;private set;}="";
     public ChromeCdp(Func<bool> revoked,Action<string,Dictionary<string,object?>> log){this.revoked=revoked;this.log=log;}
     public static string DefaultUserData=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Google","Chrome","User Data");
     // ---- connect
@@ -54,7 +56,7 @@ internal sealed class ChromeCdp:IDisposable
                 log("computer.chrome.stale",new(){["cancelled"]=true});
             }
         }
-        var c=new ChromeCdp(revoked,log){Port=port};
+        var c=new ChromeCdp(revoked,log){Port=port,OwnerProcess=owner.Length==0?"":ComputerPolicy.ProcessName(Path.GetFileNameWithoutExtension(owner))};
         try
         {
             var connect=c.ws.ConnectAsync(new Uri("ws://127.0.0.1:"+port+lines[1]),ct);
@@ -174,6 +176,9 @@ internal sealed class ChromeCdp:IDisposable
         var hit=tabs.Where(t=>t.Title.Length>0&&ComputerSpeech.TabTitleMatches(windowTitle,t.Title)).ToList();
         return hit.Count==1?hit[0]:null;
     }
+    // The tab behind a window of `process`: only the browser that owns the debugging port can have it (a window of another browser with the same title gets no tab and no URL).
+    public async Task<CdpTab?> TabForWindow(string process,string windowTitle,CancellationToken ct=default)
+        =>OwnerProcess.Length>0&&ComputerPolicy.ProcessName(process)!=OwnerProcess?null:await TabByTitle(windowTitle,ct);
     public async Task<CdpTab> Open(string url,CancellationToken ct=default)
     {
         var r=await Call("Target.createTarget",new(){["url"]=url},null,ct);string id=r.GetProperty("targetId").GetString()!;own.Add(id);
@@ -202,17 +207,19 @@ internal sealed class ChromeCdp:IDisposable
     }
     // ---- compiled page functions (the only script this client ever runs)
     const string FnInfo="function(){const t=(this.type||'').toLowerCase();const ac=(this.autocomplete||'').toLowerCase();const n=((this.name||'')+' '+(this.id||'')+' '+(this.placeholder||'')+' '+((this.getAttribute&&this.getAttribute('aria-label'))||'')).toLowerCase();return {pw:t==='password'||/password|one-time-code|cc-/.test(ac),search:t==='search'||/search|such/.test(n),connected:this.isConnected===true};}";
-    // Every field of the form (or the page) INCLUDING contenteditable bodies and role=textbox: name, the first 300 characters for the question, and a hash of the WHOLE value for the binding.
-    // Search boxes are left out of the words (they must not take a slot) but stay in the digest. [email] / data-hovercard-id chips are read as recipients (best effort; on Gmail, X, Telegram, Slack, Discord the chips are not guaranteed).
-    const string FnForm="function(){const f=this.form||document;const words=[],dig=[],rc=[];const hash=function(s){let h=5381;for(let i=0;i<s.length;i++){h=((h<<5)+h+s.charCodeAt(i))|0;}return s.length+':'+(h>>>0).toString(16);};for(const e of f.querySelectorAll('input,textarea,select,[contenteditable=\"\"],[contenteditable=\"true\"],[role=\"textbox\"]')){const t=(e.type||'').toLowerCase();const ac=(e.autocomplete||'').toLowerCase();if(t==='password'||t==='hidden'||/password|one-time-code|cc-/.test(ac))continue;const nm=(e.name||e.id||(e.getAttribute&&(e.getAttribute('aria-label')||e.getAttribute('placeholder')))||e.tagName.toLowerCase());const ed=e.isContentEditable===true||(('value' in e)===false);const v=ed?String(e.innerText||''):String(e.value||'');const search=t==='search'||(e.getAttribute&&e.getAttribute('role')==='searchbox')||/search|such/i.test(nm);dig.push(nm+'='+hash(v));if(!search&&v.trim().length>0)words.push([nm,v.slice(0,300)]);if(dig.length>=80)break;}for(const e of f.querySelectorAll('[email],[data-hovercard-id]')){const m=(e.getAttribute('email')||e.getAttribute('data-hovercard-id')||'').slice(0,100);if(m){rc.push(m);}if(rc.length>=10)break;}dig.push('rcpt='+hash(rc.join(',')));return {words:words,digest:dig,rcpt:rc};}";
+    // Every field of the form (or the page), open shadow roots included: input, textarea, select, contenteditable bodies, role=textbox, HIDDEN fields too (a hidden "to" goes along with the post). Name, the first 300 characters for the question, and a hash of the WHOLE value
+    // for the binding. Only type=search / role=searchbox fields are left out of the words (a page-set name must not hide a field); they stay in the digest. [email] / data-hovercard-id chips are read as recipients (best effort).
+    const string FnForm="function(){const f=this.form||document;const words=[],dig=[],rc=[];const hash=function(s){let h=5381;for(let i=0;i<s.length;i++){h=((h<<5)+h+s.charCodeAt(i))|0;}return s.length+':'+(h>>>0).toString(16);};const all=function(root,q,out,seen){if(seen.n++>40){return;}for(const e of root.querySelectorAll(q)){out.push(e);if(out.length>=400)return;}for(const h of root.querySelectorAll('*')){if(h.shadowRoot){all(h.shadowRoot,q,out,seen);if(out.length>=400)return;}}};const els=[];all(f,'input,textarea,select,[contenteditable=\"\"],[contenteditable=\"true\"],[role=\"textbox\"]',els,{n:0});for(const e of els){const t=(e.type||'').toLowerCase();const ac=(e.autocomplete||'').toLowerCase();if(t==='password'||/password|one-time-code|cc-/.test(ac))continue;const nm=(e.name||e.id||(e.getAttribute&&(e.getAttribute('aria-label')||e.getAttribute('placeholder')))||e.tagName.toLowerCase());const ed=e.isContentEditable===true||(('value' in e)===false);const v=ed?String(e.innerText||''):String(e.value||'');const search=t==='search'||(e.getAttribute&&e.getAttribute('role')==='searchbox');dig.push(nm+(t==='hidden'?'#hidden':'')+'='+hash(v));if(!search&&v.trim().length>0)words.push([nm,v.slice(0,300)]);}const rr=[];all(f,'[email],[data-hovercard-id]',rr,{n:0});for(const e of rr){const m=(e.getAttribute('email')||e.getAttribute('data-hovercard-id')||'').slice(0,100);if(m){rc.push(m);}if(rc.length>=10)break;}dig.push('n='+els.length);dig.push('rcpt='+hash(rc.join(',')));return {words:words,digest:dig,rcpt:rc};}";
     // Where a click goes, read live: the closest link, the button's formaction or its form's action (through the prototype getter: a field named "action" cannot shadow it).
-    const string FnTarget="function(){const a=this.closest&&this.closest('a[href],area[href]');if(a&&a.href)return String(a.href);const fa=this.getAttribute&&this.getAttribute('formaction');if(fa){return URL.canParse(fa,document.baseURI)?new URL(fa,document.baseURI).href:'invalid:';}const f=this.form||(this.closest&&this.closest('form'));if(f){const d=Object.getOwnPropertyDescriptor(HTMLFormElement.prototype,'action');return d&&d.get?String(d.get.call(f)):'invalid:';}return '';}";
-    const string FnActive="function(){const e=document.activeElement;return (e&&e!==document.body&&e!==document.documentElement)?e:null;}";
-    const string FnFocusInfo="function(){const t=(this.type||'').toLowerCase();const ac=(this.autocomplete||'').toLowerCase();const n=((this.name||'')+' '+(this.id||'')+' '+(this.placeholder||'')+' '+((this.getAttribute&&this.getAttribute('aria-label'))||'')).toLowerCase();return {pw:t==='password'||/password|one-time-code|cc-/.test(ac),search:t==='search'||/search|such/.test(n)||(this.getAttribute&&this.getAttribute('role'))==='searchbox'};}";
+    const string TargetBody="const a=this.closest&&this.closest('a[href],area[href]');if(a){const h=a.href;if(typeof h==='string'&&h)return h;if(h&&typeof h.baseVal==='string'){return URL.canParse(h.baseVal,document.baseURI)?new URL(h.baseVal,document.baseURI).href:'invalid:';}if(h!==undefined&&h!==''&&typeof h!=='string')return 'invalid:';}const fa=this.getAttribute&&this.getAttribute('formaction');if(fa){return URL.canParse(fa,document.baseURI)?new URL(fa,document.baseURI).href:'invalid:';}const f=this.form||(this.closest&&this.closest('form'));if(f){const d=Object.getOwnPropertyDescriptor(HTMLFormElement.prototype,'action');return d&&d.get?String(d.get.call(f)):'invalid:';}return '';";
+    const string FnTarget="function(){"+TargetBody+"}";
+    const string FnActive="function(){const e=document.activeElement;if(!e||e===document.body||e===document.documentElement)return null;const t=(e.tagName||'').toUpperCase();if(t==='IFRAME'||t==='FRAME'||t==='OBJECT'||t==='EMBED'||e.shadowRoot)return null;return e;}";   // a focus inside a frame or an open shadow root is not seen, so no asking key (the digest could not cover it)
+    // search: only type=search or role=searchbox (a page-set name or id must not lower the class). target: where Enter would go, as FnTarget (link, formaction, the form's action).
+    const string FnFocusInfo="function(){const t=(this.type||'').toLowerCase();const ac=(this.autocomplete||'').toLowerCase();return {pw:t==='password'||/password|one-time-code|cc-/.test(ac),search:t==='search'||(this.getAttribute&&this.getAttribute('role'))==='searchbox',target:(function(){"+TargetBody+"}).call(this)};}";
     const string FnContains="function(h){return this===h||this.contains(h);}";
     const string FnSelect="function(){this.focus();if(this.select){this.select();}else{const r=document.createRange();r.selectNodeContents(this);const s=getSelection();s.removeAllRanges();s.addRange(r);}return document.activeElement===this;}";
     const string FnFocused="function(){return document.activeElement===this;}";
-    const string FnRead="function(){return {text:(document.body?document.body.innerText:'').slice(0,20000)};}";
+    const string FnRead="function(){return {text:(document.body?document.body.innerText:'').slice(0,20000),href:String(location.href)};}";   // href: the document that produced this very text
     const string FnValue="function(){const t=(this.type||'').toLowerCase();if(t==='password')return null;return String(this.value!==undefined?this.value:this.innerText||'').slice(0,200);}";
     async Task<string> Resolve(string targetId,int backend,int world,string session,CancellationToken ct)
     {
@@ -227,17 +234,40 @@ internal sealed class ChromeCdp:IDisposable
         if(r.TryGetProperty("exceptionDetails",out _))throw new CdpException("page-function");
         return r.GetProperty("result").TryGetProperty("value",out var v)?v.Clone():default;
     }
-    public async Task<string> ReadPage(string targetId,CancellationToken ct)
+    // What a read saw: the text (or "ausgeblendet") and every URL the tab showed while it ran (target list, frame tree before and after, the document itself), so the caller can taint by what was really read.
+    public sealed record PageRead(string Text,List<string> Urls);
+    public const string Hidden="ausgeblendet";
+    // `allowed(url,title)`: may a page at this URL be read (in scope or approved, not read-denied). N6: the tab can be flipped between origins by the page itself; a read is a text only when frame id, loader and URL are the same
+    // before and after, every URL seen is allowed, and the document that produced the text (location.href, read in the same call) is allowed. Anything else is "ausgeblendet", never the text.
+    async Task<(bool Ok,List<string> Urls,string Frame,string Loader)> Look(string targetId,Func<string,string,bool> allowed,List<string> urls,CancellationToken ct)
     {
-        var (frame,loader,_)=await Frame(targetId,ct);int world=await World(targetId,frame,loader,ct);var s=await Session(targetId,ct);
+        var tab=await TabOf(targetId,ct)??throw new StaleRefException("tab-gone");
+        var (frame,loader,url)=await Frame(targetId,ct);
+        urls.Add(tab.Url);urls.Add(url);
+        return (allowed(tab.Url,tab.Title)&&allowed(url,tab.Title),urls,frame,loader);
+    }
+    public async Task<PageRead> ReadPage(string targetId,Func<string,string,bool> allowed,CancellationToken ct)
+    {
+        var urls=new List<string>();
+        var before=await Look(targetId,allowed,urls,ct);
+        if(!before.Ok)return new(Hidden,urls);
+        int world=await World(targetId,before.Frame,before.Loader,ct);var s=await Session(targetId,ct);
         var r=await Call("Runtime.callFunctionOn",new(){["executionContextId"]=world,["functionDeclaration"]=FnRead,["returnByValue"]=true},s,ct);
-        var v=r.GetProperty("result").GetProperty("value");return v.GetProperty("text").GetString()??"";
+        var v=r.GetProperty("result").GetProperty("value");string text=v.GetProperty("text").GetString()??"",href=v.TryGetProperty("href",out var hv)?hv.GetString()??"":"";
+        urls.Add(href);
+        var after=await Look(targetId,allowed,urls,ct);
+        string title=(await TabOf(targetId,ct))?.Title??"";
+        if(!after.Ok||after.Frame!=before.Frame||after.Loader!=before.Loader||!allowed(href,title))return new(Hidden,urls);
+        return new(text,urls);
     }
     // ---- snapshot: interactive elements of the main frame, refs that die with the next snapshot or any navigation
     static readonly HashSet<string> Roles=new(StringComparer.Ordinal){"button","link","textbox","searchbox","combobox","checkbox","radio","menuitem","tab","option","switch","heading","listbox","slider","spinbutton","menuitemcheckbox","menuitemradio","treeitem"};
-    public async Task<(string Text,List<CdpNode> Nodes)> Snapshot(string targetId,CancellationToken ct)
+    public async Task<(string Text,List<CdpNode> Nodes,List<string> Urls)> Snapshot(string targetId,Func<string,string,bool> allowed,CancellationToken ct)
     {
-        var (frame,loader,url)=await Frame(targetId,ct);int world=await World(targetId,frame,loader,ct);var s=await Session(targetId,ct);
+        var urls=new List<string>();
+        var before=await Look(targetId,allowed,urls,ct);
+        if(!before.Ok)return (Hidden,[],urls);
+        var (frame,loader,url)=(before.Frame,before.Loader,urls[1]);int world=await World(targetId,frame,loader,ct);var s=await Session(targetId,ct);
         var tree=await Call("Accessibility.getFullAXTree",null,s,ct);
         snapshot++;refs.Clear();hrefs.Clear();var nodes=new List<CdpNode>();int inputs=0;
         foreach(var n in tree.GetProperty("nodes").EnumerateArray())
@@ -267,9 +297,12 @@ internal sealed class ChromeCdp:IDisposable
             var node=new CdpNode("s"+snapshot+"e"+(nodes.Count+1),targetId,frame,loader,url,bid.GetInt32(),role,name,pw,search,href);
             nodes.Add(node);refs[node.Ref]=node;
         }
+        // N6: the page may have moved while the tree was read: the same frame and loader, and still a page that may be read, or nothing (and no refs) comes back.
+        var after=await Look(targetId,allowed,urls,ct);
+        if(!after.Ok||after.Frame!=frame||after.Loader!=loader){refs.Clear();hrefs.Clear();return (Hidden,[],urls);}
         var sb=new StringBuilder();
         foreach(var n in nodes)sb.Append(n.Ref).Append(' ').Append(n.Role).Append(" \"").Append(Labels.Clean(n.Name)).Append('"').Append(n.Protected?" [geschützt]":"").Append(n.Search?" [suche]":"").Append('\n');
-        return (sb.ToString(),nodes);
+        return (sb.ToString(),nodes,urls);
     }
     public bool HrefInSnapshot(string url)=>hrefs.Contains(url);
     public CdpNode? Node(string reference)=>refs.TryGetValue(reference,out var n)?n:null;
@@ -312,16 +345,17 @@ internal sealed class ChromeCdp:IDisposable
         var info=await OnObject(s,obj,FnInfo,ct);
         if(!info.GetProperty("connected").GetBoolean())throw new StaleRefException("detached");
         var (fields,rcpt,digest)=ReadForm(await OnObject(s,obj,FnForm,ct));
+        var tv=await OnObject(s,obj,FnTarget,ct);string target=tv.ValueKind==JsonValueKind.String?tv.GetString()??"":"?";   // where the click goes is bound too: a page that rewrites its link between ask and click aborts it
         await Call("DOM.scrollIntoViewIfNeeded",new(){["backendNodeId"]=n.BackendId},s,ct);
         var box=await Call("DOM.getBoxModel",new(){["backendNodeId"]=n.BackendId},s,ct);
         var q=box.GetProperty("model").GetProperty("content").EnumerateArray().Select(e=>e.GetDouble()).ToArray();
         double x=(q[0]+q[2]+q[4]+q[6])/4,y=(q[1]+q[3]+q[5]+q[7])/4;
         var b=new ActionBinding().Set("target",n.TargetId).Set("frame",frame).Set("loader",loader).Set("origin",Domains.OriginPath(url)).Set("backend",n.BackendId).Set("role",role).Set("name",name)
-            .Set("form",digest).Set("tool",tool).Set("text",text??"");
+            .Set("form",digest).Set("href",target).Set("tool",tool).Set("text",text??"");
         return new(b,x,y,obj,world,s,fields,rcpt,info.GetProperty("pw").GetBoolean(),url);
     }
     // The focused element of a tab, for a key that asks (Enter): bound like a click, so the key goes where the question said. null = nothing focused.
-    public sealed record FocusBound(ActionBinding Binding,List<(string Name,string Value)> Fields,List<string> Rcpt,bool Pw,bool Search,string Name,string Role,string Url);
+    public sealed record FocusBound(ActionBinding Binding,List<(string Name,string Value)> Fields,List<string> Rcpt,bool Pw,bool Search,string Name,string Role,string Url,string Target);
     public async Task<FocusBound?> BindFocus(string targetId,string key,CancellationToken ct)
     {
         var (frame,loader,url)=await Frame(targetId,ct);int world=await World(targetId,frame,loader,ct);var s=await Session(targetId,ct);
@@ -337,8 +371,9 @@ internal sealed class ChromeCdp:IDisposable
         string name=first.ValueKind==JsonValueKind.Object&&first.TryGetProperty("name",out var nm)&&nm.TryGetProperty("value",out var nv)?nv.GetString()??"":"";
         var info=await OnObject(s,obj,FnFocusInfo,ct);
         var (fields,rcpt,digest)=ReadForm(await OnObject(s,obj,FnForm,ct));
-        var b=new ActionBinding().Set("target",targetId).Set("frame",frame).Set("loader",loader).Set("origin",Domains.OriginPath(url)).Set("backend",backend).Set("role",role).Set("name",name).Set("form",digest).Set("tool","key").Set("key",key);
-        return new(b,fields,rcpt,info.GetProperty("pw").GetBoolean(),info.GetProperty("search").GetBoolean(),name,role,url);
+        string target=info.TryGetProperty("target",out var tg)&&tg.ValueKind==JsonValueKind.String?tg.GetString()??"":"?";
+        var b=new ActionBinding().Set("target",targetId).Set("frame",frame).Set("loader",loader).Set("origin",Domains.OriginPath(url)).Set("backend",backend).Set("role",role).Set("name",name).Set("form",digest).Set("href",target).Set("tool","key").Set("key",key);
+        return new(b,fields,rcpt,info.GetProperty("pw").GetBoolean(),info.GetProperty("search").GetBoolean(),name,role,url,target);
     }
     // The hit test: the node under the centre of the element must be the element or inside it.
     async Task HitTest(Bound b,CdpNode n,CancellationToken ct)

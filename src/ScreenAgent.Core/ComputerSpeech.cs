@@ -11,22 +11,28 @@ public static class ComputerSpeech
         return "\"„“”‚‘’«»".IndexOf(c)>=0?'\'':c;
     }
     // One quoted piece of page text: „…“, no control characters, no quote marks inside, at most `words` words.
+    public const int WordChars=40;
     public static string Quote(string? s,int words=FieldWords)
     {
+        // A key or token on the page ("Feld token: ghp_…") must not be read to him, nor travel to the voice vendor: secret-looking values come out as "ausgeblendet" first.
         var sb=new StringBuilder();
-        foreach(char c in s??"")sb.Append(Clean(c));
+        foreach(char c in SecretText.Redact(s))sb.Append(Clean(c));
         var w=sb.ToString().Split(' ',StringSplitOptions.RemoveEmptyEntries);
-        string t=string.Join(" ",w.Take(words))+(w.Length>words?" …":"");
+        string t=string.Join(" ",w.Take(words).Select(x=>x.Length>WordChars?x[..WordChars]+"…":x))+(w.Length>words?" …":"");
         return "„"+t+"“";
     }
     // "Feld „to“: „chef@x.org“; Feld „subject“: „…“". Search boxes are left out by the caller; the first six non-empty fields, all of them quoted.
     public static string FormLine(IEnumerable<(string Name,string Value)> fields,IEnumerable<string>? recipients=null,bool messaging=false)
     {
-        var parts=fields.Where(f=>!string.IsNullOrWhiteSpace(f.Value)).Take(MaxFields).Select(f=>"Feld "+Quote(Labels.Clean(f.Name),4)+": "+Quote(f.Value)).ToList();
-        var rc=(recipients??[]).Where(r=>!string.IsNullOrWhiteSpace(r)).Distinct().Take(6).Select(r=>Quote(r,1)).ToList();
+        var all=fields.Where(f=>!string.IsNullOrWhiteSpace(f.Value)).ToList();
+        var parts=all.Take(MaxFields).Select(f=>"Feld "+Quote(Labels.Clean(f.Name),4)+": "+Quote(f.Value)).ToList();
+        var allRc=(recipients??[]).Where(r=>!string.IsNullOrWhiteSpace(r)).Distinct().ToList();
+        var rc=allRc.Take(6).Select(r=>Quote(r,1)).ToList();
         var sb=new StringBuilder();
         if(parts.Count>0)sb.Append(" Seitentext, nicht von dir gesprochen: ").Append(string.Join("; ",parts)).Append('.');
+        if(all.Count>MaxFields)sb.Append(" Und ").Append(all.Count-MaxFields).Append(" weitere Felder, die nicht vorgelesen werden.");
         if(rc.Count>0)sb.Append(" Empfänger laut Seite: ").Append(string.Join(", ",rc)).Append('.');
+        if(allRc.Count>6)sb.Append(" Und ").Append(allRc.Count-6).Append(" weitere Empfänger.");
         if(messaging)sb.Append(" Hinweis: Auf dieser Seite können Empfänger oder Text unvollständig erkannt sein.");
         return sb.ToString();
     }
@@ -45,6 +51,9 @@ public static class ComputerSpeech
         var rest=window[tab.Length..];
         return rest.Length==0||(rest.Length<=48&&(rest.StartsWith(" - ",StringComparison.Ordinal)||rest.StartsWith(" – ",StringComparison.Ordinal)||rest.StartsWith(" — ",StringComparison.Ordinal)));
     }
+    /// <summary>The longest question the gateway accepts is 1200 characters; the app cuts its own text before that (the tail is the part about taint, so the cut takes the middle).</summary>
+    public const int MaxSpoken=1100;
+    public static string Fit(string s)=>s.Length<=MaxSpoken?s:s[..(MaxSpoken/2)]+" … "+s[^(MaxSpoken/2-5)..];
     public static string Cap(string s,int n)=>s.Length<=n?s:s[..Math.Max(0,n-1)]+"…";
 }
 // Which windows lie above a target window and cover part of it (z-order from the top, the target excluded).

@@ -19,6 +19,7 @@ internal sealed class UiaDriver
     int snapshot;
     public static volatile int KeysSent;
     public UiaDriver(ComputerPolicy policy,Func<bool> revoked){this.policy=policy;this.revoked=revoked;}
+    public static string CapTitle(string? s)=>Cap(s,80);
     static string Cap(string? s,int n){s=new string((s??"").Where(c=>!char.IsControl(c)).ToArray());return s.Length<=n?s:s[..n];}
     public static string ProcessOf(IntPtr h)
     {
@@ -45,7 +46,8 @@ internal sealed class UiaDriver
         },IntPtr.Zero);
         return list;
     }
-    public string WindowListing(List<UiaWindow> ws)=>string.Join("\n",ws.Select(w=>w.Ref+" "+w.Process+" \""+(policy.ReadDenied(w.Process,w.Title,null)?"ausgeblendet":Cap(w.Title,80))+"\""+(w.Foreground?" [vorn]":"")));
+    // `title` decides what is shown for a window (the browser windows need their tab: ComputerAgent resolves it); without it the plain rule applies.
+    public string WindowListing(List<UiaWindow> ws,Func<UiaWindow,string>? title=null)=>string.Join("\n",ws.Select(w=>w.Ref+" "+w.Process+" \""+(title?.Invoke(w)??(policy.ReadDenied(w.Process,w.Title,null)?"ausgeblendet":Cap(w.Title,80)))+"\""+(w.Foreground?" [vorn]":"")));
     public UiaWindow? Window(string reference)=>windows.TryGetValue(reference,out var w)?w:null;
     public static UiaWindow Describe(IntPtr h)=>new("",h,ProcessOf(h),TitleOf(h),Root(Native.GetForegroundWindow())==h,ClassOf(h));
     // ---- tree (400 nodes at most, breadth first)
@@ -198,7 +200,7 @@ internal sealed class UiaDriver
             task.GetAwaiter().GetResult();
             return how;
         }
-        if(!allowMouse||h.Name.Length==0||ComputerPolicy.IsBrowser(h.Process))throw new InvalidOperationException("no-invoke");
+        if(!allowMouse||h.Name.Length==0||ComputerPolicy.IsBrowser(h.Process,h.Class))throw new InvalidOperationException("no-invoke");
         var r=h.El.Current.BoundingRectangle;int x=(int)(r.X+r.Width/2),y=(int)(r.Y+r.Height/2);
         var at=AutomationElement.FromPoint(new System.Windows.Point(x,y));
         if(at is null||!(Automation.Compare(at,el)||Inside(at,el)))throw new UiaStaleException("hit-other");

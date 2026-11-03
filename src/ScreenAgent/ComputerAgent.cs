@@ -37,7 +37,6 @@ internal sealed class ComputerAgent:IDisposable
     UiaDriver? uia;
     ChromeCdp? cdp;
     string? cdpFailure;
-    (string Process,string Title)? here;   // what was in front when he said "hier" (captured at the start, matched to a tab at the first CDP connect)
     bool handsOnNoted,confirmKeyNoted,hotkeyChecked;
     string lastGatewayGoal="";
     Work? pendingWork;
@@ -148,7 +147,13 @@ internal sealed class ComputerAgent:IDisposable
         long end=Environment.TickCount64+1500;
         for(;;){if(hook.Healthy||hook.ComputerHotkeyOk)return true;if(Environment.TickCount64>end)return false;Thread.Sleep(50);}
     }
-    (string Process,string Title) Front(){var h=UiaDriver.Root(Native.GetForegroundWindow());return (UiaDriver.ProcessOf(h),UiaDriver.TitleOf(h));}
+    (string Process,string Title,string Class) Front(){var h=UiaDriver.Root(Native.GetForegroundWindow());return (UiaDriver.ProcessOf(h),UiaDriver.TitleOf(h),UiaDriver.ClassOf(h));}
+    // "hier": the host of the tab that was in front when he said it, looked up NOW so the question can name it (a start that would add a host he did not hear is the thing to avoid). null = adds nothing.
+    string? ResolveHere(string goal,(string Process,string Title,string Class)? front)
+    {
+        if(front is not {} f)return null;
+        return ComputerScope.ResolveHere(goal,f.Process,f.Class,()=>{var c=Cdp(out _);return c?.TabForWindow(f.Process,f.Title).GetAwaiter().GetResult()?.Url;},policy,f.Title);
+    }
     string AskText(string head,string goal,ComputerScope scope)=>head+" Auftrag: "+ComputerSpeech.Quote(goal,60)+". "+ScopeText(scope)+".";
     void Start(Work w)
     {
@@ -157,7 +162,7 @@ internal sealed class ComputerAgent:IDisposable
         if(goal.Length==0){Send(w,Reply(false,ComputerCodes.Refused,null,"goal",null,null,null));return;}
         var more=ComputerScope.From(goal,null,boardHost);
         bool mentionsHere=ComputerScope.MentionsHere(goal);
-        var front=mentionsHere?Front():((string,string)?)null;
+        var front=mentionsHere?Front():((string,string,string)?)null;   // what was in front when he said "hier"
         ComputerRun? cur;
         lock(sync)
         {
@@ -170,12 +175,12 @@ internal sealed class ComputerAgent:IDisposable
             }
         }
         if(cur is not null){Extend(w,cur,goal,more,front);return;}
-        // ---- a new run
-        bool asks=!more.Empty;
+        // ---- a new run (unarmed while "hier" is still to be resolved)
+        bool asks=!more.Empty||mentionsHere;
         var nr=new ComputerRun(cmd.Run,goal,more,null,null,armed:!asks);
         lock(sync)
         {
-            run=nr;runSid=w.Sid;here=front;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;cdp=null;cdpFailure=null;pendingExec=null;pendingPlan=null;pendingWork=null;lastGatewayGoal=goal;
+            run=nr;runSid=w.Sid;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;try{cdp?.Dispose();}catch{ }cdp=null;cdpFailure=null;pendingExec=null;pendingPlan=null;pendingWork=null;lastGatewayGoal=goal;
             uia=new UiaDriver(policy,()=>nr.Revoked||nr.IsHandsOn||nr.IsClosed||nr.IsPaused);   // every driver and CDP call looks at this: hands-on, a close, a pause and the kill stop typing in flight
             ComputerGuard.Attach(nr);hook?.ComputerRunStarted();
         }
@@ -187,6 +192,11 @@ internal sealed class ComputerAgent:IDisposable
             Log("computer.refused",new(){["class"]="R3",["rule"]="no-kill-path",["run"]=cmd.Run,["hook"]=hook?.Healthy??false,["hotkey"]=hook?.ComputerHotkeyOk??false});
             Send(w,Reply(false,ComputerCodes.Refused,ActionClass.R3,"no-kill-path",null,null,null));return;
         }
+        // N3: "hier" is resolved before the ask is built; with no host found it adds nothing, and a start with nothing named only reads (no ask, armed).
+        if(mentionsHere&&ResolveHere(goal,front) is {} hereHost){nr.Scope.Hosts.Add(hereHost);Log("computer.run.here",new(){["run"]=cmd.Run,["resolved"]=true});}
+        else if(mentionsHere)Log("computer.run.here",new(){["run"]=cmd.Run,["resolved"]=false,["reason"]=cdpFailure??"no-tab"});
+        asks=!nr.Scope.Empty;
+        if(!asks)nr.Arm();
         ui.Invoke(()=>{overlay.Show(goal);overlay.Update(asks?"wartet auf deine Bestätigung":"läuft",0,150);});
         bool logged=Log("computer.run.start",new(){["run"]=cmd.Run,["goal"]=ComputerRedact.Goal(goal),["hosts"]=nr.Scope.Hosts.Count,["apps"]=nr.Scope.Apps.Count,["hotkey"]=hook?.ComputerHotkeyOk??false,["hook"]=hook?.Healthy??false,["scope_empty"]=nr.Scope.Empty,["asks"]=asks});
         notice?.Invoke("Computer-Steuerung läuft · Strg+Win+Umschalt+X stoppt");
@@ -199,13 +209,14 @@ internal sealed class ComputerAgent:IDisposable
         Propose(w,nr,plan,Verdict.Of(ActionClass.R2,"run-start"),new(){["run"]=nr.Id,["seq"]=cmd.Seq,["tool"]="start",["class"]="R2",["rule"]="run-start"});
     }
     // An extension: the goal and the scope grow, so he confirms with the code or the chord (one ask) and the overlay shows the new goal. An empty result scope needs no ask.
-    void Extend(Work w,ComputerRun cur,string goal,ComputerScope more,(string Process,string Title)? front)
+    void Extend(Work w,ComputerRun cur,string goal,ComputerScope more,(string Process,string Title,string Class)? front)
     {
+        if(ResolveHere(goal,front) is {} hereHost)more.Hosts.Add(hereHost);   // N3: "hier" in an extension is resolved before the ask too
         var merged=ComputerScope.From("");foreach(var h in cur.Scope.Hosts.Concat(more.Hosts))merged.Hosts.Add(h);foreach(var a in cur.Scope.Apps.Concat(more.Apps))merged.Apps.Add(a);
         string added=goal.StartsWith(lastGatewayGoal,StringComparison.Ordinal)&&goal.Length>lastGatewayGoal.Length?goal[lastGatewayGoal.Length..].Trim():goal;
         Func<ActionBinding?,string> apply=_=>
         {
-            cur.Extend(goal,more);lastGatewayGoal=goal;handsOnNoted=false;uia?.Windows();cdp?.ClearRefs();if(front is {} f)here=f;
+            cur.Extend(goal,more);lastGatewayGoal=goal;handsOnNoted=false;uia?.Windows();cdp?.ClearRefs();
             Log("computer.run.extend",new(){["run"]=cur.Id,["goal"]=ComputerRedact.Goal(goal),["hosts"]=cur.Scope.Hosts.Count});
             ui.BeginInvoke(()=>{overlay.SetGoal(cur.Goal);overlay.Update("läuft",cur.Actions,150);});
             return "erweitert";
@@ -272,7 +283,7 @@ internal sealed class ComputerAgent:IDisposable
     {
         var h=UiaDriver.Root(Native.GetForegroundWindow());string p=UiaDriver.ProcessOf(h),t=UiaDriver.TitleOf(h);
         CdpTab? tab=null;string? url=null;
-        if(cdp is {Open_:true} c&&ComputerPolicy.IsBrowser(p)){try{tab=c.TabByTitle(t).GetAwaiter().GetResult();url=tab?.Url;}catch{ }}   // no CDP url known: the window then counts as a browser without a verified url (R2)
+        if(cdp is {Open_:true} c&&ComputerPolicy.IsBrowser(p)){try{tab=c.TabForWindow(p,t).GetAwaiter().GetResult();url=tab?.Url;}catch{ }}   // only the browser that owns the debugging port has a tab for its window   // no CDP url known: the window then counts as a browser without a verified url (R2)
         return new(h,p,t,url,tab);
     }
     ChromeCdp? Cdp(out string? failure)
@@ -285,11 +296,6 @@ internal sealed class ComputerAgent:IDisposable
         {
             cdp=ChromeCdp.Connect(chromeOptions,()=>r.Revoked,(t,d)=>Log(t,d),CancellationToken.None).GetAwaiter().GetResult();
             Log("computer.chrome.connected",new(){["run"]=r.Id,["port"]=cdp.Port,["version"]=cdp.BrowserVersion});
-            if(here is {} hc)
-            {   // "hier": what was in front when he SAID it (captured at the start), only a browser window, matched by the exact tab title
-                here=null;
-                if(ComputerPolicy.IsBrowser(hc.Process)&&cdp.TabByTitle(hc.Title).GetAwaiter().GetResult() is {} tab&&Domains.HostOf(tab.Url) is {} host)r.Scope.Hosts.Add(host);
-            }
             return cdp;
         }
         catch(CdpException e){cdpFailure=e.Code;failure=e.Code;Log("computer.chrome.failed",new(){["run"]=r.Id,["reason"]=e.Code,["detail"]=e.Message});return null;}
@@ -324,7 +330,7 @@ internal sealed class ComputerAgent:IDisposable
             var made=Build(cmd,r);
             if(made.Refusal is {} refusal){Refuse(w,r,tool,refusal.Class,refusal.Rule,refusal.Message);return;}
             plan=made.Plan!;
-            plan=plan with{Ctx=plan.Ctx with{Tainted=r.Tainted}};
+            plan=plan with{Ctx=plan.Ctx with{Tainted=r.Tainted,ReadOrigins=r.ReadOrigins}};
             v=policy.Classify(plan.Ctx,r.Scope);
         }
         catch(StaleRefException){Refuse(w,r,tool,null,"stale-ref",null,ComputerCodes.StaleRef);return;}   // refused with stale-ref, logged by Refuse
@@ -364,13 +370,14 @@ internal sealed class ComputerAgent:IDisposable
         var pure=binding.Clone();
         binding.Set("rule",v.Rule).Set("args",w.Cmd.Args.ValueKind==JsonValueKind.Object?w.Cmd.Args.GetRawText():"");
         string hash=binding.Hash(),code=ConfirmCode.Draw();
-        var ask=new PendingAsk(plan.Ctx.Tool,hash,say.Spoken,code,Environment.TickCount64,pure,w.Cmd.Args,v.Class.ToString(),v.Rule);
-        if(r.Propose(ask) is {} stop){Send(w,Reply(false,stop.Code,v.Class,stop.Rule,null,null,r.StateName));EndRun(stop.Rule);return;}
+        string spoken=ComputerSpeech.Fit(say.Spoken);   // the gateway refuses more than 1200 characters; a page cannot make the app send one that stays open for 60 s
+        var ask=new PendingAsk(plan.Ctx.Tool,hash,spoken,code,Environment.TickCount64,pure,w.Cmd.Args,v.Class.ToString(),v.Rule);
+        if(r.Propose(ask) is {} stop){Send(w,Reply(false,stop.Code,v.Class,stop.Rule,null,null,r.StateName));if(r.IsClosed)EndRun(stop.Rule);return;}   // "ask-open" leaves the run and the open ask alone
         pendingExec=plan.Exec;pendingPlan=plan;pendingWork=w;confirmKeyNoted=false;
-        ui.Invoke(()=>overlay.Ask(code,say.Spoken));
+        ui.Invoke(()=>overlay.Ask(code,spoken));
         // The code is on the overlay only: it is in neither the log nor the reply.
         Log("computer.confirm.ask",new(data){["hash"]=hash,["spoken"]=say.ForLog});
-        Send(w,Reply(false,ComputerCodes.NeedsConfirm,v.Class,v.Rule,null,new ComputerWire.NeedsConfirm(hash,say.Spoken),r.StateName));
+        Send(w,Reply(false,ComputerCodes.NeedsConfirm,v.Class,v.Rule,null,new ComputerWire.NeedsConfirm(hash,spoken),r.StateName));
     }
     void Confirm(Work w,ComputerRun r)
     {
@@ -463,14 +470,14 @@ internal sealed class ComputerAgent:IDisposable
         switch(tool)
         {
             case "ui_windows":
-                return new(P(new(tool),()=>null,_=>u.WindowListing(u.Windows()),()=>("",""),"",false,true),null);
+                return new(P(new(tool),()=>null,_=>u.WindowListing(u.Windows(),w=>ListedTitle(w,r)),()=>("",""),"",false,true),null);
             case "ui_tree":
             {
                 var win=u.Window(Arg(cmd,"window")??"");if(win is null)throw new UiaStaleException("window");
                 // F2: the accessibility tree of a browser carries the page (any origin, out of scope, one-time-code fields): browsers are read through CDP only
-                if(ComputerPolicy.IsBrowser(win.Process))return No(ActionClass.R3,"use-cdp","Im Browser: chrome_* Werkzeuge nutzen.");
-                bool sens=!policy.ReadDenied(win.Process,win.Title,null)&&policy.SensitiveRead(win.Process,win.Title,null);
-                return new(P(new(tool){Process=win.Process,Title=win.Title},()=>null,_=>u.Tree(win).Text,()=>("",""),win.Process,false,true,sens),null);
+                if(ComputerPolicy.IsBrowser(win.Process,win.Class))return No(ActionClass.R3,"use-cdp","Im Browser: chrome_* Werkzeuge nutzen.");
+                bool denied=policy.ReadDenied(win.Process,win.Title,null);bool sens=!denied&&policy.SensitiveRead(win.Process,win.Title,null);
+                return new(P(new(tool){Process=win.Process,Title=win.Title},()=>null,_=>{string t=u.Tree(win).Text;if(!denied)r.NoteRead(ComputerPolicy.ReadOrigin(win.Process,null));return t;},()=>("",""),win.Process,false,true,sens),null);
             }
             case "window_focus":
             {
@@ -482,18 +489,19 @@ internal sealed class ComputerAgent:IDisposable
                 // F2: only a window (never the whole screen) with a verified in-scope URL (a browser) or a non-browser window that is not read-denied, and only when no other window lies over it.
                 string? wr=Arg(cmd,"window");var win=wr is not null?u.Window(wr):null;if(wr is not null&&win is null)throw new UiaStaleException("window");
                 var fg=Foreground();IntPtr h=win?.Hwnd??fg.Hwnd;string proc=win?.Process??fg.Process,title=win?.Title??fg.Title;
-                string? shotUrl=win is null?fg.Url:null;
-                if(ComputerPolicy.IsBrowser(proc)&&shotUrl is null)
-                {   // the window's tab is looked up by its exact title; no CDP, no tie-free match: no verified URL
-                    var c=Cdp(out _);if(c is not null&&c.TabByTitle(title).GetAwaiter().GetResult() is {} t)shotUrl=t.Url;
+                string? shotUrl=win is null?fg.Url:null;bool isBrowser=ComputerPolicy.IsBrowser(proc,UiaDriver.ClassOf(h));
+                if(isBrowser&&shotUrl is null)
+                {   // the window's tab is looked up by its exact title, in the browser that owns the debugging port only; no CDP, no tie-free match: no verified URL
+                    var c=Cdp(out _);if(c is not null&&c.TabForWindow(proc,title).GetAwaiter().GetResult() is {} t)shotUrl=t.Url;
                 }
                 bool denied=policy.ReadDenied(proc,title,shotUrl);
-                bool verified=!ComputerPolicy.IsBrowser(proc)||(shotUrl is not null&&Domains.HostOf(shotUrl) is {} sh&&r.Scope.Reaches(sh));
+                bool verified=!isBrowser||(shotUrl is not null&&Domains.HostOf(shotUrl) is {} sh&&r.Scope.Reaches(sh));
                 bool sens=!denied&&verified&&policy.SensitiveRead(proc,title,shotUrl);
                 return new(P(new(tool){Process=proc,Title=title,Url=shotUrl},()=>null,_=>
                 {
                     if(denied||!verified)return "ausgeblendet";
                     if(UiaDriver.Covered(h))return "ausgeblendet (ein anderes Fenster liegt über diesem)";
+                    r.NoteRead(ComputerPolicy.ReadOrigin(proc,shotUrl));
                     return Shot(h);
                 },()=>("",""),proc,false,true,sens),null);
             }
@@ -504,10 +512,12 @@ internal sealed class ComputerAgent:IDisposable
                 {
                     var c=Cdp(out var fail);if(c is null)return No(ActionClass.R3,fail!,CdpMessage(fail!));
                     var tab=c.TabOf(tid).GetAwaiter().GetResult();if(tab is null||!Visible(tab,r))return No(ActionClass.R3,"tab-scope");
-                    return new(P(new(tool){Process="chrome",Url=tab.Url},()=>null,_=>{c.Scroll(tid,dy,CancellationToken.None).GetAwaiter().GetResult();return "gescrollt";},()=>("",""),"tab"),null);
+                    string at=Domains.HostOf(tab.Url)??"?";
+                    return new(P(new(tool){Process="chrome",Url=tab.Url},()=>null,_=>{c.Scroll(tid,dy,CancellationToken.None).GetAwaiter().GetResult();return "gescrollt";},()=>("Scrollen um "+dy+" auf "+at+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Scrollen "+Domains.Etld1(at)),"tab"),null);
                 }
                 var win=Arg(cmd,"window") is {} wr?u.Window(wr):null;var fg=Foreground();IntPtr h=win?.Hwnd??fg.Hwnd;
-                return new(P(new(tool){Process=win?.Process??fg.Process,Title=win?.Title??fg.Title,Url=win is null?fg.Url:null},()=>null,_=>u.Scroll(h,dy),()=>("",""),win?.Process??fg.Process,true),null);
+                string sproc=win?.Process??fg.Process;
+                return new(P(new(tool){Process=sproc,Title=win?.Title??fg.Title,Url=win is null?fg.Url:null},()=>null,_=>u.Scroll(h,dy),()=>("Scrollen um "+dy+" im Fenster "+Labels.Clean(sproc)+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Scrollen "+Labels.Clean(sproc)),sproc,true),null);
             }
             case "key":
                 return KeyPlan(cmd,r,u,P);
@@ -515,7 +525,7 @@ internal sealed class ComputerAgent:IDisposable
             case "ui_type":
             {
                 var h=u.Held(Arg(cmd,"ref",40)??"");if(h is null)throw new UiaStaleException("ref");
-                if(ComputerPolicy.IsBrowser(h.Process))return No(ActionClass.R3,"use-cdp","Im Browser: chrome_* Werkzeuge nutzen.");
+                if(ComputerPolicy.IsBrowser(h.Process,h.Class))return No(ActionClass.R3,"use-cdp","Im Browser: chrome_* Werkzeuge nutzen.");
                 string? text=tool=="ui_type"?Arg(cmd,"text"):null;
                 var ctx=u.Context(h,tool,text);
                 string label=Labels.Spoken(h.Name);
@@ -530,6 +540,7 @@ internal sealed class ComputerAgent:IDisposable
                 {
                     var tabs=c.VisibleTabs(r.Scope).GetAwaiter().GetResult();
                     if(tabs.Any(t=>!policy.ReadDenied("chrome",t.Title,t.Url)&&policy.SensitiveRead("chrome",t.Title,t.Url)))r.Taint();   // the titles of a mail tab are mail
+                    foreach(var t in tabs)if(!policy.ReadDenied("chrome",t.Title,t.Url))r.NoteRead(ComputerPolicy.ReadOrigin("chrome",t.Url));
                     return c.TabListing(tabs.Select(t=>policy.ReadDenied("chrome",t.Title,t.Url)?t with{Title="ausgeblendet"}:t).ToList());
                 },()=>("",""),"tabs",false,true),null);
             }
@@ -541,7 +552,7 @@ internal sealed class ComputerAgent:IDisposable
                 string host=Domains.HostOf(url)??"?";
                 string? opens=Domains.HostOf(url) is {} oh&&!r.Scope.ContainsHost(oh)?oh:null;
                 return new(P(ctx,()=>new ActionBinding().Set("tool",tool).Set("url",url),_=>{var t=c.Open(url).GetAwaiter().GetResult();return c.TabListing([t]);},
-                    ()=>("Öffne eine Seite auf "+host+(Domains.Etld1(host)!=host?" (Domain "+Domains.Etld1(host)+")":"")+"."+ComputerSpeech.PathPart(url)+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Öffne "+Domains.Etld1(host)),host,false,true,false,true,opens),null);
+                    ()=>("Öffne eine Seite auf "+host+(Uri.TryCreate(url,UriKind.Absolute,out var ou)&&!ou.IsDefaultPort?" Port "+ou.Port:"")+(Domains.Etld1(host)!=host?" (Domain "+Domains.Etld1(host)+")":"")+"."+ComputerSpeech.PathPart(url)+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Öffne "+Domains.Etld1(host)),host,false,true,false,true,opens),null);
             }
             case "chrome_snapshot":
             case "chrome_read":
@@ -549,8 +560,22 @@ internal sealed class ComputerAgent:IDisposable
                 var c=Cdp(out var fail);if(c is null)return No(ActionClass.R3,fail!,CdpMessage(fail!));
                 string tid=Arg(cmd,"tab",80)??"";var tab=c.TabOf(tid).GetAwaiter().GetResult();if(tab is null||!Visible(tab,r))return No(ActionClass.R3,"tab-scope");
                 bool denied=policy.ReadDenied("chrome",tab.Title,tab.Url);
+                // N6: the page can flip the tab between origins while it is read. Every read is allowed by the URL it really saw: frame id, loader and URL before and after, and the document's own location.
+                Func<string,string,bool> allowed=(u2,t2)=>Domains.HostOf(u2) is {} h2&&r.Scope.Reaches(h2)&&!policy.ReadDenied("chrome",t2,u2);
                 return new(P(new(tool){Process="chrome",Url=tab.Url,Title=tab.Title},()=>null,_=>
-                    denied?"ausgeblendet":tool=="chrome_read"?c.ReadPage(tid,CancellationToken.None).GetAwaiter().GetResult():c.Snapshot(tid,CancellationToken.None).GetAwaiter().GetResult().Text,()=>("",""),"tab",false,true,!denied&&policy.SensitiveRead("chrome",tab.Title,tab.Url)),null);
+                {
+                    if(denied)return "ausgeblendet";
+                    string text;List<string> seen;
+                    if(tool=="chrome_read"){var pr=c.ReadPage(tid,allowed,CancellationToken.None).GetAwaiter().GetResult();text=pr.Text;seen=pr.Urls;}
+                    else{var sn=c.Snapshot(tid,allowed,CancellationToken.None).GetAwaiter().GetResult();text=sn.Text;seen=sn.Urls;}
+                    foreach(var su in seen.Distinct())   // taint and origin by what was really there, not by the URL the decision was made on
+                    {
+                        if(Domains.HostOf(su) is null||policy.ReadDenied("chrome",tab.Title,su))continue;
+                        if(policy.SensitiveRead("chrome",tab.Title,su))r.Taint();
+                        r.NoteRead(ComputerPolicy.ReadOrigin("chrome",su));
+                    }
+                    return text;
+                },()=>("",""),"tab",false,true),null);
             }
             case "chrome_click":
             case "chrome_fill":
@@ -590,22 +615,26 @@ internal sealed class ComputerAgent:IDisposable
         var fg0=Foreground();
         if(ComputerPolicy.IsBrowser(fg0.Process)&&cdp is null)Cdp(out _);   // the focused field of a browser is read through CDP; without it an asking key is refused
         var fg=Foreground();
-        (ActionBinding? B,bool Search,bool Pw,string Name,string Words,string Where) Focus()
+        (ActionBinding? B,bool Search,bool Pw,string Name,string Words,string Where,string Target) Focus()
         {
-            if(ComputerPolicy.IsBrowser(fg.Process))
+            if(ComputerPolicy.IsBrowser(fg.Process,UiaDriver.ClassOf(fg.Hwnd)))
             {
-                if(cdp is not {Open_:true} c||fg.Tab is null)return (null,false,false,"","","");
+                if(cdp is not {Open_:true} c||fg.Tab is null)return (null,false,false,"","","","");
                 var f=c.BindFocus(fg.Tab.TargetId,shown,CancellationToken.None).GetAwaiter().GetResult();
-                if(f is null)return (null,false,false,"","","");
+                if(f is null)return (null,false,false,"","","","");
                 string host=Domains.HostOf(f.Url)??"?";
-                return (f.Binding,f.Search,f.Pw,f.Name,ComputerSpeech.FormLine(f.Fields,f.Rcpt,policy.Messaging(host)),"auf "+host);
+                // N4: a page that may not be read has no focus to ask about (R3); a page outside the scope is named by its host only, none of its field names or values are spoken.
+                if(policy.ReadDenied(fg.Process,fg.Title,f.Url))return (null,false,false,"","","","");
+                bool reach=Domains.HostOf(f.Url) is {} fh&&r.Scope.Reaches(fh);
+                return (f.Binding,f.Search,f.Pw,reach?f.Name:"",reach?ComputerSpeech.FormLine(f.Fields,f.Rcpt,policy.Messaging(host)):"","auf "+host+(reach?"":" (außerhalb des Auftrags)"),f.Target);
             }
             var uf=u.FocusBinding(chord,fg.Hwnd);
-            return uf is null?(null,false,false,"","",""):(uf.Binding,uf.Type=="Edit"&&System.Text.RegularExpressions.Regex.IsMatch(uf.Name,@"(?i)(such|search)"),uf.Password,uf.Name,"","im Programm "+Labels.Clean(uf.Process));
+            return uf is null?(null,false,false,"","","",""):(uf.Binding,uf.Type=="Edit"&&System.Text.RegularExpressions.Regex.IsMatch(uf.Name,@"(?i)(such|search)"),uf.Password,uf.Name,"","im Programm "+Labels.Clean(uf.Process),"");
         }
-        bool needsFocus=KeyChord.IsEnter(shown)||ComputerPolicy.ComposerOrSensitiveProcess(fg.Process)||(fg.Url is not null&&policy.Messaging(Domains.HostOf(fg.Url)??""));
-        var focus=needsFocus?Focus():(null,false,false,"","","");
-        var ctx=new ActionContext("key"){Process=fg.Process,Title=fg.Title,Url=fg.Url,Key=chord,SearchBox=focus.Search,FocusVerified=focus.B is not null&&!focus.Pw};
+        // Under taint every key asks (a key is a few bits the page can read), so every key needs a bound focus.
+        bool needsFocus=KeyChord.IsEnter(shown)||r.Tainted||ComputerPolicy.ComposerOrSensitiveProcess(fg.Process)||(fg.Url is not null&&policy.Messaging(Domains.HostOf(fg.Url)??""));
+        var focus=needsFocus?Focus():(null,false,false,"","","","");
+        var ctx=new ActionContext("key"){Process=fg.Process,Title=fg.Title,Url=fg.Url,Key=chord,SearchBox=focus.Search,FocusVerified=focus.B is not null&&!focus.Pw,Href=focus.Target is {Length:>0} ft?ft:null};
         return new(P(ctx,()=>focus.B??new ActionBinding().Set("tool","key").Set("key",shown).Set("fg",fg.Hwnd).Set("title",fg.Title),exp=>
         {
             var now=Foreground();if(now.Hwnd!=fg.Hwnd)throw new UiaStaleException("not-foreground");
@@ -616,9 +645,25 @@ internal sealed class ComputerAgent:IDisposable
                 if(fresh.B is null||fresh.Pw||!exp.Same(fresh.B))throw new UiaStaleException("changed:"+(fresh.B is null?"focus":string.Join(",",exp.Diff(fresh.B))));
             }
             return u.Key(chord,fg.Hwnd);
-        },()=>("Taste "+shown+(focus.B is not null?" im Feld "+ComputerSpeech.Quote(Labels.Clean(focus.Name),4)+" "+focus.Where+"."+focus.Words:" im Fenster "+Labels.Clean(fg.Process))+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Taste "+shown+" "+Labels.Clean(fg.Process)),fg.Process,true,false,false,fg.Tab is not null,null),null);
+        },()=>("Taste "+shown+(focus.B is not null?(focus.Name.Length>0?" im Feld "+ComputerSpeech.Quote(Labels.Clean(focus.Name),4):" im fokussierten Feld")+" "+focus.Where+"."+(focus.Target.Length>0&&Domains.HostOf(focus.Target) is {} th&&!r.Scope.ContainsHost(th)?" Die Taste führt zu "+th+"."+ComputerSpeech.PathPart(focus.Target):"")+focus.Words:" im Fenster "+Labels.Clean(fg.Process))+(r.Tainted?" Der Lauf hat vorher vertrauliche Seiten gelesen.":""),"Taste "+shown+" "+Labels.Clean(fg.Process)),fg.Process,true,false,false,fg.Tab is not null,null),null);
     }
     static string Spoken(string text)=>text.Length<=200?"„"+text+"“":"„"+text[..200]+"“ und "+(text.Length-200)+" weitere Zeichen";
+    // What ui_windows shows for one window: a browser window only through its tab (in scope, not read-denied), anything else by the plain rule; what is shown and sensitive taints the run.
+    string ListedTitle(UiaWindow w,ComputerRun r)
+    {
+        string? url=null;
+        if(ComputerPolicy.IsBrowser(w.Process,w.Class))
+        {
+            CdpTab? tab=null;
+            try{if(Cdp(out _) is {Open_:true} c)tab=c.TabForWindow(w.Process,w.Title).GetAwaiter().GetResult();}catch(Exception e) when(e is CdpException or TimeoutException){ }   // no tab found: the title stays hidden
+            if(tab is null||!Visible(tab,r))return "ausgeblendet";
+            url=tab.Url;
+        }
+        if(policy.ReadDenied(w.Process,w.Title,url))return "ausgeblendet";
+        if(policy.SensitiveRead(w.Process,w.Title,url))r.Taint();
+        r.NoteRead(ComputerPolicy.ReadOrigin(w.Process,url));
+        return UiaDriver.CapTitle(w.Title);
+    }
     bool Visible(CdpTab tab,ComputerRun r)=>Domains.HostOf(tab.Url) is {} h&&r.Scope.Reaches(h);   // in the scope or approved by a confirmed open; being a tab the run opened is not enough
     // A window or the whole screen as a small JPEG for the loop only. The overlay is not in it (excluded from capture).
     static string Shot(IntPtr hwnd)

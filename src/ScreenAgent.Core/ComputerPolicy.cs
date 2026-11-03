@@ -62,7 +62,7 @@ public sealed class ComputerScope
     public HashSet<string> Hosts {get;}=new(StringComparer.Ordinal);
     public HashSet<string> Apps {get;}=new(StringComparer.Ordinal);
     public bool Empty=>Hosts.Count==0&&Apps.Count==0;
-    // Hosts he approved to open by a confirmed R2 (an out-of-scope navigation). They are visible to reads, but NOT in the scope: every click there stays R2.
+    // Hosts he approved to open by a confirmed R2 (an out-of-scope navigation), exactly as approved. They are visible to reads, but NOT in the scope: every click there stays R2.
     public HashSet<string> Opened {get;}=new(StringComparer.Ordinal);
     // Word table: what a spoken name stands for. Only the verbatim goal is looked at, never a list of words the gateway made up.
     static readonly Dictionary<string,string> HostWords=new(StringComparer.Ordinal)
@@ -103,7 +103,16 @@ public sealed class ComputerScope
     }
     public bool ContainsHost(string host)=>Hosts.Any(h=>Domains.Within(host,h));
     public bool ContainsApp(string process)=>Apps.Contains(process);
-    public bool Reaches(string host)=>ContainsHost(host)||Opened.Any(h=>Domains.Within(host,h));
+    // Opened hosts count exactly: approving "google.com" does not make mail.google.com readable.
+    public bool Reaches(string host)=>ContainsHost(host)||Opened.Contains(host);
+    /// <summary>"hier": the host of the browser tab that was in front when he said it, only when the goal says "hier" as a whole word, the window is a browser, the tab resolves by its exact title and the page may be read. null adds nothing.</summary>
+    public static string? ResolveHere(string goal,string? process,string? windowClass,Func<string?> tabUrl,ComputerPolicy policy,string? title=null)
+    {
+        if(!MentionsHere(goal)||process is null||!ComputerPolicy.IsBrowser(process,windowClass))return null;
+        string? url;try{url=tabUrl();}catch{return null;}   // a tab that cannot be looked up adds nothing
+        string? host=Domains.HostOf(url);
+        return host is null||policy.ReadDenied(process,title,url)?null:host;
+    }
 }
 // Everything the policy needs to know about one proposed action. The page controls Label and Title: they can only ever raise a class.
 public sealed record ActionContext(string Tool)
@@ -126,10 +135,11 @@ public sealed record ActionContext(string Tool)
     public string? Href {get;init;}           // where a click would go, read live in the page: closest a[href], form action, formaction (null = nothing)
     public bool Tainted {get;init;}           // the run read a sensitive target or a server_read: every outward action asks
     public bool FocusVerified {get;init;}     // key: the focused element of the foreground window/tab was read and bound
+    public IReadOnlyCollection<string>? ReadOrigins {get;init;}   // origins (or "app:<process>") the run has read so far: a click, fill or type on another one asks
 }
 public static class Labels
 {
-    static readonly Regex Send=new(@"(?i)\b(send\w*|senden|absenden|abschicken|submit|buy|kaufen|bestellen|order|pay|bezahlen|zahlen|post|tweet|publish|veröffentlichen|ver[oö]ffentlichen|confirm|bestätigen|best[aä]tigen|accept|akzeptieren|zustimmen|allow|zulassen|grant|authorize|genehmigen|install|download|herunterladen|upload|hochladen|forward|weiterleiten|reply|antworten|share|teilen|invite|einladen|unsubscribe|abbestellen|save|speichern|apply|anwenden|deploy|merge|transfer|überweisen|ueberweisen|sign|unterschreiben)\b",RegexOptions.Compiled,TimeSpan.FromMilliseconds(100));
+    static readonly Regex Send=new(@"(?i)\b(send\w*|senden|absenden|abschicken|submit|buy|kaufen|bestellen|order|pay|bezahlen|zahlen|post|tweet|publish|veröffentlichen|ver[oö]ffentlichen|confirm|bestätigen|best[aä]tigen|accept|akzeptieren|zustimmen|allow|zulassen|grant|authorize|genehmigen|install|download|herunterladen|upload|hochladen|forward|weiterleiten|reply|antworten|share|teilen|invite|einladen|unsubscribe|abbestellen|save|speichern|apply|anwenden|deploy|merge|transfer|überweisen|ueberweisen|sign|unterschreiben|bestell\w*|buch(?:en|ung)\w*|book\w*|kasse|checkout|check\s+out|abonnier\w*|subscri\w*|kostenpflichtig\w*|zahlungspflichtig\w*|kauf\w*|purchase\w*|payment|donat\w*|spend\w*|place\s+order|jetzt\s+buchen)\b",RegexOptions.Compiled,TimeSpan.FromMilliseconds(100));
     static readonly Regex Delete=new(@"(?i)\b(delete|löschen|loeschen|remove|entfernen|trash|papierkorb|discard|verwerfen|clear|leeren|erase|destroy|reset|zurücksetzen|logout|abmelden|disconnect|trennen|revoke|widerrufen|cancel subscription|kündigen)\b",RegexOptions.Compiled,TimeSpan.FromMilliseconds(100));
     public static bool SendLike(string? label)=>Match(Send,label);
     public static bool DeleteLike(string? label)=>Match(Delete,label);
@@ -193,26 +203,41 @@ public sealed class ComputerPolicy
     static readonly string[] StartSearch=["searchhost","searchapp","searchui","startmenuexperiencehost","shellexperiencehost"];
     public static readonly string[] ComposerApps=["code","code - insiders","code-insiders","cursor","windsurf","claude","zed","kiro","trae","codex"];
     public static readonly string[] SensitiveApps=["outlook","olk","thunderbird","ms-teams","teams","slack","discord","telegram","whatsapp","signal","mailspring","winmail"];
-    public static readonly string[] Browsers=["chrome","msedge","firefox","brave","opera","vivaldi","arc"];
+    public static readonly string[] Browsers=["chrome","msedge","firefox","brave","opera","vivaldi","arc","chromium","librewolf","zen","tor","waterfox","thorium","iexplore","msedgewebview2","yandex","browser","comet","dia","floorp","palemoon","opera_gx","operagx","duckduckgo","sidekick","slimjet","maxthon","ungoogled-chromium"];
+    // Window classes of browser engines: an unlisted Chromium or Gecko shell counts as a browser too (the page is read through CDP or not at all).
+    public static readonly string[] BrowserClasses=["Chrome_WidgetWin_0","Chrome_WidgetWin_1","MozillaWindowClass","MozillaDialogClass"];
     public static readonly string[] PasswordHosts=["bitwarden.com","bitwarden.eu","1password.com","1password.eu","lastpass.com","dashlane.com","keepersecurity.com","nordpass.com","enpass.io","roboform.com","passwords.google.com","passwords.google","keepass.info"];
     public static readonly string[] Money=
     [
         "paypal.com","paypal.me","stripe.com","wise.com","revolut.com","n26.com","finanzblick.de","sparkasse.de","commerzbank.de","deutsche-bank.de","ing.de","dkb.de","comdirect.de","consorsbank.de","postbank.de","hypovereinsbank.de",
-        "volksbank.de","raiffeisen.de","targobank.de","santander.de","coinbase.com","binance.com","kraken.com","bitpanda.com","klarna.com","paysafe.com","skrill.com","wallet.google.com","pay.google.com","pay.amazon.com","banking.com"
+        "volksbank.de","raiffeisen.de","targobank.de","santander.de","coinbase.com","binance.com","kraken.com","bitpanda.com","klarna.com","paysafe.com","skrill.com","wallet.google.com","pay.google.com","pay.amazon.com","banking.com",
+        "haspa.de","apobank.de","bunq.com","gls.de","tomorrow.one","sskm.de","norisbank.de","bbbank.de","sparda.de","psd-bank.de","traderepublic.com","scalable.capital","flatex.de","trading212.com","etoro.com"
     ];
     // Pattern rules on the registrable label (the first label of the eTLD+1), any TLD: sparkasse-koelnbonn.de, vr-bank-x.de, volksbank-y.de, dkb.de, ing.com ... and the exchanges and wallets.
     public static readonly string[] MoneyLabels=["paypal","n26","dkb","ing","comdirect","consorsbank","finanzblick","postbank","commerzbank","hypovereinsbank","targobank","santander","revolut","wise","klarna",
-        "coinbase","binance","kraken","bitpanda","bitstamp","bitfinex","bybit","kucoin","okx","bitvavo","ledger","trezor","metamask"];
-    public static readonly string[] MoneyPrefixes=["sparkasse-","volksbank-","vr"];
+        "coinbase","binance","kraken","bitpanda","bitstamp","bitfinex","bybit","kucoin","okx","bitvavo","ledger","trezor","metamask","haspa","apobank","bunq","gls","tomorrow","sskm","norisbank","traderepublic","scalable","flatex","trading212","etoro","hvb","raiffeisen","skrill","paysafe"];
+    public static readonly string[] MoneyPrefixes=["sparkasse-","volksbank-","vr","ksk-","ssk-","sparda-","psd-"];
+    // "sparkasse" and "volksbank" anywhere in the registrable label (berliner-sparkasse.de, meine-volksbank.de, sparkassenverband.de).
+    public static readonly string[] MoneyContains=["sparkasse","volksbank"];
     public static bool MoneyHost(string host)
     {
         if(InList(host,Money))return true;
         string label=Domains.Etld1(host).Split('.')[0];
-        return label=="sparkasse"||Array.IndexOf(MoneyLabels,label)>=0||MoneyPrefixes.Any(p=>label.StartsWith(p,StringComparison.Ordinal));
+        return Array.IndexOf(MoneyLabels,label)>=0||MoneyPrefixes.Any(p=>label.StartsWith(p,StringComparison.Ordinal))||MoneyContains.Any(p=>label.Contains(p,StringComparison.Ordinal));
     }
     public static readonly string[] Mail=
     [
         "mail.google.com","outlook.live.com","outlook.office.com","outlook.office365.com","mail.yahoo.com","gmx.net","gmx.de","web.de","mail.proton.me","proton.me","protonmail.com","fastmail.com","icloud.com","mail.ru","zoho.com","hey.com"
+    ];
+    // Documents, drives, calendars, photos, notes: reading one taints the run, every action there asks.
+    public static readonly string[] Storage=
+    [
+        "docs.google.com","drive.google.com","calendar.google.com","contacts.google.com","photos.google.com","keep.google.com","sheets.google.com","slides.google.com","dropbox.com","notion.so","notion.site","onedrive.live.com","1drv.ms","sharepoint.com","atlassian.net","box.com","evernote.com","airtable.com","trello.com","office.com","onenote.com","mega.nz","wetransfer.com"
+    ];
+    // Shops and booking sites: every action asks (money rule), reading taints.
+    public static readonly string[] Shops=
+    [
+        "amazon.de","amazon.com","amazon.co.uk","amazon.fr","ebay.de","ebay.com","ebay-kleinanzeigen.de","kleinanzeigen.de","zalando.de","otto.de","aliexpress.com","temu.com","shein.com","booking.com","airbnb.com","expedia.de","expedia.com","lieferando.de","bahn.de","lufthansa.com","ryanair.com","eventim.de","ticketmaster.de","check24.de","idealo.de","mediamarkt.de","saturn.de","apple.com","store.steampowered.com","paddle.com"
     ];
     public static readonly string[] Social=
     [
@@ -245,10 +270,11 @@ public sealed class ComputerPolicy
     public static string ProcessName(string? p){p=(p??"").Trim().ToLowerInvariant();return p.EndsWith(".exe")?p[..^4]:p;}
     public static bool ComposerOrSensitiveProcess(string process){string p=ProcessName(process);return ComposerApps.Contains(p)||SensitiveApps.Contains(p);}
     public static bool IsBrowser(string process)=>Browsers.Contains(ProcessName(process));
+    public static bool IsBrowser(string process,string? windowClass)=>IsBrowser(process)||(windowClass is not null&&BrowserClasses.Contains(windowClass));
     public static readonly string[] ReadTools=["ui_windows","ui_tree","screenshot","chrome_tabs","chrome_snapshot","chrome_read","server_read"];
     public static readonly string[] AllTools=["ui_windows","ui_tree","ui_click","ui_type","key","scroll","window_focus","screenshot","chrome_tabs","chrome_open","chrome_snapshot","chrome_click","chrome_fill","chrome_read","server_read"];
     static bool InList(string host,string[] list)=>list.Any(e=>{int slash=e.IndexOf('/');return slash<0?Domains.Within(host,e):Domains.Within(host,e[..slash]);});
-    bool Sensitive(string host)=>MoneyHost(host)||InList(host,Mail)||InList(host,Social)||InList(host,Infra)||extraSensitive.Any(e=>Domains.Within(host,e));
+    bool Sensitive(string host)=>MoneyHost(host)||InList(host,Mail)||InList(host,Social)||InList(host,Infra)||InList(host,Storage)||InList(host,Shops)||extraSensitive.Any(e=>Domains.Within(host,e));
     // Reading this puts the run under taint: from then on every outward action asks (the page content could be sent on).
     public bool SensitiveRead(string process,string? title,string? url)
     {
@@ -311,7 +337,8 @@ public sealed class ComputerPolicy
         // ---- reads and plain navigation
         if(Array.IndexOf(ReadTools,tool)>=0)return Verdict.Of(ActionClass.R0,"read");
         if(tool is "window_focus")return Verdict.Of(ActionClass.R1,"focus");
-        if(tool is "scroll")return Verdict.Of(ActionClass.R1,"scroll");
+        // Covert channels: a scroll offset or a key is a few bits the page can read. After a sensitive read only reads run; scroll and keys ask.
+        if(tool is "scroll")return c.Tainted?Verdict.Of(ActionClass.R2,"tainted"):Verdict.Of(ActionClass.R1,"scroll");
         if(tool is "chrome_open")return Open(c,scope);
         // ---- key
         if(tool is "key")
@@ -322,9 +349,14 @@ public sealed class ComputerPolicy
             if(KeyChord.IsClipboard(k))return Verdict.Of(ActionClass.R3,"clipboard-chord");
             bool enter=KeyChord.IsEnter(k);
             if(!enter&&!KeyChord.IsAllowed(k))return Verdict.Of(ActionClass.R3,"key-not-allowed");
+            // A key on a page that may not be read has nothing to say: the question would read its fields aloud.
+            if(ReadDenied(p,c.Title,c.Url))return Verdict.Of(ActionClass.R3,"read-denied");
+            // Where Enter would go (focused link, form action): out of the scope it asks with the destination, and never counts as a search box.
+            if(enter&&c.Href is {Length:>0} eh&&Link(eh,scope) is {} ev)return ev;
             if(IsComposerTarget(p,host))return Verdict.Of(ActionClass.R2,"composer-key");
             var ctx=Target(c,p,host,scope);
             if(ctx is not null)return ctx;
+            if(c.Tainted)return Verdict.Of(ActionClass.R2,"tainted");
             if(enter)return k=="enter"&&c.SearchBox?Verdict.Of(ActionClass.R1,"enter-search"):Verdict.Of(ActionClass.R2,"enter");
             return Verdict.Of(ActionClass.R1,"key");
         }
@@ -338,8 +370,10 @@ public sealed class ComputerPolicy
         // Where a click goes (link, form action, formaction), read live in the page: out of the scope it asks, with the domain spoken. Data leaves by a link or a form post as well as by chrome_open.
         if(tool=="chrome_click"&&c.Href is {Length:>0} href&&Link(href,scope) is {} lv)return lv;
         if(Target(c,p,host,scope) is {} tv)return tv;
-        // After a read of a sensitive page (or a server_read) every outward click or fill asks. (chrome_open needs no such rule: an in-scope open can only carry a URL he spoke or a link of the page, anything else is refused.)
+        // After a read of a sensitive page (or a server_read) every outward click or fill asks (chrome_open, scroll and keys too: see Open, the scroll and key rules).
         if(c.Tainted&&tool is "ui_click" or "ui_type" or "chrome_click" or "chrome_fill")return Verdict.Of(ActionClass.R2,"tainted");
+        // Taint by origin: whatever the run read on one origin (a document, a drive, any page) must not be typed or clicked into another one without asking, listed or not.
+        if(tool is "ui_click" or "ui_type" or "chrome_click" or "chrome_fill"&&c.ReadOrigins is {Count:>0} read&&read.Any(o=>o!=OriginOf(c,p)))return Verdict.Of(ActionClass.R2,"cross-origin");
         if(c.FileDialog)return Verdict.Of(ActionClass.R2,"file");
         if(c.BrowserChrome)return Verdict.Of(ActionClass.R2,"browser-chrome");
         if(c.Nameless&&tool is "ui_click")return Verdict.Of(ActionClass.R2,"nameless");
@@ -347,6 +381,9 @@ public sealed class ComputerPolicy
         if(Labels.SendLike(c.Label))return Verdict.Of(ActionClass.R2,"label-send");
         return Verdict.Of(ActionClass.R1,"in-scope");
     }
+    // "https://host:port" of the page the action lands on, "app:<process>" for a window.
+    static string OriginOf(ActionContext c,string p)=>Domains.HostOf(c.Url) is not null?Domains.Origin(c.Url!):"app:"+p;
+    public static string ReadOrigin(string process,string? url)=>Domains.HostOf(url) is not null?Domains.Origin(url!):"app:"+ProcessName(process);
     bool IsComposerTarget(string p,string? host)=>ComposerApps.Contains(p)||(host is not null&&Composer(host));
     // Where the action lands: the raisers that depend on the target (domain list, app list, CDP, scope). null = nothing raises it.
     Verdict? Target(ActionContext c,string p,string? host,ComputerScope scope)
@@ -361,6 +398,7 @@ public sealed class ComputerPolicy
     // null = the target is in the scope (or nothing the policy can say); otherwise the verdict for a click that leaves it.
     Verdict? Link(string href,ComputerScope scope)
     {
+        if(href.StartsWith("[object",StringComparison.Ordinal)||href.StartsWith("invalid:",StringComparison.Ordinal))return Verdict.Of(ActionClass.R3,"url-invalid");   // a link the page could not give as a string (SVG anchors): never read as relative
         string? scheme=Domains.Scheme(href);
         if(scheme is null||scheme=="javascript")return null;   // a relative link or a script handler: the page the click happens on is already classified
         if(scheme is "mailto" or "tel" or "sms" or "ms-settings" or "ms-windows-store")return Verdict.Of(ActionClass.R2,"link-scheme");
@@ -384,8 +422,11 @@ public sealed class ComputerPolicy
         if((u.Query.Length>0||u.Fragment.Length>0)&&!c.UrlInWords&&!c.UrlInSnapshot)return Verdict.Of(ActionClass.R3,"url-query");
         // A path carries data just as well (evil.example/<base64 of the mail>): anything beyond the root must be in his words or a link of the snapshot.
         if(u.AbsolutePath.Length>1&&!c.UrlInWords&&!c.UrlInSnapshot)return Verdict.Of(ActionClass.R3,"url-path");
+        // So does the host name (<data>.evil.example: the DNS lookup alone delivers it) and a port: only a host that IS a scope entry (or one he approved exactly) on the default port opens freely.
+        bool exact=scope.Hosts.Contains(host)||scope.Opened.Contains(host);
+        if((!exact||!u.IsDefaultPort)&&!c.UrlInWords&&!c.UrlInSnapshot)return Verdict.Of(ActionClass.R3,"url-host");
         if(scope.Empty)return Verdict.Of(ActionClass.R2,"no-scope");
         if(!scope.ContainsHost(host))return Verdict.Of(ActionClass.R2,"open-out-of-scope");
-        return Verdict.Of(ActionClass.R1,"open-in-scope");
+        return c.Tainted?Verdict.Of(ActionClass.R2,"tainted"):Verdict.Of(ActionClass.R1,"open-in-scope");   // after a sensitive read every open asks: which of his links it takes is a channel
     }
 }
