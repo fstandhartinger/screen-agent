@@ -87,6 +87,7 @@ internal static class DictationSelftest
             using var rec=new DictationRecording(store,"selftest",Log,maxMinutes:1,headerFixSeconds:1);
             var warnings=new List<string>();rec.Warning+=warnings.Add;
             using var cts=new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            client.SkipSilentChunks=false;
             var job=new DictationJob(rec.Meta.Id,"Davor:",(r,ct)=>client.DictateChunk(r,ctx,ct),Log,cts.Token,(_,_)=>Task.CompletedTask);
             rec.ChunkReady+=c=>job.Enqueue(c);
             string? crashCopy=null;
