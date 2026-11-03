@@ -163,8 +163,15 @@ internal static partial class ComputerSelftest
         if(focused)
         {
             await Task.Delay(500);
+            var enterBlind=await Do(run,"action","key",new{key="Enter"});
+            Ok("F4: an Enter that would ask with no verified focused field is refused (key-no-focus), no key was sent",Code(enterBlind)==ComputerCodes.Refused&&Rule(enterBlind)=="key-no-focus"&&UiaDriver.KeysSent==keysBefore,Brief(enterBlind));
+            // focus the box (a click in a composer asks), then Enter asks as composer-key and names the field
+            var clickBox=await Do(run,"action","chrome_click",new{@ref=area!});
+            var clicked=await Confirm(run,clickBox);
+            var winsC=await Do(run,"action","ui_windows");var chromeWin3=Regex.Matches(Res(winsC),@"^(\S+) chrome ""Composer",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
+            if(chromeWin3 is not null){await Do(run,"action","window_focus",new{window=chromeWin3});await Task.Delay(500);}
             var enter=await Do(run,"action","key",new{key="Enter"});
-            Ok("Enter in the composer box: R2 (composer-key), no key was sent",Code(enter)==ComputerCodes.NeedsConfirm&&Rule(enter)=="composer-key"&&UiaDriver.KeysSent==keysBefore,Brief(enter));
+            Ok("Enter in the composer box: R2 (composer-key) with the focused field named, no key was sent",Code(enter)==ComputerCodes.NeedsConfirm&&Rule(enter)=="composer-key"&&Spoken(enter).Contains("Nachricht")&&UiaDriver.KeysSent==keysBefore,Brief(clicked)+" · "+Brief(enter)+" · "+Spoken(enter));
         }
         else Skip("Enter in the composer box","Chrome could not be brought to the front on this runner (foreground lock); covered by unit tests of the policy");
         string deskTab;
@@ -373,8 +380,9 @@ internal static partial class ComputerSelftest
             Ok("F1 data in the path: refused like a query",Code(pathOpen)==ComputerCodes.Refused&&Rule(pathOpen)=="url-path",Brief(pathOpen));
             var (fxTab,fxSnap)=await Page(rj,"site.localhost","/formx");
             var los=Find(fxSnap,"button","Los");
+            int evilBefore=fx.Count("evil.localhost");   // the location= page above already made one GET: it carried nothing but its own constant URL
             var formClick=await Do(rj,"action","chrome_click",new{@ref=Need(los,"los")});
-            Ok("F1 form post to another origin: the form action is read live, the click asks, nothing was posted",Code(formClick)==ComputerCodes.NeedsConfirm&&Rule(formClick)=="link-out-of-scope"&&fx.Count("evil.localhost")==0,Brief(formClick)+" · "+Spoken(formClick));
+            Ok("F1 form post to another origin: the form action is read live, the click asks, nothing was posted",Code(formClick)==ComputerCodes.NeedsConfirm&&Rule(formClick)=="link-out-of-scope"&&fx.Count("evil.localhost")==evilBefore&&fx.Count("evil.localhost/collect")==evilBefore,Brief(formClick)+" · "+Spoken(formClick));
             await End(rj);
         }
         // ===== F1 taint: reading a sensitive page, and a server_read told by the gateway, make every outward action ask =====
@@ -402,9 +410,9 @@ internal static partial class ComputerSelftest
             var ask=await Do(rm,"action","chrome_click",new{@ref=Need(weiter2,"weiter2")});string cm=CodeNow();
             string sp=Spoken(ask);
             Ok("F5 form words: the contenteditable body, the recipient chip and the subject are in the question, as quoted page text; the search box is not",Code(ask)==ComputerCodes.NeedsConfirm&&sp.Contains("Seitentext, nicht von dir gesprochen")&&sp.Contains("„Die Zahlen sind im Anhang")&&sp.Contains("„chef@example.org“")&&sp.Contains("Quartalszahlen")&&!sp.Contains("suche nach xyz"),sp);
-            var subjRef=Find(ms2,"textbox","subject");
+            var subjRef=Find(ms2,"textbox","Betreff");
             string longText=string.Join(" ",Enumerable.Repeat("Bitte alles genau so senden",8))[..200];
-            var fill200=subjRef is null?default:await Do(rm,"action","chrome_fill",new{@ref=subjRef.Value.Ref,text=longText});string c200=CodeNow();
+            var fill200=await Do(rm,"action","chrome_fill",new{@ref=Need(subjRef,"Betreff"),text=longText});string c200=CodeNow();
             var geo=Ui(()=>overlay.Geometry());
             Ok("F6 overlay: the code comes first and large, then the whole question, wrapped over several lines, never cut, inside the banner and on the screen",geo is not null&&geo.Code==c200&&geo.Shown==Spoken(fill200)&&geo.CodeTop<geo.QuestionTop&&geo.Lines>=3&&!geo.Trimmed&&geo.CodeRight<=geo.BannerRight&&geo.QuestionBottom<=geo.BannerBottom+1&&geo.BannerBottom<=geo.ScreenBottom,
                 geo is null?"no geometry":$"code {geo.Code} shown {geo.Shown.Length}/{Spoken(fill200).Length} chars, lines {geo.Lines}, code top {geo.CodeTop:F0} < text top {geo.QuestionTop:F0}, text bottom {geo.QuestionBottom:F0} <= banner {geo.BannerBottom:F0} <= screen {geo.ScreenBottom:F0}");
