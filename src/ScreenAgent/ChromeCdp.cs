@@ -165,7 +165,7 @@ internal sealed class ChromeCdp:IDisposable
         return lost;
     }
     public void ClearRefs(){refs.Clear();hrefs.Clear();}
-    public string TabListing(List<CdpTab> tabs)=>JsonSerializer.Serialize(tabs.Select((t,i)=>new{tab=t.TargetId,origin=Domains.Origin(t.Url) is {Length:>0} o?o:Domains.Scheme(t.Url)+":",title=Cap(t.Title,80),own=t.Own}));
+    public string TabListing(List<CdpTab> tabs)=>JsonSerializer.Serialize(tabs.Select((t,i)=>new{tab=t.TargetId,origin=Domains.Origin(t.Url) is {Length:>0} o?o:Domains.Scheme(t.Url)+":",title=SecretText.Redact(Cap(t.Title,80)),own=t.Own}));
     public async Task<CdpTab?> TabOf(string targetId,CancellationToken ct=default)=>(await Targets(ct)).FirstOrDefault(t=>t.TargetId==targetId);
     // Foreground tab of the browser, as far as CDP can say: the visible, focused page target (document.visibilityState) is not exposed cheaply, so the caller passes the window title to match.
     public async Task<CdpTab?> TabByTitle(string windowTitle,CancellationToken ct=default)

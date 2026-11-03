@@ -411,7 +411,7 @@ internal sealed class ComputerAgent:IDisposable
             string result=plan.Exec(expected);
             string? jpeg=null;
             if(result.StartsWith(JpegPrefix,StringComparison.Ordinal)){jpeg=result[JpegPrefix.Length..];result="Bildschirmfoto folgt als Bild.";}
-            else if(plan.Data)result=SecretText.Redact(result);   // a key or token on a page or in a window never leaves as text
+            else if(plan.Data&&plan.Ctx.Tool is not ("chrome_tabs" or "chrome_open"))result=SecretText.Redact(result);   // a key or token on a page or in a window never leaves as text (the tab listing is our own JSON with 32-hex tab ids; its titles are redacted one by one)
             if(plan.ReadsSensitive)r.Taint();   // F1: from here on every outward action asks
             if(plan.OpensHost is {} oh&&expected is not null)r.Scope.Opened.Add(oh);   // he approved this navigation: its tab may be read, every click there still asks
             if(plan.Mutates&&cdp is {Open_:true} cd)
