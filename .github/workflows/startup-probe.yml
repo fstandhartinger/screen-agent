@@ -1,6 +1,9 @@
 name: Start-up probe
 on:
   workflow_dispatch:
+  push:
+    branches: ['v017/**']
+    paths: ['.github/workflows/startup-probe.yml']
 permissions:
   contents: read
 # Cold WebView2 start on a fresh runner, with the hidden-start fallback at different delays. Each job is a fresh machine, so each number is a cold start.
