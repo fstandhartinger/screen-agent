@@ -424,9 +424,10 @@ internal sealed class ComputerAgent:IDisposable
             Send(w,Reply(true,ComputerCodes.Done,v.Class,v.Rule,plan.Data&&jpeg is null?Data(result):result,null,r.StateName,Meta(data,jpeg)));
         }
         catch(OperationCanceledException)
-        {
-            Log("computer.action",new(data){["ok"]=false,["reason"]="killed",["ms"]=sw.ElapsedMilliseconds});
-            Send(w,Reply(false,ComputerCodes.Killed,v.Class,"killed",null,null,r.StateName));
+        {   // the driver and the CDP client look at kill, hands-on, close and pause before every batch and call: say which one stopped it
+            string why=r.Revoked?"killed":r.IsHandsOn?"handson":r.IsClosed?"closed":"paused";
+            Log("computer.action",new(data){["ok"]=false,["reason"]=why,["ms"]=sw.ElapsedMilliseconds});
+            Send(w,Reply(false,r.Revoked?ComputerCodes.Killed:r.IsHandsOn?ComputerCodes.HandsOn:r.IsClosed?ComputerCodes.NoRun:ComputerCodes.Refused,v.Class,why,null,null,r.StateName));
         }
         catch(Exception e) when(e is StaleRefException or UiaStaleException)
         {

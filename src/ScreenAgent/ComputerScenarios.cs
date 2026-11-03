@@ -257,6 +257,18 @@ internal static partial class ComputerSelftest
                 Ok("kill (hook flag path): the typing loop stops between batches, the run ends, the token cannot be revived",Code(killed)==ComputerCodes.Killed&&(partial?.Length??0)<back!.Length+2000&&Code(restart)==ComputerCodes.Killed&&!Ui(()=>overlay.Visible)&&ComputerGuard.Current is null,
                     "typing: "+Brief(killed)+"; later: "+Brief(next)+"; restart: "+Brief(restart),("typedChars",(partial?.Length??0)-back.Length),("killToResultMs",killMs));
                 Ok("kill: a stopped action loop did not type the rest",(partial?.Length??0)-back.Length<2000,"",("typedChars",(partial?.Length??0)-back.Length));
+                // hands-on in the middle of typing stops the typing too (not only the kill)
+                string rh=await Start("Schreib was in den Editor");
+                var wsh=await Do(rh,"action","ui_windows");var nwh=Regex.Matches(Res(wsh),@"^(\S+) (?i:notepad)",RegexOptions.Multiline).First().Groups[1].Value;
+                await Do(rh,"action","window_focus",new{window=nwh});await Task.Delay(300);
+                var th=await Do(rh,"action","ui_tree",new{window=nwh});string eh=Regex.Matches(Res(th),@"^(\S+) (?:Edit|Document) ",RegexOptions.Multiline).First().Groups[1].Value;
+                string before=NotepadText(nh)??"";
+                var typingH=Do(rh,"action","ui_type",new{@ref=eh,text=long_});
+                await Task.Delay(350);ComputerGuard.Current!.HandsOn();
+                var halted=await typingH;await Task.Delay(500);
+                int typedH=(NotepadText(nh)?.Length??0)-before.Length;
+                Ok("hands-on in the middle of typing stops the typing (not only the kill): handson is the answer, far fewer than 2000 characters landed",Code(halted)==ComputerCodes.HandsOn&&typedH<2000,Brief(halted),("typedChars",typedH));
+                await End(rh);
             }
         }
         // ===== kill through the real hook with injected keys (test mode) and through RegisterHotKey alone =====
@@ -443,6 +455,16 @@ internal static partial class ComputerSelftest
                 }
             }
             await End(rp);
+        }
+        // ===== no kill path, no run: an agent without a keyboard hook refuses to start =====
+        {
+            var seen=new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var bare=new ComputerAgent((url,body)=>{using var d=JsonDocument.Parse(JsonSerializer.Serialize(body));if(url.EndsWith("/result"))seen.TrySetResult(d.RootElement.Clone());return Task.FromResult(true);},(_,_)=>{},gate,new ComputerPolicy(new PrivacyPolicy(),"desk.localhost"),overlay,null,()=>sid,()=>voice,()=>enabled,()=>false,null,new ChromeCdp.ConnectOptions(profileDir,false),logFile+".nohook",app.Dispatcher);
+            string idn="c"+Hex(),rn=NewRun();
+            using var doc=JsonDocument.Parse(JsonSerializer.Serialize(new{computer=new{id=idn,run=rn,seq=0,op="start",goal="Übernimm den Rechner und öffne site.localhost"}}));
+            bare.Handle(sid,ComputerWire.Parse(doc.RootElement,out _)!);
+            var res=await seen.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            Ok("no kill path, no run: without a live keyboard hook or RegisterHotKey the start is refused",Code(res)==ComputerCodes.Refused&&Rule(res)=="no-kill-path"&&!Ui(()=>overlay.Visible)&&ComputerGuard.Current is null,Brief(res));
         }
         // ===== logging =====
         string log=File.Exists(logFile)?File.ReadAllText(logFile):"";
