@@ -49,11 +49,13 @@ internal sealed class MainAgentPrompt
                 if(FindInput((IntPtr)c.Handle,SearchBudgetMs,ct) is {} hit){chosen=c;input=hit;break;}
             }
             hwnd=(IntPtr)chosen.Handle;wsl=CandidateOrder.Wsl(chosen);
+            log("main.prompt.step",new(){["step"]="window",["windows"]=windows,["ms"]=clock.ElapsedMilliseconds});   // the live activity overlay shows these steps
             Native.GetWindowThreadProcessId(hwnd,out uint pidRaw);int pid=(int)pidRaw;
             Debug?.Invoke($"candidates={found.Count} chosen={chosen.Handle:x} minimized={chosen.Minimized} elementFound={input is not null}");
             // c. In front.
             if(!WaitModifiersUp(2000,ct))return Finish(PromptCodes.Busy);
             if(!Front(hwnd,ct))return Finish(PromptCodes.NoForeground);
+            log("main.prompt.step",new(){["step"]="focus",["ms"]=clock.ElapsedMilliseconds});
             // d. Focus: the element when there is one, the palette otherwise or when the element did not take the focus.
             route="element";
             if(input is null&&FindInput(hwnd,1500,ct) is {} late)input=late;   // a minimized window shows nothing before it is restored
@@ -87,6 +89,7 @@ internal sealed class MainAgentPrompt
             if(!deadline.MayStartTyping(Now)){Debug?.Invoke("less than 8 s left");return Finish(PromptCodes.Interrupted);}
             // Re-verified right before the first key: the focus may have moved while the draft was being read.
             if(!StillTheBox(box,pid,true)){Debug?.Invoke("focus moved before the first key");return Finish(PromptCodes.WrongFocus);}
+            log("main.prompt.step",new(){["step"]="typing",["chars"]=text.Length,["ms"]=clock.ElapsedMilliseconds});
             Chord(Ctrl,KeyEnd);   // the caret goes behind whatever is there: a draft is never overwritten or cut
             if(!readable||existing.Trim().Length>0){if(!Type(" ",hwnd,pid,ct,box,false,ref typed,out string? sepFailed))return Finish(sepFailed!);typed=0;}   // an unreadable draft counts as a draft: the separator is harmless
             if(!Type(text,hwnd,pid,ct,box,false,ref typed,out string? failed))return Finish(failed!);

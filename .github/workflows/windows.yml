@@ -78,6 +78,25 @@ jobs:
           $code = $LASTEXITCODE
           if ($code -eq 2) { Write-Warning 'Draw selftest skipped; mouse input did not reach the overlay on this runner (see draw.json). Manual checklist remains required.'; exit 0 }
           elseif ($code -ne 0) { throw 'Draw selftest failed' }
+      - name: Live activity rows selftest (message shows at once, 4 rows, tick and fail, click-through, left out of the capture)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Invoke-SA --selftest-activity | Tee-Object artifacts/activity.json
+          if ($LASTEXITCODE -ne 0) { throw 'Activity overlay selftest failed' }
+      - name: Screenshot feedback selftest (purple flash at most 12 percent, 220 px thumbnail, a capture contains none of it, fades out)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-feedback | Tee-Object artifacts/feedback.json
+          if ($LASTEXITCODE -ne 0) { throw 'Screenshot feedback selftest failed' }
+      - name: Start-up timing on this runner (WebView2 environment, controller, first page)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-startup | Tee-Object artifacts/startup.json
+          if ($LASTEXITCODE -ne 0) { throw 'Startup selftest failed' }
       - name: Change test on a real bitmap (5-digit number counts, caret does not, planner)
         shell: pwsh
         run: |

@@ -32,6 +32,10 @@ public sealed class AppConfig
     public int DictationCapMb {get;init;}=2048;
     // Live subtitles from the microphone: "dictation+voice" (default), "dictation" or "off". Needs the gateway's caption route; the audio of the last 6 s goes there while someone speaks.
     public string Captions {get;init;}="dictation+voice";
+    // Live activity overlay: what the agent is doing right now (tool calls, typing the Main Agent prompt), small rows above the status note.
+    public bool ActivityOverlay {get;init;}=true;
+    // Purple flash plus a small thumbnail when the agent looks at the screen: "visible" (default: session start, on request, highlight), "all" (every frame sent), "off".
+    public string ScreenshotFeedback {get;init;}="visible";
     // Accessible names of the Claude Code message box in VS Code (the only place the Main Agent prompt is ever typed into).
     // null in config.json means the default.
     public string[] MainAgentInputNames {get=>inputNames;init=>inputNames=value??DefaultInputNames;}
@@ -63,6 +67,7 @@ public sealed class AppConfig
         if(c.CanvasPanel is not ("auto" or "manual"))throw new InvalidDataException("CanvasPanel must be auto or manual");
         if(!CaptionModes.Valid(c.Captions))throw new InvalidDataException("Captions must be dictation+voice, dictation or off");
         if(c.DictationMaxMinutes<0.05||c.DictationMaxMinutes>600||c.DictationKeepHours<0||c.DictationKeepFailedDays<1||c.DictationCapMb<50)throw new InvalidDataException("Invalid dictation retention settings");
+        if(!ScreenAgent.Core.ScreenshotFeedback.Modes.Contains(c.ScreenshotFeedback))throw new InvalidDataException("ScreenshotFeedback must be visible, all or off");
         if(c.MainAgentInputNames.Length==0||c.MainAgentInputNames.Any(string.IsNullOrWhiteSpace))throw new InvalidDataException("MainAgentInputNames needs at least one name");
         if(SameHotkeys(c.Hotkeys,LegacyHotkeys())||SameHotkeys(c.Hotkeys,V012Hotkeys()))c=c.WithHotkeys(DefaultHotkeys(),true);
         else if(HotkeyBindings.Required.Any(k=>!c.Hotkeys.ContainsKey(k)))
@@ -90,7 +95,7 @@ public sealed class AppConfig
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
-        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
+        Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
     };
     public RetentionOptions Retention()=>new(TimeSpan.FromHours(DictationKeepHours),TimeSpan.FromDays(DictationKeepFailedDays),DictationCapMb*(1L<<20));
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};
