@@ -90,6 +90,39 @@ internal sealed class UiaDriver
         return null;
     }
     public UiaHeld? Held(string reference)=>held.TryGetValue(reference,out var h)?h:null;
+    // ---- the focused element, for a key that asks (Enter): bound to the element, never to "whatever has the focus when the key goes out"
+    public sealed record Focused(ActionBinding Binding,string Name,string Type,bool Password,string Process,string Title);
+    public Focused? FocusBinding(string chord,IntPtr foreground)
+    {
+        AutomationElement? f;try{f=AutomationElement.FocusedElement;}catch{f=null;}   // no focus readable: null, the key is then refused
+        if(f is null)return null;
+        AutomationElement.AutomationElementInformation c;
+        try{c=f.Current;}catch(ElementNotAvailableException){return null;}   // the focused element vanished: no focus, so no asking key
+        Native.GetWindowThreadProcessId(foreground,out uint fgPid);
+        if(c.ProcessId!=fgPid)return null;   // the focus sits in another process than the window in front
+        var rect=new Rectangle((int)c.BoundingRectangle.X,(int)c.BoundingRectangle.Y,(int)c.BoundingRectangle.Width,(int)c.BoundingRectangle.Height);
+        var b=new ActionBinding().Set("rid",string.Join(".",f.GetRuntimeId())).Set("pid",c.ProcessId).Set("hwnd",foreground).Set("name",c.Name??"").Set("type",c.ControlType.ProgrammaticName)
+            .Set("rect",rect.X+","+rect.Y+","+rect.Width+","+rect.Height).Set("tool","key").Set("key",KeyChord.Normalize(chord));
+        return new(b,c.Name??"",c.ControlType.ProgrammaticName.Replace("ControlType.",""),c.IsPassword,ProcessOf(foreground),TitleOf(foreground));
+    }
+    // Is another window lying over part of this one (z-order from the top)? A screenshot copies the screen rectangle, so whatever covers the window would be in the picture.
+    public static bool Covered(IntPtr hwnd)
+    {
+        if(!Native.GetWindowRect(hwnd,out var rc))return true;
+        var target=new WindowCover.Box(rc.Left,rc.Top,rc.Right,rc.Bottom);var above=new List<WindowCover.Box>();bool found=false;
+        Native.EnumWindows((h,_)=>
+        {
+            if(found)return true;
+            if(Root(h)==Root(hwnd)){found=true;return true;}
+            if(!Native.IsWindowVisible(h)||Native.IsIconic(h))return true;
+            if(Native.DwmGetWindowAttribute(h,14,out int cloaked,4)!=0||cloaked!=0)return true;
+            Native.GetWindowThreadProcessId(h,out uint pid);if(pid==Environment.ProcessId)return true;   // our overlay is excluded from capture
+            if((Native.GetWindowLongPtr(h,-20).ToInt64()&0x20)!=0)return true;   // WS_EX_TRANSPARENT: click-through helper windows
+            if(Native.GetWindowRect(h,out var r))above.Add(new(r.Left,r.Top,r.Right,r.Bottom));
+            return true;
+        },IntPtr.Zero);
+        return !found||WindowCover.Covered(target,above);
+    }
     // ---- binding
     public ActionBinding Bind(UiaHeld h,string tool,string? text,bool foreground)
     {
@@ -156,6 +189,7 @@ internal sealed class UiaDriver
         else if(el.TryGetCurrentPattern(TogglePattern.Pattern,out p)){var tp=(TogglePattern)p;act=()=>tp.Toggle();how="toggle";}
         else if(el.TryGetCurrentPattern(SelectionItemPattern.Pattern,out p)){var sp=(SelectionItemPattern)p;act=()=>sp.Select();how="select";}
         else if(el.TryGetCurrentPattern(ExpandCollapsePattern.Pattern,out p)){var xp=(ExpandCollapsePattern)p;act=()=>xp.Expand();how="expand";}
+        if(act is not null&&expected is not null&&how!="invoke")throw new InvalidOperationException("no-invoke");   // R2 is Invoke only: Toggle, Select and Expand are not what he was asked about
         if(act is not null)
         {
             // Invoke can block until the app's handler returns (a modal dialog): a time limit, and then "unclear", never a retry.

@@ -85,7 +85,7 @@ internal sealed class AppController : IDisposable
         // Computer use: off until he allows it in the tray. The executor owns the run, the policy and the confirmations (see ComputerAgent).
         computerOverlay=new ComputerOverlay();
         computer=new(async (url,body)=>{using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);return reply.Ok||reply.Status is 404 or 409;},
-            (type,data)=>telemetry.Event(type,data),inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host),computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
+            (type,data)=>telemetry.Event(type,data),inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host,config.ComputerSensitive),computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
             text=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,Level.Active,"computer"))),new ChromeCdp.ConnectOptions(),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","logs","computer.log"),bridge.Dispatcher);
         // The drawing panel waits while a prompt is typed (it could take the focus back), and opens when the prompt is over.

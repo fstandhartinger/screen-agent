@@ -185,15 +185,15 @@ public static class TextCheck
 }
 public sealed class ComputerPolicy
 {
-    static readonly string[] Shells=["cmd","powershell","powershell_ise","pwsh","wt","windowsterminal","conhost","openconsole","wsl","wslhost","mintty","bash","sh","putty","kitty","alacritty","wezterm","warp","hyper","tabby","terminus","fluentterminal","cmder","conemu","conemu64","git-bash","zsh","fish","nu","mobaxterm","securecrt","termius"];
-    static readonly string[] SystemTools=["regedit","regedt32","mmc","taskmgr","msconfig"];
-    static readonly string[] PasswordApps=["1password","keepass","keepassxc","bitwarden","lastpass","dashlane","keeper","enpass","nordpass","roboform"];
-    static readonly string[] SecurityApps=["msmpeng","securityhealthsystray","securityhealthui","windowsdefender","kaspersky","avp","avast","avastui","norton","nortonsecurity","mcafee","bdagent","bitdefender","eset","egui","malwarebytes","mbam"];
+    public static readonly string[] Shells=["cmd","powershell","powershell_ise","pwsh","wt","windowsterminal","conhost","openconsole","wsl","wslhost","mintty","bash","sh","putty","kitty","alacritty","wezterm","warp","hyper","tabby","terminus","fluentterminal","cmder","conemu","conemu64","git-bash","zsh","fish","nu","mobaxterm","securecrt","termius"];
+    public static readonly string[] SystemTools=["regedit","regedt32","mmc","taskmgr","msconfig"];
+    public static readonly string[] PasswordApps=["1password","keepass","keepassxc","bitwarden","lastpass","dashlane","keeper","enpass","nordpass","roboform"];
+    public static readonly string[] SecurityApps=["msmpeng","securityhealthsystray","securityhealthui","windowsdefender","kaspersky","avp","avast","avastui","norton","nortonsecurity","mcafee","bdagent","bitdefender","eset","egui","malwarebytes","mbam"];
     static readonly string[] SecureDesktop=["consent","logonui","lockapp","winlogon"];
     static readonly string[] StartSearch=["searchhost","searchapp","searchui","startmenuexperiencehost","shellexperiencehost"];
-    static readonly string[] ComposerApps=["code","code - insiders","code-insiders","cursor","windsurf","claude","zed","kiro","trae","codex"];
-    static readonly string[] SensitiveApps=["outlook","olk","thunderbird","ms-teams","teams","slack","discord","telegram","whatsapp","signal","mailspring","winmail"];
-    static readonly string[] Browsers=["chrome","msedge","firefox","brave","opera","vivaldi","arc"];
+    public static readonly string[] ComposerApps=["code","code - insiders","code-insiders","cursor","windsurf","claude","zed","kiro","trae","codex"];
+    public static readonly string[] SensitiveApps=["outlook","olk","thunderbird","ms-teams","teams","slack","discord","telegram","whatsapp","signal","mailspring","winmail"];
+    public static readonly string[] Browsers=["chrome","msedge","firefox","brave","opera","vivaldi","arc"];
     public static readonly string[] PasswordHosts=["bitwarden.com","bitwarden.eu","1password.com","1password.eu","lastpass.com","dashlane.com","keepersecurity.com","nordpass.com","enpass.io","roboform.com","passwords.google.com","passwords.google","keepass.info"];
     public static readonly string[] Money=
     [
@@ -243,6 +243,7 @@ public sealed class ComputerPolicy
         this.extraSensitive=(extraSensitive??[]).Select(s=>s.ToLowerInvariant()).ToArray();this.extraComposer=(extraComposer??[]).Select(s=>s.ToLowerInvariant()).ToArray();
     }
     public static string ProcessName(string? p){p=(p??"").Trim().ToLowerInvariant();return p.EndsWith(".exe")?p[..^4]:p;}
+    public static bool ComposerOrSensitiveProcess(string process){string p=ProcessName(process);return ComposerApps.Contains(p)||SensitiveApps.Contains(p);}
     public static bool IsBrowser(string process)=>Browsers.Contains(ProcessName(process));
     public static readonly string[] ReadTools=["ui_windows","ui_tree","screenshot","chrome_tabs","chrome_snapshot","chrome_read","server_read"];
     public static readonly string[] AllTools=["ui_windows","ui_tree","ui_click","ui_type","key","scroll","window_focus","screenshot","chrome_tabs","chrome_open","chrome_snapshot","chrome_click","chrome_fill","chrome_read","server_read"];
@@ -257,6 +258,8 @@ public sealed class ComputerPolicy
     }
     bool Composer(string host)=>InList(host,Composers)||extraComposer.Any(e=>Domains.Within(host,e));
     bool PasswordHost(string host)=>InList(host,PasswordHosts);
+    // Mail and chat sites: their bodies are rich text and their recipients are chips; the question read to him may be incomplete there and says so.
+    public bool Messaging(string host)=>InList(host,Mail)||InList(host,Social);
     public bool IsDesk(string host)=>Domains.Within(host,deskHost);
     // Built-in read deny, not configurable, plus his own block lists: password managers, money domains, secret files by title or path. The caller answers "ausgeblendet".
     public bool ReadDenied(string process,string? title,string? url)
@@ -303,6 +306,8 @@ public sealed class ComputerPolicy
             if(PasswordHost(host))return Verdict.Of(ActionClass.R3,"password-manager");
             if(Sensitive(host)&&Regex.IsMatch((c.Role??"")+" "+(c.Label??""),@"(?i)\b(terminal|xterm|console shell|shell)\b")&&InList(host,Infra))return Verdict.Of(ActionClass.R3,"web-terminal");
         }
+        // The Desk in a browser we cannot see into (no CDP url): its window title says so. Only raises (a page may name itself "Agent Desk" to be refused).
+        if(IsBrowser(p)&&host is null&&c.Title.Contains("Agent Desk",StringComparison.OrdinalIgnoreCase))return Verdict.Of(ActionClass.R3,"desk-origin");
         // ---- reads and plain navigation
         if(Array.IndexOf(ReadTools,tool)>=0)return Verdict.Of(ActionClass.R0,"read");
         if(tool is "window_focus")return Verdict.Of(ActionClass.R1,"focus");
@@ -371,13 +376,13 @@ public sealed class ComputerPolicy
         string? scheme=Domains.Scheme(raw);
         if(scheme is not ("http" or "https"))return Verdict.Of(ActionClass.R3,"scheme");
         if(!Uri.TryCreate(raw,UriKind.Absolute,out var u)||u.UserInfo.Length>0||raw.Any(char.IsControl))return Verdict.Of(ActionClass.R3,"url-invalid");
+        string host=u.IdnHost.ToLowerInvariant().TrimEnd('.');
+        if(IsDesk(host))return Verdict.Of(ActionClass.R3,"desk-origin");
+        if(PasswordHost(host))return Verdict.Of(ActionClass.R3,"password-manager");
         // Data leaves in a query or fragment: only a URL he spoke or a link of the current snapshot may carry one.
         if((u.Query.Length>0||u.Fragment.Length>0)&&!c.UrlInWords&&!c.UrlInSnapshot)return Verdict.Of(ActionClass.R3,"url-query");
         // A path carries data just as well (evil.example/<base64 of the mail>): anything beyond the root must be in his words or a link of the snapshot.
         if(u.AbsolutePath.Length>1&&!c.UrlInWords&&!c.UrlInSnapshot)return Verdict.Of(ActionClass.R3,"url-path");
-        string host=u.IdnHost.ToLowerInvariant().TrimEnd('.');
-        if(IsDesk(host))return Verdict.Of(ActionClass.R3,"desk-origin");
-        if(PasswordHost(host))return Verdict.Of(ActionClass.R3,"password-manager");
         if(scope.Empty)return Verdict.Of(ActionClass.R2,"no-scope");
         if(!scope.ContainsHost(host))return Verdict.Of(ActionClass.R2,"open-out-of-scope");
         return c.Tainted?Verdict.Of(ActionClass.R2,"tainted"):Verdict.Of(ActionClass.R1,"open-in-scope");

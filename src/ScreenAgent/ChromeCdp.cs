@@ -149,16 +149,29 @@ internal sealed class ChromeCdp:IDisposable
             if(t.GetProperty("type").GetString()=="page")list.Add(new(t.GetProperty("targetId").GetString()!,t.GetProperty("url").GetString()??"",t.GetProperty("title").GetString()??"",own.Contains(t.GetProperty("targetId").GetString()!)));
         return list;
     }
-    // Own tabs plus tabs whose origin is in the run's scope. Nothing else is ever shown, read or touched.
+    // Tabs whose origin is in the run's scope, or that he approved to open. Nothing else is ever shown, read or touched: being a tab the run opened is NOT enough (a redirect or a script can take it anywhere).
     public async Task<List<CdpTab>> VisibleTabs(ComputerScope scope,CancellationToken ct=default)
-        =>(await Targets(ct)).Where(t=>t.Own||(Domains.HostOf(t.Url) is {} h&&scope.ContainsHost(h))).ToList();
+        =>(await Targets(ct)).Where(t=>Domains.HostOf(t.Url) is {} h&&scope.Reaches(h)).ToList();
+    // After every action: a tab of the run whose origin left the scope loses `Own` and its refs die. (F1: link, 302, location= by script, form post.)
+    public async Task<int> Revalidate(ComputerScope scope,CancellationToken ct=default)
+    {
+        int lost=0;
+        foreach(var t in await Targets(ct))
+        {
+            if(!t.Own||(Domains.HostOf(t.Url) is {} h&&scope.Reaches(h)))continue;
+            own.Remove(t.TargetId);lost++;
+            foreach(var k in refs.Where(r=>r.Value.TargetId==t.TargetId).Select(r=>r.Key).ToList())refs.Remove(k);
+        }
+        return lost;
+    }
+    public void ClearRefs(){refs.Clear();hrefs.Clear();}
     public string TabListing(List<CdpTab> tabs)=>JsonSerializer.Serialize(tabs.Select((t,i)=>new{tab=t.TargetId,origin=Domains.Origin(t.Url) is {Length:>0} o?o:Domains.Scheme(t.Url)+":",title=Cap(t.Title,80),own=t.Own}));
     public async Task<CdpTab?> TabOf(string targetId,CancellationToken ct=default)=>(await Targets(ct)).FirstOrDefault(t=>t.TargetId==targetId);
     // Foreground tab of the browser, as far as CDP can say: the visible, focused page target (document.visibilityState) is not exposed cheaply, so the caller passes the window title to match.
     public async Task<CdpTab?> TabByTitle(string windowTitle,CancellationToken ct=default)
     {
         var tabs=await Targets(ct);
-        var hit=tabs.Where(t=>t.Title.Length>0&&windowTitle.StartsWith(t.Title,StringComparison.Ordinal)).ToList();
+        var hit=tabs.Where(t=>t.Title.Length>0&&ComputerSpeech.TabTitleMatches(windowTitle,t.Title)).ToList();
         return hit.Count==1?hit[0]:null;
     }
     public async Task<CdpTab> Open(string url,CancellationToken ct=default)
@@ -189,7 +202,13 @@ internal sealed class ChromeCdp:IDisposable
     }
     // ---- compiled page functions (the only script this client ever runs)
     const string FnInfo="function(){const t=(this.type||'').toLowerCase();const ac=(this.autocomplete||'').toLowerCase();const n=((this.name||'')+' '+(this.id||'')+' '+(this.placeholder||'')+' '+((this.getAttribute&&this.getAttribute('aria-label'))||'')).toLowerCase();return {pw:t==='password'||/password|one-time-code|cc-/.test(ac),search:t==='search'||/search|such/.test(n),connected:this.isConnected===true};}";
-    const string FnForm="function(){const f=this.form||document;const o=[];for(const e of f.querySelectorAll('input,textarea,select')){const t=(e.type||'').toLowerCase();const ac=(e.autocomplete||'').toLowerCase();if(t==='password'||t==='hidden'||/password|one-time-code|cc-/.test(ac))continue;o.push((e.name||e.id||'')+'='+String(e.value||'').slice(0,200));if(o.length>60)break;}return o;}";
+    // Every field of the form (or the page) INCLUDING contenteditable bodies and role=textbox: name, the first 300 characters for the question, and a hash of the WHOLE value for the binding.
+    // Search boxes are left out of the words (they must not take a slot) but stay in the digest. [email] / data-hovercard-id chips are read as recipients (best effort; on Gmail, X, Telegram, Slack, Discord the chips are not guaranteed).
+    const string FnForm="function(){const f=this.form||document;const words=[],dig=[],rc=[];const hash=function(s){let h=5381;for(let i=0;i<s.length;i++){h=((h<<5)+h+s.charCodeAt(i))|0;}return s.length+':'+(h>>>0).toString(16);};for(const e of f.querySelectorAll('input,textarea,select,[contenteditable=\"\"],[contenteditable=\"true\"],[role=\"textbox\"]')){const t=(e.type||'').toLowerCase();const ac=(e.autocomplete||'').toLowerCase();if(t==='password'||t==='hidden'||/password|one-time-code|cc-/.test(ac))continue;const nm=(e.name||e.id||(e.getAttribute&&(e.getAttribute('aria-label')||e.getAttribute('placeholder')))||e.tagName.toLowerCase());const ed=e.isContentEditable===true||(('value' in e)===false);const v=ed?String(e.innerText||''):String(e.value||'');const search=t==='search'||(e.getAttribute&&e.getAttribute('role')==='searchbox')||/search|such/i.test(nm);dig.push(nm+'='+hash(v));if(!search&&v.trim().length>0)words.push([nm,v.slice(0,300)]);if(dig.length>=80)break;}for(const e of f.querySelectorAll('[email],[data-hovercard-id]')){const m=(e.getAttribute('email')||e.getAttribute('data-hovercard-id')||'').slice(0,100);if(m){rc.push(m);}if(rc.length>=10)break;}dig.push('rcpt='+hash(rc.join(',')));return {words:words,digest:dig,rcpt:rc};}";
+    // Where a click goes, read live: the closest link, the button's formaction or its form's action (through the prototype getter: a field named "action" cannot shadow it).
+    const string FnTarget="function(){const a=this.closest&&this.closest('a[href],area[href]');if(a&&a.href)return String(a.href);const fa=this.getAttribute&&this.getAttribute('formaction');if(fa){return URL.canParse(fa,document.baseURI)?new URL(fa,document.baseURI).href:'invalid:';}const f=this.form||(this.closest&&this.closest('form'));if(f){const d=Object.getOwnPropertyDescriptor(HTMLFormElement.prototype,'action');return d&&d.get?String(d.get.call(f)):'invalid:';}return '';}";
+    const string FnActive="function(){const e=document.activeElement;return (e&&e!==document.body&&e!==document.documentElement)?e:null;}";
+    const string FnFocusInfo="function(){const t=(this.type||'').toLowerCase();const ac=(this.autocomplete||'').toLowerCase();const n=((this.name||'')+' '+(this.id||'')+' '+(this.placeholder||'')+' '+((this.getAttribute&&this.getAttribute('aria-label'))||'')).toLowerCase();return {pw:t==='password'||/password|one-time-code|cc-/.test(ac),search:t==='search'||/search|such/.test(n)||(this.getAttribute&&this.getAttribute('role'))==='searchbox'};}";
     const string FnContains="function(h){return this===h||this.contains(h);}";
     const string FnSelect="function(){this.focus();if(this.select){this.select();}else{const r=document.createRange();r.selectNodeContents(this);const s=getSelection();s.removeAllRanges();s.addRange(r);}return document.activeElement===this;}";
     const string FnFocused="function(){return document.activeElement===this;}";
@@ -232,14 +251,18 @@ internal sealed class ChromeCdp:IDisposable
             if(n.TryGetProperty("properties",out var props))foreach(var p in props.EnumerateArray())
                 if(p.GetProperty("name").GetString()=="url"&&p.GetProperty("value").TryGetProperty("value",out var uv)){href=uv.GetString();if(href is not null&&hrefs.Count<400)hrefs.Add(href);}
             bool pw=false,search=role=="searchbox";
-            if(role is "textbox" or "searchbox" or "combobox"&&inputs++<60)
+            if(role is "textbox" or "searchbox" or "combobox")
             {
-                try
+                if(inputs++>=60)pw=true;   // 60 decoy boxes: past the checked ones a text input counts as protected, not as fine
+                else
                 {
-                    var obj=await Resolve(targetId,bid.GetInt32(),world,s,ct);var info=await OnObject(s,obj,FnInfo,ct);
-                    pw=info.GetProperty("pw").GetBoolean();search|=info.GetProperty("search").GetBoolean();
+                    try
+                    {
+                        var obj=await Resolve(targetId,bid.GetInt32(),world,s,ct);var info=await OnObject(s,obj,FnInfo,ct);
+                        pw=info.GetProperty("pw").GetBoolean();search|=info.GetProperty("search").GetBoolean();
+                    }
+                    catch(CdpException){pw=true;}   // cannot tell: treat as protected
                 }
-                catch(CdpException){pw=true;}   // cannot tell: treat as protected
             }
             var node=new CdpNode("s"+snapshot+"e"+(nodes.Count+1),targetId,frame,loader,url,bid.GetInt32(),role,name,pw,search,href);
             nodes.Add(node);refs[node.Ref]=node;
@@ -251,8 +274,30 @@ internal sealed class ChromeCdp:IDisposable
     public bool HrefInSnapshot(string url)=>hrefs.Contains(url);
     public CdpNode? Node(string reference)=>refs.TryGetValue(reference,out var n)?n:null;
     // ---- bound actions
-    public sealed record Bound(ActionBinding Binding,double X,double Y,string ObjectId,int World,string Session,string FormWords="");
-    // Everything an action is bound to, read fresh: target, frame, loader, origin+path, backend node, live role and name from the accessibility tree, the form's field digest; plus the hit test.
+    public sealed record Bound(ActionBinding Binding,double X,double Y,string ObjectId,int World,string Session,List<(string Name,string Value)> Fields,List<string> Rcpt,bool Pw,string Url);
+    // The live target of a click (link, formaction, form action), read before the click is classified. "" = none; throws StaleRefException when the page moved on.
+    public async Task<string> TargetOf(CdpNode n,CancellationToken ct)
+    {
+        var (frame,loader,_)=await Frame(n.TargetId,ct);
+        if(frame!=n.FrameId||loader!=n.LoaderId)throw new StaleRefException("navigated");
+        int world=await World(n.TargetId,frame,loader,ct);var s=await Session(n.TargetId,ct);
+        string obj;try{obj=await Resolve(n.TargetId,n.BackendId,world,s,ct);}catch(CdpException){throw new StaleRefException("node-gone");}
+        var v=await OnObject(s,obj,FnTarget,ct);
+        return v.ValueKind==JsonValueKind.String?v.GetString()??"":"";
+    }
+    static (List<(string,string)> Fields,List<string> Rcpt,string Digest) ReadForm(JsonElement form)
+    {
+        var fields=new List<(string,string)>();var rcpt=new List<string>();var dig=new List<string>();
+        if(form.ValueKind==JsonValueKind.Object)
+        {
+            if(form.TryGetProperty("words",out var w)&&w.ValueKind==JsonValueKind.Array)foreach(var p in w.EnumerateArray())if(p.ValueKind==JsonValueKind.Array&&p.GetArrayLength()==2)fields.Add((p[0].GetString()??"",p[1].GetString()??""));
+            if(form.TryGetProperty("rcpt",out var r)&&r.ValueKind==JsonValueKind.Array)foreach(var x in r.EnumerateArray())rcpt.Add(x.GetString()??"");
+            if(form.TryGetProperty("digest",out var d)&&d.ValueKind==JsonValueKind.Array)foreach(var x in d.EnumerateArray())dig.Add(x.GetString()??"");
+        }
+        return (fields,rcpt,ActionBinding.Digest(dig));
+    }
+    // Everything an action is bound to, read fresh: target, frame, loader, origin+path, backend node, live role and name from the accessibility tree, the form's field digest (every field, contenteditable bodies and
+    // recipient chips included, whole values hashed); plus the hit test. The live password check is repeated here (a field can turn into a password box after the snapshot).
     public async Task<Bound> Bind(CdpNode n,string tool,string? text,CancellationToken ct)
     {
         var (frame,loader,url)=await Frame(n.TargetId,ct);
@@ -266,18 +311,34 @@ internal sealed class ChromeCdp:IDisposable
         try{obj=await Resolve(n.TargetId,n.BackendId,world,s,ct);}catch(CdpException){throw new StaleRefException("node-gone");}
         var info=await OnObject(s,obj,FnInfo,ct);
         if(!info.GetProperty("connected").GetBoolean())throw new StaleRefException("detached");
-        var form=await OnObject(s,obj,FnForm,ct);
-        string digest=ActionBinding.Digest(form.ValueKind==JsonValueKind.Array?form.EnumerateArray().Select(e=>e.GetString()??""):[]);
+        var (fields,rcpt,digest)=ReadForm(await OnObject(s,obj,FnForm,ct));
         await Call("DOM.scrollIntoViewIfNeeded",new(){["backendNodeId"]=n.BackendId},s,ct);
         var box=await Call("DOM.getBoxModel",new(){["backendNodeId"]=n.BackendId},s,ct);
         var q=box.GetProperty("model").GetProperty("content").EnumerateArray().Select(e=>e.GetDouble()).ToArray();
         double x=(q[0]+q[2]+q[4]+q[6])/4,y=(q[1]+q[3]+q[5]+q[7])/4;
         var b=new ActionBinding().Set("target",n.TargetId).Set("frame",frame).Set("loader",loader).Set("origin",Domains.OriginPath(url)).Set("backend",n.BackendId).Set("role",role).Set("name",name)
             .Set("form",digest).Set("tool",tool).Set("text",text??"");
-        // What the form holds right now, read live for the question he is asked (field name and the first 15 words of each value; never password-type fields). Not logged.
-        string words=string.Join("; ",(form.ValueKind==JsonValueKind.Array?form.EnumerateArray().Select(e=>e.GetString()??""):[]).Select(f=>(i:f.IndexOf('='),f)).Where(t=>t.i>0&&t.f.Length>t.i+1).Take(4)
-            .Select(t=>Labels.Clean(t.f[..t.i])+": "+string.Join(" ",new string(t.f[(t.i+1)..].Where(c=>!char.IsControl(c)).ToArray()).Split(' ',StringSplitOptions.RemoveEmptyEntries).Take(15))));
-        return new(b,x,y,obj,world,s,words);
+        return new(b,x,y,obj,world,s,fields,rcpt,info.GetProperty("pw").GetBoolean(),url);
+    }
+    // The focused element of a tab, for a key that asks (Enter): bound like a click, so the key goes where the question said. null = nothing focused.
+    public sealed record FocusBound(ActionBinding Binding,List<(string Name,string Value)> Fields,List<string> Rcpt,bool Pw,bool Search,string Name,string Role,string Url);
+    public async Task<FocusBound?> BindFocus(string targetId,string key,CancellationToken ct)
+    {
+        var (frame,loader,url)=await Frame(targetId,ct);int world=await World(targetId,frame,loader,ct);var s=await Session(targetId,ct);
+        var r=await Call("Runtime.callFunctionOn",new(){["executionContextId"]=world,["functionDeclaration"]=FnActive,["returnByValue"]=false},s,ct);
+        if(r.TryGetProperty("exceptionDetails",out _)||!r.GetProperty("result").TryGetProperty("objectId",out var oid))return null;
+        string obj=oid.GetString()!;
+        var node=await Call("DOM.describeNode",new(){["objectId"]=obj},s,ct);
+        int backend=node.GetProperty("node").TryGetProperty("backendNodeId",out var bn)?bn.GetInt32():0;
+        if(backend==0)return null;
+        var part=await Call("Accessibility.getPartialAXTree",new(){["backendNodeId"]=backend,["fetchRelatives"]=false},s,ct);
+        var first=part.GetProperty("nodes").EnumerateArray().FirstOrDefault();
+        string role=first.ValueKind==JsonValueKind.Object&&first.TryGetProperty("role",out var rr)&&rr.TryGetProperty("value",out var rv)?rv.GetString()??"":"";
+        string name=first.ValueKind==JsonValueKind.Object&&first.TryGetProperty("name",out var nm)&&nm.TryGetProperty("value",out var nv)?nv.GetString()??"":"";
+        var info=await OnObject(s,obj,FnFocusInfo,ct);
+        var (fields,rcpt,digest)=ReadForm(await OnObject(s,obj,FnForm,ct));
+        var b=new ActionBinding().Set("target",targetId).Set("frame",frame).Set("loader",loader).Set("origin",Domains.OriginPath(url)).Set("backend",backend).Set("role",role).Set("name",name).Set("form",digest).Set("tool","key").Set("key",key);
+        return new(b,fields,rcpt,info.GetProperty("pw").GetBoolean(),info.GetProperty("search").GetBoolean(),name,role,url);
     }
     // The hit test: the node under the centre of the element must be the element or inside it.
     async Task HitTest(Bound b,CdpNode n,CancellationToken ct)
@@ -306,6 +367,7 @@ internal sealed class ChromeCdp:IDisposable
     {
         if(n.Protected)throw new CdpException("password-field");
         var b=await Bind(n,"chrome_fill",text,ct);
+        if(b.Pw)throw new CdpException("password-field");   // it turned into a password box after the snapshot
         if(expected is not null&&!expected.Same(b.Binding))throw new StaleRefException("changed:"+string.Join(",",expected.Diff(b.Binding)));
         await HitTest(b,n,ct);
         await Call("DOM.focus",new(){["backendNodeId"]=n.BackendId},b.Session,ct);
