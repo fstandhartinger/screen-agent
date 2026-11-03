@@ -171,7 +171,7 @@ internal static class DictationSelftest
                 w2.Close();
                 var cap=new CaptionOverlay();cap.Present("Das ist ein Probe-Untertitel");
                 long cx=Native.GetWindowLongPtr(new System.Windows.Interop.WindowInteropHelper(cap).Handle,-20).ToInt64();
-                Check("subtitle click-through, no focus, excluded from capture",cap.IsVisible&&(cx&0x20L)!=0&&(cx&0x08000000L)!=0&&cap.AffinityOk,$"exstyle={cx:x} affinity={cap.AffinityOk}");
+                Check("subtitle click-through, no focus, excluded from capture",cap.IsVisible&&(cx&0x20L)!=0&&(cx&0x08000000L)!=0&&cap.AffinityOk,$"visible={cap.IsVisible} exstyle={cx:x} affinity={cap.AffinityOk} text={cap.Text.Length}");
                 cap.Close();
             }
             catch(Exception ex){Check("window checks ran",false,ex.GetType().Name+": "+ex.Message);}
