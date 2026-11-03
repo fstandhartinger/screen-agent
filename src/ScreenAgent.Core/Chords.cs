@@ -1,7 +1,7 @@
 namespace ScreenAgent.Core;
 public enum Chord { None, Session, Dictation, Toggle }
-// Modifier sets per chord (physical roles). Session and Toggle are three modifiers, Dictation two; Pause, HandsFree and Mute add one action key.
-public sealed record HotkeyLayout(Key[] Session,Key[] Dictation,Key[] Toggle,Key[] Pause,Key[] HandsFree,Key[] Mute)
+// Modifier sets per chord (physical roles). Session and Toggle are three modifiers, Dictation two; Pause, HandsFree, Mute and Canvas add one action key.
+public sealed record HotkeyLayout(Key[] Session,Key[] Dictation,Key[] Toggle,Key[] Pause,Key[] HandsFree,Key[] Mute,Key[] Canvas)
 {
     public static bool IsMod(Key k)=>k is Key.Ctrl or Key.Alt or Key.Win or Key.Shift;
     public static bool Same(IReadOnlyCollection<Key> held,Key[] set)=>held.Count==set.Length&&set.All(held.Contains);

@@ -57,6 +57,11 @@ internal static class Native
     public static Input Key(ushort key,bool up=false,ushort scan=0,bool unicode=false,UIntPtr extra=default) => new(){type=1,u=new(){keyboard=new(){vk=key,scan=scan,flags=(up?2u:0u)|(unicode?4u:0u),extra=extra}}};
     // Unassigned virtual key: cancels "Win alone opens Start" and "Alt alone focuses the menu bar" for the chord in progress.
     public static void Mask()=>SendInput(2,new[]{Key(0xe8,false,0,false,Marker),Key(0xe8,true,0,false,Marker)},Marshal.SizeOf<Input>());
+    [DllImport("user32.dll")] internal static extern bool ShowWindow(IntPtr h,int cmd);
+    [DllImport("user32.dll")] internal static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] internal static extern bool AttachThreadInput(uint from,uint to,bool attach);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] internal static extern int GetClassName(IntPtr h,System.Text.StringBuilder s,int max);
+    [DllImport("user32.dll")] internal static extern IntPtr GetWindow(IntPtr h,uint cmd);
     [DllImport("user32.dll")] internal static extern bool SetCursorPos(int x,int y);
     [DllImport("user32.dll")] internal static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr window,uint flags);

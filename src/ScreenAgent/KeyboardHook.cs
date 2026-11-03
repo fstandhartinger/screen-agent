@@ -71,10 +71,10 @@ internal sealed class KeyboardHook : IDisposable
         // No UI/OCR/network in this callback.
         if(bindings.MaskNow)Native.Mask();
         if(transition)queue.Enqueue((new(key,down,Environment.TickCount64),Native.GetForegroundWindow()));
-        if(key==Core.Key.Mute)
+        if(key is Core.Key.Mute or Core.Key.Canvas)
         {
-            // Eat the M of Ctrl+Win+Shift+M only while it mutes (session running): Ctrl+Shift+M still reaches other apps otherwise.
-            if(down)muteOwned=muteLive&&bindings.Is(bindings.Layout.Mute);
+            // Eat the M / D of Ctrl+Win+Shift+M / +D only while it acts (session running): Ctrl+Shift+M still reaches other apps otherwise.
+            if(down)muteOwned=muteLive&&bindings.Is(key==Core.Key.Mute?bindings.Layout.Mute:bindings.Layout.Canvas);
             bool eat=muteOwned;
             if(!down)muteOwned=false;
             if(eat)return (IntPtr)1;

@@ -33,9 +33,12 @@ internal static class TextInjector
         }
         catch(Exception ex){return "Notepad elevation check failed: "+ex.GetType().Name;}
     }
-    public static async Task<bool> Inject(Target target,string text,bool clipboard,PrivacyPolicy policy)
+    public static async Task<bool> Inject(Target target,string text,bool clipboard,PrivacyPolicy policy,InputGate? gate=null)
     {
         text=Sanitize(text);
+        // A Main Agent prompt being typed finishes first (30 s at most); if it does not, the text goes to the clipboard like any unsafe target.
+        using var slot=gate is null?null:await gate.BeginInject(TimeSpan.FromSeconds(30));
+        if(gate is not null&&slot is null){SetTemporary(text);return false;}
         for(int i=0;i<100&&!Native.ModifiersUp;i++)await Task.Delay(10);
         bool safe=Native.ModifiersUp && Safe(target,policy);
         if(!safe){SetTemporary(text);return false;} // explicit local clipboard fallback; caller shows a notice

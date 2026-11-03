@@ -1,0 +1,49 @@
+name: End to end, voice action tools
+on:
+  workflow_dispatch:
+  push:
+    branches: ['e2eact/**']
+permissions:
+  contents: read
+jobs:
+  e2e:
+    if: github.actor == 'fstandhartinger'
+    runs-on: windows-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
+      - name: Real VS Code Insiders and extension
+        shell: pwsh
+        run: |
+          $env:SA_E2E_PREPARE_ONLY = '1'
+          ./ci/main-agent-e2e.ps1
+      - name: Real app, real voice, recorded microphone
+        shell: pwsh
+        env:
+          SA_E2E: '1'
+          SA_E2E_TOKEN: ${{ secrets.E2E_DEVICE_TOKEN }}
+          E2E_DESK_URL: ${{ secrets.E2E_DESK_URL }}
+        run: |
+          $wav = (Resolve-Path testdata/e2e-actions.wav).Path
+          $env:SA_E2E_ARGS = "--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=$wav%noloop --autoplay-policy=no-user-gesture-required"
+          $code = (Resolve-Path e2e-vscode/vscode).Path
+          $work = (Resolve-Path e2e-vscode/work).Path
+          $p = Start-Process -FilePath ./publish/ScreenAgent.exe -ArgumentList '--selftest-live-actions',$env:E2E_DESK_URL,"`"$code`"","`"$work`"",'https://explainers.app.mintapis.com/p/agent-artifact-ids/' -PassThru -RedirectStandardOutput e2e.txt -RedirectStandardError e2e.err -NoNewWindow
+          if (-not $p.WaitForExit(560000)) { Stop-Process $p -Force; Write-Host 'timed out after 560 s' }
+          Get-Content e2e.txt; Get-Content e2e.err -ErrorAction SilentlyContinue | Select-Object -Last 20
+          Get-Content "$env:LOCALAPPDATA/ScreenAgent/logs/screenagent.log" -ErrorAction SilentlyContinue | Select-Object -Last 150
+          if (-not (Select-String -Quiet -Path e2e.txt -Pattern '"voice":true')) { throw 'live selftest failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-actions
+          path: |
+            e2e-shots/
+            e2e.txt
+          retention-days: 3
+          if-no-files-found: warn

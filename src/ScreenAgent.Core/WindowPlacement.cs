@@ -44,4 +44,31 @@ public static class WindowPlacement
         }
         return new(work.Right-w-margin,work.Y+margin,w,h);
     }
+    public const int PanelDefaultWidthDip=440,PanelDefaultHeightDip=340,PanelMinWidthDip=320,PanelMinHeightDip=240,PanelNoteReserveDip=44;
+    // Drawing panel. works/scales: work area (device pixels) and scale of every monitor. foreground: index of the monitor holding the foreground window (-1 = none),
+    // current: monitor of the cursor. A remembered box wins when its title bar is still reachable. Otherwise bottom-right of a monitor that does NOT hold the
+    // foreground window if there is one (so the panel never covers what the user works in), else bottom-right of the current monitor; a strip above the
+    // bottom edge stays free for the status note. Work areas exclude the taskbar already.
+    public static PxRect CanvasPanel(IReadOnlyList<PxRect> works,IReadOnlyList<double> scales,int foreground,int current,PxRect? saved)
+    {
+        if(works.Count==0)return new(0,0,PanelDefaultWidthDip,PanelDefaultHeightDip);
+        if(saved is {W:>0,H:>0} p)
+        {
+            int best=Enumerable.Range(0,works.Count).OrderByDescending(i=>works[i].Intersect(p).W*(long)works[i].Intersect(p).H).First();
+            var title=new PxRect(p.X,p.Y,p.W,(int)Math.Round(32*scales[best]));
+            if(works.Any(a=>a.Intersect(title) is {W:>=120,H:>=24}))
+            {
+                var area=works[best];
+                int w=Math.Min(p.W,area.W),h=Math.Min(p.H,area.H);
+                return new(Math.Min(Math.Max(p.X,area.X),area.Right-w),Math.Min(Math.Max(p.Y,area.Y),area.Bottom-h),w,h);
+            }
+        }
+        var free=Enumerable.Range(0,works.Count).Where(i=>i!=foreground).ToList();
+        int cur=Math.Max(0,Math.Min(works.Count-1,current));
+        int idx=free.Count==0||free.Count==works.Count?cur:free.Contains(cur)?cur:free[0];
+        var work=works[idx];double s=scales[idx];
+        int margin=(int)Math.Round(12*s),reserve=(int)Math.Round(PanelNoteReserveDip*s);
+        int pw=Math.Min((int)Math.Round(PanelDefaultWidthDip*s),Math.Max(1,work.W-2*margin)),ph=Math.Min((int)Math.Round(PanelDefaultHeightDip*s),Math.Max(1,work.H-reserve-margin));
+        return new(work.Right-pw-margin,work.Bottom-reserve-ph,pw,ph);
+    }
 }
