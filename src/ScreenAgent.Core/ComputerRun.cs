@@ -196,7 +196,7 @@ public static class ComputerRedact
     public static string Goal(string? s)
     {
         s=new string((s??"").Where(c=>!char.IsControl(c)).ToArray());
-        try{s=Rx.Replace(s,"…");}catch(RegexMatchTimeoutException){s="…";}
+        try{s=Rx.Replace(s,"…");}catch(RegexMatchTimeoutException){s="…";}   // a timeout leaves only the ellipsis, nothing from the text
         return s.Length<=100?s:s[..100];
     }
 }

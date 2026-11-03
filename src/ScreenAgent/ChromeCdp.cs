@@ -96,7 +96,7 @@ internal sealed class ChromeCdp:IDisposable
             {
                 using var ms=new MemoryStream();WebSocketReceiveResult r;
                 do{r=await ws.ReceiveAsync(buf,life.Token);if(r.MessageType==WebSocketMessageType.Close)return;ms.Write(buf,0,r.Count);if(ms.Length>32<<20)return;}while(!r.EndOfMessage);
-                JsonDocument doc;try{doc=JsonDocument.Parse(ms.ToArray());}catch(JsonException){continue;}
+                JsonDocument doc;try{doc=JsonDocument.Parse(ms.ToArray());}catch(JsonException){continue;}   // a malformed frame from the browser is skipped; a missing reply times out and is logged by Call
                 var root=doc.RootElement;
                 if(root.TryGetProperty("id",out var id)&&id.TryGetInt32(out int n))
                 {
@@ -115,7 +115,7 @@ internal sealed class ChromeCdp:IDisposable
                         string type=root.TryGetProperty("params",out var pp)&&pp.TryGetProperty("type",out var tp)?tp.GetString()??"":"";
                         log("computer.chrome.dialog",new(){["type"]=type});
                         // A page dialog is never answered "yes": it is dismissed (a beforeunload keeps the page).
-                        _=Task.Run(async()=>{try{await Call("Page.handleJavaScriptDialog",new(){["accept"]=false},sid,life.Token);}catch{ }});
+                        _=Task.Run(async()=>{try{await Call("Page.handleJavaScriptDialog",new(){["accept"]=false},sid,life.Token);}catch{ }});   // dismissing a JS dialog is best effort; the next call fails and is logged if the page is stuck
                     }
                     doc.Dispose();
                 }
@@ -339,7 +339,7 @@ internal sealed class ChromeCdp:IDisposable
     public void Dispose()
     {
         life.Cancel();
-        try{if(ws.State==WebSocketState.Open)ws.CloseAsync(WebSocketCloseStatus.NormalClosure,"",new CancellationTokenSource(1000).Token).Wait(1200);}catch{ }
+        try{if(ws.State==WebSocketState.Open)ws.CloseAsync(WebSocketCloseStatus.NormalClosure,"",new CancellationTokenSource(1000).Token).Wait(1200);}catch{ }   // closing the socket at the end of a run, nothing left to report
         ws.Dispose();life.Dispose();
     }
 }
@@ -358,7 +358,7 @@ internal static class ChromeDialogs
             if(image.Length==0)continue;
             string leaf=image[(image.LastIndexOfAny(['\\','/'])+1)..];
             if(!leaf.Equals("chrome.exe",StringComparison.OrdinalIgnoreCase)&&!leaf.Equals("notepad.exe",StringComparison.OrdinalIgnoreCase)&&!image.Equals(ownerImage,StringComparison.OrdinalIgnoreCase))continue;   // every candidate imaginable, so look-alikes are seen and rejected by the matcher
-            try{Walk(AutomationElement.FromHandle(h),image,-1,0,false,nodes,els);}catch(Exception){ }
+            try{Walk(AutomationElement.FromHandle(h),image,-1,0,false,nodes,els);}catch(Exception){ }   // window vanished while scanning for the allow dialog: counts as no dialog, the connect step logs the outcome
         }
         return new(nodes,els);
     }

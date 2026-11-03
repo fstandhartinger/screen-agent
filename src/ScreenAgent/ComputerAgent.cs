@@ -51,7 +51,7 @@ internal sealed class ComputerAgent:IDisposable
         this.post=post;this.telemetry=telemetry;this.gate=gate;this.policy=policy;this.overlay=overlay;this.hook=hook;this.sessionId=sessionId;this.voiceOn=voiceOn;this.enabled=enabled;this.muted=muted;this.notice=notice;
         chromeOptions=chrome;this.logPath=logPath;this.ui=ui;this.boardHost=boardHost;
         worker=new Thread(Loop){IsBackground=true,Name="ScreenAgent computer"};worker.Start();
-        ticker=new System.Threading.Timer(_=>{try{Tick();}catch{ }},null,500,500);
+        ticker=new System.Threading.Timer(_=>{try{Tick();}catch{ }},null,500,500);   // the tick is retried in 500 ms; every failure that matters ends the run with a logged reason
     }
     // ---- log: the local file first, the trace second. A failing file write means no R2.
     bool Log(string type,Dictionary<string,object?> data)
@@ -63,8 +63,8 @@ internal sealed class ComputerAgent:IDisposable
             var line=JsonSerializer.Serialize(new{ts=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),type,data=TraceSanitizer.Clean(data)});
             lock(fileLock){Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);File.AppendAllText(logPath,line+"\n");}
         }
-        catch{ok=false;}
-        try{telemetry(type,data);}catch{ }
+        catch{ok=false;}   // the local log write failed: ok=false, an R2 action is then refused (no-trace)
+        try{telemetry(type,data);}catch{ }   // telemetry must never take the run down
         return ok;
     }
     // ---- entry: called from the command poll (any thread). stop and beat act at once; the rest waits its turn on the worker.
@@ -76,7 +76,7 @@ internal sealed class ComputerAgent:IDisposable
             if(cmd.Op=="beat"&&run is {} b&&b.Id==cmd.Run&&runSid==sid){b.Seen();_=Beat(sid,b);return;}
             queue.Add(new(sid,cmd));
         }
-        catch(InvalidOperationException){ }
+        catch(InvalidOperationException){ }   // the queue was completed by a concurrent stop
     }
     void Loop()
     {
@@ -90,7 +90,7 @@ internal sealed class ComputerAgent:IDisposable
         =>ComputerWire.Result(ok,code,cls?.ToString(),rule,result,ask,runState);
     async Task Result(string sid,ComputerCommand cmd,Dictionary<string,object?> body)
     {
-        for(int i=0;i<2;i++){try{if(await post("api/device/session/"+Uri.EscapeDataString(sid)+"/computer/"+cmd.Id+"/result",body))return;}catch{ }await Task.Delay(400);}
+        for(int i=0;i<2;i++){try{if(await post("api/device/session/"+Uri.EscapeDataString(sid)+"/computer/"+cmd.Id+"/result",body))return;}catch{ }await Task.Delay(400);}   // two tries; the gateway times the command out and the run logs the lost result
         Log("computer.result.lost",new(){["run"]=cmd.Run,["code"]=body["code"]});
     }
     void Send(Work w,Dictionary<string,object?> body)=>Result(w.Sid,w.Cmd,body).GetAwaiter().GetResult();
@@ -157,9 +157,9 @@ internal sealed class ComputerAgent:IDisposable
         bool killed=r.Revoked;
         lock(sync){revokedRuns.Add(r.Id);if(revokedRuns.Count>64)revokedRuns.Clear();}
         ComputerGuard.Attach(null);hook?.ComputerRunEnded();
-        try{cdp?.Dispose();}catch{ }
+        try{cdp?.Dispose();}catch{ }   // disposing at the end of a run
         cdp=null;pendingExec=null;pendingPlan=null;
-        try{ui.Invoke(()=>overlay.Hide());}catch{ }
+        try{ui.Invoke(()=>overlay.Hide());}catch{ }   // the overlay thread is gone: nothing to hide
         if(killed)Log("computer.kill",new(){["run"]=r.Id,["via"]=r.KillVia??why});
         Log("computer.run.stop",new(){["run"]=r.Id,["why"]=killed?(r.KillVia??why):why,["actions"]=r.Actions,["asks"]=r.Asks,["ms"]=Environment.TickCount64-r.StartedAt});
         if(sid is not null)_=post("api/device/session/"+Uri.EscapeDataString(sid)+"/computer/beat",new{run=r.Id,state=killed?"killed":"closed",why=killed?(r.KillVia??why):why});
@@ -200,7 +200,7 @@ internal sealed class ComputerAgent:IDisposable
     {
         var h=UiaDriver.Root(Native.GetForegroundWindow());string p=UiaDriver.ProcessOf(h),t=UiaDriver.TitleOf(h);
         CdpTab? tab=null;string? url=null;
-        if(cdp is {Open_:true} c&&ComputerPolicy.IsBrowser(p)){try{tab=c.TabByTitle(t).GetAwaiter().GetResult();url=tab?.Url;}catch{ }}
+        if(cdp is {Open_:true} c&&ComputerPolicy.IsBrowser(p)){try{tab=c.TabByTitle(t).GetAwaiter().GetResult();url=tab?.Url;}catch{ }}   // no CDP url known: the window then counts as a browser without a verified url (R2)
         return new(h,p,t,url,tab);
     }
     ChromeCdp? Cdp(out string? failure)
@@ -257,9 +257,9 @@ internal sealed class ComputerAgent:IDisposable
             plan=made.Plan!;
             v=policy.Classify(plan.Ctx,r.Scope);
         }
-        catch(StaleRefException){Refuse(w,r,tool,null,"stale-ref",null,ComputerCodes.StaleRef);return;}
-        catch(UiaStaleException){Refuse(w,r,tool,null,"stale-ref",null,ComputerCodes.StaleRef);return;}
-        catch(OperationCanceledException){Send(w,Reply(false,ComputerCodes.Killed,null,"killed",null,null,r.StateName));return;}
+        catch(StaleRefException){Refuse(w,r,tool,null,"stale-ref",null,ComputerCodes.StaleRef);return;}   // refused with stale-ref, logged by Refuse
+        catch(UiaStaleException){Refuse(w,r,tool,null,"stale-ref",null,ComputerCodes.StaleRef);return;}   // refused with stale-ref, logged by Refuse
+        catch(OperationCanceledException){Send(w,Reply(false,ComputerCodes.Killed,null,"killed",null,null,r.StateName));return;}   // killed: the reply says so and computer.kill is logged by the guard
         catch(Exception e){Log("computer.error",new(){["run"]=r.Id,["tool"]=tool,["type"]=e.GetType().Name});Send(w,Reply(false,ComputerCodes.Unclear,null,"error",null,null,r.StateName));return;}
         var data=new Dictionary<string,object?>{["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=tool,["class"]=v.Class.ToString(),["rule"]=v.Rule,["target"]=Labels.Clean(plan.Target),["domain"]=Domains.Etld1(Domains.HostOf(plan.Ctx.Url)??""),["process"]=UiaDriver.ProcessOf(UiaDriver.Root(Native.GetForegroundWindow())),["chars"]=plan.Ctx.Text?.Length??0};
         if(v.Refused)
@@ -282,7 +282,7 @@ internal sealed class ComputerAgent:IDisposable
     {
         ActionBinding binding;(string Spoken,string ForLog) say;
         try{binding=plan.Bind()??new ActionBinding().Set("tool",w.Cmd.Tool);say=plan.Describe();}
-        catch(Exception e) when(e is StaleRefException or UiaStaleException or CdpException){Send(w,Reply(false,ComputerCodes.StaleRef,v.Class,"stale-ref",null,null,r.StateName));return;}
+        catch(Exception e) when(e is StaleRefException or UiaStaleException or CdpException){Send(w,Reply(false,ComputerCodes.StaleRef,v.Class,"stale-ref",null,null,r.StateName));return;}   // replied stale-ref; the result POST is the record
         // The binding the action is checked against right before it runs is the pure one; the hash shown to the gateway also covers the rule and the arguments.
         var pure=binding.Clone();
         binding.Set("rule",v.Rule).Set("args",w.Cmd.Args.ValueKind==JsonValueKind.Object?w.Cmd.Args.GetRawText():"");

@@ -86,7 +86,7 @@ public sealed class ComputerScope
                 if(Domains.KnownTld(h[(h.LastIndexOf('.')+1)..]))Hosts.Add(h);
             }
         }
-        catch(RegexMatchTimeoutException){ }
+        catch(RegexMatchTimeoutException){ }   // timeout means no match; callers treat it conservatively
         var words=Regex.Split(g,@"[^\p{L}\p{N}\-]+").Where(w=>w.Length>0).ToArray();
         foreach(var w in words)
         {
@@ -235,7 +235,7 @@ public sealed class ComputerPolicy
         string? host=Domains.HostOf(url);
         if(host is not null&&(InList(host,Money)||PasswordHost(host)))return true;
         if(Domains.Scheme(url) is "chrome" or "about" or "chrome-extension" or "devtools" or "file" or "view-source")return true;
-        if(title is not null)try{if(ReadDenyRx.IsMatch(title)||OwnFilesRx.IsMatch(title)||title.Contains("Passwort-Manager",StringComparison.OrdinalIgnoreCase)||title.Contains("Password Manager",StringComparison.OrdinalIgnoreCase))return true;}catch(RegexMatchTimeoutException){return true;}
+        if(title is not null)try{if(ReadDenyRx.IsMatch(title)||OwnFilesRx.IsMatch(title)||title.Contains("Passwort-Manager",StringComparison.OrdinalIgnoreCase)||title.Contains("Password Manager",StringComparison.OrdinalIgnoreCase))return true;}catch(RegexMatchTimeoutException){return true;}   // a timeout counts as denied
         return privacy.Blocked(p,title??"",url);
     }
     // The class of one proposed action in the run's scope. Order matters: refusals first, then the page-independent raisers, then the scope.
@@ -254,7 +254,7 @@ public sealed class ComputerPolicy
         if(p=="explorer"&&Regex.IsMatch(c.Title,@"(?i)^(ausführen|run)$"))return Verdict.Of(ActionClass.R3,"run-dialog");
         if(p=="explorer"&&Regex.IsMatch(c.Label??"",@"(?i)(adressleiste|address bar|^address)"))return Verdict.Of(ActionClass.R3,"address-bar");
         if(c.Title.Contains("Screen Agent",StringComparison.OrdinalIgnoreCase))return Verdict.Of(ActionClass.R3,"own-window");
-        try{if(OwnFilesRx.IsMatch(c.Title))return Verdict.Of(ActionClass.R3,"own-files");}catch(RegexMatchTimeoutException){return Verdict.Of(ActionClass.R3,"own-files");}
+        try{if(OwnFilesRx.IsMatch(c.Title))return Verdict.Of(ActionClass.R3,"own-files");}catch(RegexMatchTimeoutException){return Verdict.Of(ActionClass.R3,"own-files");}   // a timeout counts as own files (R3)
         if(scheme is not null&&scheme is not ("http" or "https"))return Verdict.Of(ActionClass.R3,"scheme");
         if(host is not null)
         {

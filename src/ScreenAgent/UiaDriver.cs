@@ -23,7 +23,7 @@ internal sealed class UiaDriver
     public static string ProcessOf(IntPtr h)
     {
         Native.GetWindowThreadProcessId(h,out uint pid);
-        try{using var p=Process.GetProcessById((int)pid);return p.ProcessName;}catch{return "";}
+        try{using var p=Process.GetProcessById((int)pid);return p.ProcessName;}catch{return "";}   // process already gone: an empty name is classified as unknown (R2 or refused), never allowed
     }
     public static string TitleOf(IntPtr h){var sb=new StringBuilder(512);Native.GetWindowText(h,sb,sb.Capacity);return sb.ToString();}
     public static string ClassOf(IntPtr h){var sb=new StringBuilder(128);Native.GetClassName(h,sb,sb.Capacity);return sb.ToString();}
@@ -60,7 +60,7 @@ internal sealed class UiaDriver
             if(revoked())throw new OperationCanceledException("run revoked");
             var e=queue.Dequeue();
             AutomationElement.AutomationElementInformation c;
-            try{c=e.Current;}catch(ElementNotAvailableException){continue;}
+            try{c=e.Current;}catch(ElementNotAvailableException){continue;}   // element vanished while walking: skipped, the tree is a snapshot
             string type=c.ControlType.ProgrammaticName.Replace("ControlType.","");
             bool pw=c.IsPassword;
             if(count>0&&!c.IsOffscreen)
@@ -86,7 +86,7 @@ internal sealed class UiaDriver
             if(e.TryGetCurrentPattern(ValuePattern.Pattern,out var v))return ((ValuePattern)v).Current.Value;
             if(e.TryGetCurrentPattern(TextPattern.Pattern,out var t))return ((TextPattern)t).DocumentRange.GetText(200);
         }
-        catch{ }
+        catch{ }   // best effort; the caller verifies the result itself
         return null;
     }
     public UiaHeld? Held(string reference)=>held.TryGetValue(reference,out var h)?h:null;
@@ -195,7 +195,7 @@ internal sealed class UiaDriver
         for(int i=mods.Length-1;i>=0;i--)list.Add(V(mods[i],true));
         Check();
         try{Native.Send(list.ToArray());Interlocked.Add(ref KeysSent,list.Count);}
-        catch{foreach(var m in mods)try{Native.Send(V(m,true));}catch{ }throw;}
+        catch{foreach(var m in mods)try{Native.Send(V(m,true));}catch{ }throw;}   // releasing modifiers after a failed batch; the original exception is rethrown and logged by the caller
         return "taste:"+n;
     }
     // Typing: the element must be the one that has the keyboard focus, in the foreground window, no modifier held, not a password field; re-checked before every batch.
@@ -216,7 +216,7 @@ internal sealed class UiaDriver
             Check();
             if(Root(Native.GetForegroundWindow())!=h.Hwnd)throw new UiaStaleException("focus-left");
             if(!WaitModifiersUp(1000))throw new UiaStaleException("modifiers");
-            AutomationElement? f;try{f=AutomationElement.FocusedElement;}catch{f=null;}
+            AutomationElement? f;try{f=AutomationElement.FocusedElement;}catch{f=null;}   // no focused element: null makes the typing check refuse
             if(f is null||!Automation.Compare(f,h.El))throw new UiaStaleException("focus-left");
             var keys=new Native.Input[step.Chars.Length*2];
             for(int i=0;i<step.Chars.Length;i++){keys[2*i]=Native.Key(0,false,step.Chars[i],true,Native.Marker);keys[2*i+1]=Native.Key(0,true,step.Chars[i],true,Native.Marker);}

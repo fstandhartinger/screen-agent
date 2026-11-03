@@ -69,6 +69,6 @@ internal static class ComputerNative
             if(t==0)return false;
             return t==1?Self!=1:true;   // elevated target: only fine when this app is elevated too; unreadable: fail closed
         }
-        catch{return true;}
+        catch{return true;}   // unknown state is treated as elevated: the run refuses (closed by default)
     }
 }

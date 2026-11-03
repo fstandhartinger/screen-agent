@@ -38,7 +38,7 @@ internal static partial class ComputerSelftest
         }
         return np;
     }
-    static void Inject(params Native.Input[] keys){try{Native.Send(keys);}catch{ }}
+    static void Inject(params Native.Input[] keys){try{Native.Send(keys);}catch{ }}   // selftest helper
     static Native.Input K(ushort vk,bool up)=>Native.Key(vk,up);   // no marker: the hook sees these as somebody else's keys
     static async Task Scenarios(KeyboardHook hook,InputGate gate,string logFile,Func<Process?> getNp,Action<Process?> setNp)
     {
