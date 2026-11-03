@@ -142,7 +142,7 @@ internal static partial class ComputerSelftest
         var openEvil=await Do(run,"action","chrome_open",new{url=U("evil.localhost","/")});string ce=CodeNow();
         Ok("navigating out of the scope is R2 and the domain is spoken",Code(openEvil)==ComputerCodes.NeedsConfirm&&Rule(openEvil)=="open-out-of-scope"&&Spoken(openEvil).Contains("evil.localhost"),Brief(openEvil)+" · "+Spoken(openEvil));
         var evilTab=await Confirm(run,openEvil);await Task.Delay(800);
-        var tabsC=await Do(run,"action","chrome_tabs");string et=TabIdOf(Res(tabsC),"evil.localhost");var snapC=await Do(run,"action","chrome_snapshot",new{tab=et});string es=Res(snapC);var evilWeiter=Find(es,"button","Weiter");
+        var tabsC=await Do(run,"action","chrome_tabs");string et=TabIdOf(Res(tabsC),"evil.localhost");string es=await Snap(run,et);var snapC=await Do(run,"action","chrome_snapshot",new{tab=et});var evilWeiter=Find(es,"button","Weiter");
         if(evilWeiter is null)Ok("the tab he approved to open can be read",false,"open "+Brief(evilTab)+" tabs="+Res(tabsC)+" snapshot "+Brief(snapC)+": "+es);
         var evilClick=await Do(run,"action","chrome_click",new{@ref=Need(evilWeiter,"evilWeiter")});
         Ok("'Weiter' that sends, outside the scope on an unlisted site: R2, not sent",Code(evilClick)==ComputerCodes.NeedsConfirm&&Rule(evilClick)=="out-of-scope"&&fx.Count("evil.localhost/send")==0,Brief(evilClick));

@@ -178,7 +178,18 @@ internal static partial class ComputerSelftest
         if(Code(r)!=ComputerCodes.Done)throw new InvalidOperationException("open "+host+path+" -> "+Brief(r));
         await Task.Delay(700);return TabIdOf(Res(r),host);
     }
-    static async Task<string> Snap(string run,string tab){var r=await Do(run,"action","chrome_snapshot",new{tab});return Res(r);}
+    // The accessibility tree of a page that has not finished loading is empty: ask again (up to 8 times, 400 ms apart) until it lists something. A refusal is returned at once.
+    static async Task<string> Snap(string run,string tab)
+    {
+        string text="";
+        for(int i=0;i<8;i++)
+        {
+            var r=await Do(run,"action","chrome_snapshot",new{tab});text=Res(r);
+            if(Code(r)!=ComputerCodes.Done||Regex.IsMatch(text,@"^\S+ \S+ """,RegexOptions.Multiline))break;
+            await Task.Delay(400);
+        }
+        return text;
+    }
     // ---- main
     static async Task<int> All()
     {
