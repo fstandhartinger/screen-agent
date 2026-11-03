@@ -508,10 +508,10 @@ internal static partial class ComputerSelftest
         }
         // ===== f-fix2 N3: "hier" resolves the front tab's host at the start and the start ASKS and names it (it used to start with an empty scope, no ask, and add the host later) =====
         {
-            string r3=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/fields4"));
-            await Page(r3,"site.localhost","/fields4");
+            string r3=await Start("Übernimm den Rechner und öffne "+U("site.localhost","/hier"));
+            await Page(r3,"site.localhost","/hier");
             var wl3=await Do(r3,"action","ui_windows");
-            string? hereWin=Regex.Matches(Res(wl3),@"^(\S+) chrome ""FelderVier",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
+            string? hereWin=Regex.Matches(Res(wl3),@"^(\S+) chrome ""HierSeite",RegexOptions.Multiline).FirstOrDefault()?.Groups[1].Value;
             bool front3=false;if(hereWin is not null){var fr=await Do(r3,"action","window_focus",new{window=hereWin});front3=Code(fr)==ComputerCodes.Done;await Task.Delay(600);}
             await End(r3);
             if(!front3)Skip("N3 'hier' start ask","Chrome could not be brought to the front on this runner; covered by Core tests (ResolveHere)");
