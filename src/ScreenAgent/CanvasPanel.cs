@@ -131,8 +131,9 @@ internal sealed class CanvasPanel : Window
             controller.RasterizationScaleChanged+=(_,_)=>ResizeBrowser();
             browser=controller.CoreWebView2;
             bridge.InstallTestResponses(browser);
-            browser.NavigationStarting+=(_,e)=>{if(!bridge.IsTrusted(e.Uri))e.Cancel=true;};
-            browser.NavigationCompleted+=(_,e)=>{PageLoaded=e.IsSuccess;navigating=false;ResizeBrowser();};
+            browser.NavigationStarting+=(_,e)=>{if(!bridge.IsTrusted(e.Uri)){e.Cancel=true;Diag.Event("canvas.nav.blocked",new(){["host"]=Uri.TryCreate(e.Uri,UriKind.Absolute,out var blocked)?blocked.Host:"?"});}};
+            browser.ProcessFailed+=(_,e)=>Diag.Event("canvas.process.failed",new(){["kind"]=e.ProcessFailedKind.ToString(),["reason"]=e.Reason.ToString(),["exit"]=e.ExitCode});
+            browser.NavigationCompleted+=(_,e)=>{if(!e.IsSuccess)Diag.Event("canvas.nav.fail",new(){["error"]=e.WebErrorStatus.ToString(),["status"]=e.HttpStatusCode});PageLoaded=e.IsSuccess;navigating=false;ResizeBrowser();};
             browser.NewWindowRequested+=(_,e)=>{e.Handled=true;};
             browser.PermissionRequested+=(_,e)=>{e.State=CoreWebView2PermissionState.Deny;};
             ResizeBrowser();
@@ -140,7 +141,7 @@ internal sealed class CanvasPanel : Window
             Navigate();
             InitStage="ready";
         }
-        catch(Exception ex){InitStage="failed:"+ex.GetType().Name;initStarted=false;controller?.Close();controller=null;browser=null;}
+        catch(Exception ex){InitStage="failed:"+ex.GetType().Name;Diag.Fail("canvas-init",ex);initStarted=false;controller?.Close();controller=null;browser=null;}
     }
     void Navigate(){navigating=true;browser!.Navigate(new Uri(bridge.DeskOrigin,"/?panel=canvas").AbsoluteUri);}
     void ResizeBrowser()

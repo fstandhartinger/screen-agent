@@ -12,7 +12,7 @@ internal sealed class CorrectionLearner
     public CorrectionLearner(DeviceClient client,PrivacyPolicy policy,int learnThreshold=1)
     {
         this.client=client;this.policy=policy;this.learnThreshold=learnThreshold;
-        try{pending=JsonSerializer.Deserialize<List<PendingCorrection>>(File.ReadAllText(path))??[];}catch{pending=[];}
+        try{pending=JsonSerializer.Deserialize<List<PendingCorrection>>(File.ReadAllText(path))??[];}catch(Exception ex){pending=[];if(ex is not FileNotFoundException)Diag.Fail("learner-load",ex);}   // no file = nothing pending
     }
     void Save(){File.WriteAllText(path+".tmp",JsonSerializer.Serialize(pending));File.Move(path+".tmp",path,true);}
     public void Cancel()=>generation++;
@@ -47,6 +47,6 @@ internal sealed class CorrectionLearner
             }
         }
         catch(OperationCanceledException){}
-        catch{ /* Learning is optional. Keep pending pairs for the next independent observation. */ }
+        catch(Exception ex){Diag.Fail("learner",ex);}   // learning is optional; pending pairs stay for the next observation
     }
 }

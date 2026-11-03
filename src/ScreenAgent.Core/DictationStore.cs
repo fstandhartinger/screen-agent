@@ -79,7 +79,7 @@ public sealed class DictationStore(string folder,Func<DateTimeOffset>? now=null)
     public DictationMeta? Load(string path)
     {
         try{var m=JsonSerializer.Deserialize<DictationMeta>(File.ReadAllText(path));if(m is null||m.Id.Length==0)return null;m.Folder=folder;return m;}
-        catch{return null;}
+        catch(Exception){return null;}   /* unreadable sidecar: not listed (the wav stays; Recover finds it) */
     }
     public List<DictationMeta> All()
     {
@@ -91,7 +91,7 @@ public sealed class DictationStore(string folder,Func<DateTimeOffset>? now=null)
     public void Delete(DictationMeta m)
     {
         foreach(var p in m.Paths){try{File.Delete(p);}catch{ /* a locked file goes with the next sweep */ }}
-        try{File.Delete(m.MetaPath);}catch{ }
+        try{File.Delete(m.MetaPath);}catch(Exception){ /* swept next time */ }
     }
     // At start: whatever a crash or power loss left behind. A recording that was still running becomes a failed one with a repaired wav; a wav without sidecar gets one.
     public RecoverReport Recover()
@@ -114,7 +114,7 @@ public sealed class DictationStore(string folder,Func<DateTimeOffset>? now=null)
         {
             string name=Path.GetFileName(p);if(known.Contains(name))continue;
             var c=Wav.Repair(p);if(c.Repaired)repaired++;
-            if(!c.Readable||c.Pcm<DictationGate.MinSeconds*Wav.BytesPerSecond){dropped++;try{File.Delete(p);}catch{ }continue;}
+            if(!c.Readable||c.Pcm<DictationGate.MinSeconds*Wav.BytesPerSecond){dropped++;try{File.Delete(p);}catch(Exception){ /* swept next time */ }continue;}
             // <stamp>-<id>.wav (id = 8 hex); anything else keeps its whole name as id
             var stem=Path.GetFileNameWithoutExtension(name);var parts=stem.Split('-');
             var m=new DictationMeta{Id=parts.Length>=3?parts[2]:stem,Stamp=parts.Length>=2?parts[0]+"-"+parts[1]:"",State="failed",Stage="recover",Reason="Aufnahme ohne Protokoll gefunden (Absturz oder Stromausfall)",

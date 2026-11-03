@@ -31,17 +31,17 @@ internal static class TextInjector
             }
             finally{CloseHandle(token);}
         }
-        catch(Exception ex){return "Notepad elevation check failed: "+ex.GetType().Name;}
+        catch(Exception ex){Diag.Fail("elevation-check",ex);return "Notepad elevation check failed: "+ex.GetType().Name;}
     }
     public static async Task<bool> Inject(Target target,string text,bool clipboard,PrivacyPolicy policy,InputGate? gate=null)
     {
         text=Sanitize(text);
         // A Main Agent prompt being typed finishes first (30 s at most); if it does not, the text goes to the clipboard like any unsafe target.
         using var slot=gate is null?null:await gate.BeginInject(TimeSpan.FromSeconds(30));
-        if(gate is not null&&slot is null){SetTemporary(text);return false;}
+        if(gate is not null&&slot is null){Refused("prompt-busy",text);SetTemporary(text);return false;}
         for(int i=0;i<100&&!Native.ModifiersUp;i++)await Task.Delay(10);
-        bool safe=Native.ModifiersUp && Safe(target,policy);
-        if(!safe){SetTemporary(text);return false;} // explicit local clipboard fallback; caller shows a notice
+        string? why=!Native.ModifiersUp?"modifiers-down":SafeWhy(target,policy);
+        if(why is not null){Refused(why,text);SetTemporary(text);return false;} // explicit local clipboard fallback; caller shows a notice
         if(clipboard)
         {
             var saved=Clipboard.GetDataObject();
@@ -62,23 +62,31 @@ internal static class TextInjector
     public static bool Terminal(IntPtr window)
     {
         Native.GetWindowThreadProcessId(window,out uint pid);
-        try{using var p=Process.GetProcessById((int)pid);return p.ProcessName is "WindowsTerminal" or "conhost" or "OpenConsole" or "cmd" or "powershell" or "pwsh";}catch{return true;}
+        try{using var p=Process.GetProcessById((int)pid);return p.ProcessName is "WindowsTerminal" or "conhost" or "OpenConsole" or "cmd" or "powershell" or "pwsh";}catch(Exception){return true;}   /* unreadable process: treated as a terminal */
     }
     public static string ProcessName(IntPtr window)
     {
         Native.GetWindowThreadProcessId(window,out uint pid);using var p=Process.GetProcessById((int)pid);return p.ProcessName;
     }
-    public static bool Safe(Target target,PrivacyPolicy policy)
+    public static bool Safe(Target target,PrivacyPolicy policy)=>SafeWhy(target,policy) is null;
+    // Why a target is refused (null = safe): target-changed | elevated | focus-changed | password | blocked-window | locked-host | error:<type>.
+    public static string? SafeWhy(Target target,PrivacyPolicy policy)
     {
         try
         {
-            if(Native.GetForegroundWindow()!=target.Window||Elevated(target.Window)||!Automation.Compare(target.Element,AutomationElement.FocusedElement)||target.Element.Current.IsPassword)return false;
+            if(Native.GetForegroundWindow()!=target.Window)return "target-changed";
+            if(Elevated(target.Window))return "elevated";
+            if(!Automation.Compare(target.Element,AutomationElement.FocusedElement))return "focus-changed";
+            if(target.Element.Current.IsPassword)return "password";
             // Password fields and elevated windows above are the real dictation fences; the config lists (empty by default) can add windows.
             var info=PrivacyCapture.Describe(target.Window,policy,policy.ExtraDomains.Length>0);
-            return !info.Blocked&&!PrivacyPolicy.LockedHost(info.Process);
+            if(info.Blocked)return "blocked-window";
+            return PrivacyPolicy.LockedHost(info.Process)?"locked-host":null;
         }
-        catch{return false;}
+        catch(Exception ex){Diag.Fail("inject-safe",ex);return "error:"+ex.GetType().Name;}   // unreadable target fails closed
     }
+    // inject.refused {why, chars}: the text went to the clipboard instead. Never the text itself.
+    static void Refused(string why,string text)=>Diag.Event("inject.refused",new(){["why"]=why,["chars"]=text.Length});
     static void SetTemporary(string text)
     {
         var data=new DataObject();data.SetData(DataFormats.UnicodeText,text);

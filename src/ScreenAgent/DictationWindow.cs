@@ -28,7 +28,7 @@ internal sealed class DictationWindow : Window
     Button Add(string label,Action click,bool closes=false)
     {
         var b=new Button{Content=label,Padding=new Thickness(10,3,10,3),Margin=new Thickness(6,0,0,0)};
-        b.Click+=(_,_)=>{try{click();}catch{ /* a button must never take the app down */ }if(closes)Close();};
+        b.Click+=(_,_)=>{try{click();}catch(Exception ex){Diag.Fail("dictation-window-button",ex);}   /* a button must never take the app down */if(closes)Close();};
         buttons.Children.Add(b);return b;
     }
     void Fill(string head,string file,string? shown,IEnumerable<(string Label,Action Click,bool Closes)> actions)
@@ -50,10 +50,11 @@ internal sealed class DictationWindow : Window
     static DictationWindow Window2(){if(current is {IsVisible:true} w)return w;return current=new DictationWindow();}
     static string Folder(string path)=>System.IO.Path.GetDirectoryName(path)??path;
     static void OpenFolder(string file){System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe",System.IO.File.Exists(file)?$"/select,\"{file}\"":$"\"{Folder(file)}\""){UseShellExecute=true});}
-    static void Copy(string text){try{Clipboard.SetText(text);}catch{ /* the window stays; he can select nothing, but the file is there */ }}
+    static void Copy(string text){try{Clipboard.SetText(text);}catch(Exception ex){Diag.Fail("dictation-window-copy",ex);}   /* the window stays; the file is there */ }
     // Failure: reason, where the file is, and what can be done. "Text kopieren" only when a partial or caption text exists.
     internal static DictationWindow ShowFailure(DictationMeta m,string reason,string file,string? partial,Action retry)
     {
+        Diag.Event("ui.window",new(){["window"]="dictation-failure",["id"]=m.Id,["msg"]=reason});
         var w=Window2();var acts=new List<(string,Action,bool)>{("Erneut versuchen",retry,true),("Ordner öffnen",()=>OpenFolder(file),false)};
         if(!string.IsNullOrWhiteSpace(partial))acts.Add(("Text kopieren",()=>Copy(partial),false));
         acts.Add(("Schließen",()=>{},true));
@@ -62,6 +63,7 @@ internal sealed class DictationWindow : Window
     // A retry that worked but the original window is gone or no longer fits: the text, never on the clipboard by itself.
     internal static DictationWindow ShowResult(DictationMeta m,string head,string text)
     {
+        Diag.Event("ui.window",new(){["window"]="dictation-result",["id"]=m.Id,["msg"]=head,["chars"]=text.Length});
         var w=Window2();
         w.Fill(head,m.Label,text,[("Text kopieren",()=>Copy(text),false),("Schließen",()=>{},true)]);w.Present();return w;
     }

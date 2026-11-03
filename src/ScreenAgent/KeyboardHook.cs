@@ -11,6 +11,7 @@ internal sealed class KeyboardHook : IDisposable
     readonly Native.HookProc callback;
     readonly Thread thread;
     IntPtr hook;
+    int installs;
     uint threadId;
     volatile bool swallowCaps,muteLive,baseline,disposed,healthy;
     bool capsOwned,muteOwned;
@@ -33,8 +34,13 @@ internal sealed class KeyboardHook : IDisposable
         thread=new Thread(Run){IsBackground=true,Name="ScreenAgent keyboard hook"};thread.Start();
         consumer=Task.Run(async ()=>
         {
-            try{while(!stop.IsCancellationRequested){Drain();await Task.Delay(5,stop.Token);}}
-            catch(OperationCanceledException){}
+            // One failed event must not end the consumer: without it every hotkey is dead and nothing says why.
+            while(!stop.IsCancellationRequested)
+            {
+                try{Drain();await Task.Delay(5,stop.Token);}
+                catch(OperationCanceledException){return;}
+                catch(Exception ex){Diag.Fail("hook-consumer",ex);try{await Task.Delay(100,stop.Token);}catch(OperationCanceledException){return;}}
+            }
         });
         // Reinstall proactively: Windows silently removes timed-out LL hooks, with no query API.
         watchdog=new System.Threading.Timer(_=>{if(threadId!=0)Native.PostThreadMessage(threadId,0x8001,UIntPtr.Zero,IntPtr.Zero);},null,30000,30000);
@@ -53,8 +59,14 @@ internal sealed class KeyboardHook : IDisposable
     }
     void Install()
     {
-        if(hook!=IntPtr.Zero)Native.UnhookWindowsHookEx(hook);
-        hook=Native.SetWindowsHookEx(13,callback,Native.GetModuleHandle(null),0);healthy=hook!=IntPtr.Zero;
+        if(hook!=IntPtr.Zero&&!Native.UnhookWindowsHookEx(hook))Diag.Event("hook.uninstall.fail",new(){["err"]=Marshal.GetLastWin32Error()});
+        bool was=healthy;int err=0;
+        hook=Native.SetWindowsHookEx(13,callback,Native.GetModuleHandle(null),0);
+        if(hook==IntPtr.Zero)err=Marshal.GetLastWin32Error();
+        healthy=hook!=IntPtr.Zero;
+        // Reinstalls run every 30 s: only a failure or a change of health is worth a line.
+        if(!healthy||!was&&installs>0)Diag.Event("hook.install",new(){["ok"]=healthy,["err"]=err,["was"]=was,["installs"]=installs});
+        installs++;
     }
     IntPtr Callback(int code,IntPtr w,IntPtr l)
     {
@@ -111,7 +123,7 @@ internal sealed class KeyboardHook : IDisposable
     {
         if(disposed)return;disposed=true;watchdog.Dispose();
         if(threadId!=0)Native.PostThreadMessage(threadId,0x12,UIntPtr.Zero,IntPtr.Zero);
-        thread.Join(1000);stop.Cancel();try{consumer.Wait(1000);}catch(AggregateException){}
+        thread.Join(1000);stop.Cancel();try{consumer.Wait(1000);}catch(AggregateException){ /* the consumer ended by cancel */ }
         if(state.Session&&bindings.DrawVk==0x14)Native.RestoreCaps(baseline);stop.Dispose();
     }
 }

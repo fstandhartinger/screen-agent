@@ -62,9 +62,9 @@ internal sealed class CaptionHost : IDisposable
             c.RecordingStopped+=(_,_)=>{};
             c.StartRecording();tap=c;
         }
-        catch(Exception ex){telemetry.Event("caption.error",new(){["stage"]="tap",["exType"]=ex.GetType().Name});tap=null;policy.NewSession();StopTap();}
+        catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="tap"}));tap=null;policy.NewSession();StopTap();}
     }
-    void StopTap(){var t=tap;tap=null;try{t?.StopRecording();t?.Dispose();}catch{ }}
+    void StopTap(){var t=tap;tap=null;try{t?.StopRecording();t?.Dispose();}catch(Exception ex){Diag.Fail("caption-stop-tap",ex);}}
     public void Feed(byte[] buffer,int count)
     {
         if(count<=0)return;
@@ -92,7 +92,7 @@ internal sealed class CaptionHost : IDisposable
             sending=true;int id=policy.Begin(now);
             _=Send(id,Wav.FromPcm(pcm));
         }
-        catch{ /* the next tick tries again */ }
+        catch(Exception ex){Diag.Fail("caption-tick",ex);}   // the next tick tries again
     }
     async Task Send(int id,byte[] wav)
     {
@@ -111,13 +111,13 @@ internal sealed class CaptionHost : IDisposable
             if(show&&!string.IsNullOrWhiteSpace(r.Text))
             {
                 string shown;lock(gate){stitch.Add(r.Text);shown=stitch.Last(110);}
-                _=ui.BeginInvoke(new System.Action(()=>{try{(overlay??=new CaptionOverlay()).Present(shown);}catch(Exception ex){telemetry.Event("caption.error",new(){["stage"]="overlay",["exType"]=ex.GetType().Name});}}));
+                _=ui.BeginInvoke(new System.Action(()=>{try{(overlay??=new CaptionOverlay()).Present(shown);}catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="overlay"}));}}));
             }
         }
         catch(Exception ex)
         {
             policy.Answered(id,false,0,Environment.TickCount64);
-            telemetry.Event("caption.error",new(){["stage"]="send",["exType"]=ex.GetType().Name,["failures"]=policy.Failed});
+            telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="send",["failures"]=policy.Failed}));
         }
         finally{sending=false;}
     }

@@ -29,5 +29,5 @@ internal sealed class DictationCapture : IDisposable
         try{await stopped.Task.WaitAsync(TimeSpan.FromSeconds(3));}catch(TimeoutException){CaptureError??="StopTimeout";}
         return Recording.Stop();
     }
-    public void Dispose(){try{capture.Dispose();}catch{ }Recording.Dispose();}
+    public void Dispose(){try{capture.Dispose();}catch(Exception ex){Diag.Fail("dictation-capture-dispose",ex);}Recording.Dispose();}
 }

@@ -304,7 +304,7 @@ internal sealed class AppController : IDisposable
         {
             if(action==ActionKind.DictationStart)
             {
-                string? refused=audio!=null?"already-recording":!hook.Dictating?"key-released":target is null?"no-target":paused||hook.Paused?"paused":!client.Paired?"not-paired":!TextInjector.Safe(target,config.Policy())?"unsafe-target":null;
+                string? refused=audio!=null?"already-recording":!hook.Dictating?"key-released":target is null?"no-target":paused||hook.Paused?"paused":!client.Paired?"not-paired":TextInjector.SafeWhy(target,config.Policy()) is {} unsafeWhy?"unsafe-target:"+unsafeWhy:null;
                 if(refused!=null)
                 {
                     telemetry.Event("dictation.refused",new(){["why"]=refused,["process"]=SafeProcess(target)});

@@ -65,12 +65,12 @@ internal sealed class DictationManager : IDisposable
             Log("dictation.recover",new(){["repaired"]=r.Repaired,["failed"]=r.Failed,["orphans"]=r.Orphans,["dropped"]=r.Dropped,["swept"]=gone.Count,["pending"]=pending.Count,["path"]=Store.Folder});
             if(pending.Count>0)balloon(pending.Count==1?$"{pending[0].Label} ist nicht verarbeitet. Tray-Menü → wiederholen.":$"{pending.Count} Diktate sind nicht verarbeitet. Tray-Menü → wiederholen.");
         }
-        catch(Exception ex){Log("dictation.fail",new(){["stage"]="startup",["reason"]="recover",["exType"]=ex.GetType().Name,["path"]=Store.Folder});}
+        catch(Exception ex){Log("dictation.fail",Redact.Of(ex,new(){["stage"]="startup",["reason"]="recover",["path"]=Store.Folder}));}
     }
     void Sweep()
     {
         try{var gone=Store.Sweep(config.Retention());if(gone.Count>0)Log("dictation.sweep",new(){["deleted"]=gone.Count,["path"]=Store.Folder});}
-        catch(Exception ex){Log("dictation.fail",new(){["stage"]="sweep",["reason"]="sweep",["exType"]=ex.GetType().Name,["path"]=Store.Folder});}
+        catch(Exception ex){Log("dictation.fail",Redact.Of(ex,new(){["stage"]="sweep",["reason"]="sweep",["path"]=Store.Folder}));}
     }
 
     // Start recording. Throws (after logging) when the microphone cannot be opened.
@@ -84,7 +84,7 @@ internal sealed class DictationManager : IDisposable
         try{capture=new DictationCapture(rec);}
         catch(Exception ex)
         {
-            Log("dictation.fail",new(){["stage"]="start",["reason"]="microphone",["exType"]=ex.GetType().Name,["path"]=Store.Folder});
+            Log("dictation.fail",Redact.Of(ex,new(){["stage"]="start",["reason"]="microphone",["path"]=Store.Folder}));
             cts.Cancel();rec.Dispose();Store.Delete(rec.Meta);cts.Dispose();throw;
         }
         var flow=new DictationFlow{Capture=capture,Job=job,Cts=cts,Process=process};
@@ -110,8 +110,8 @@ internal sealed class DictationManager : IDisposable
         catch(Exception ex)
         {
             flow.Cts.Cancel();flow.StopError=ex.GetType().Name;
-            try{flow.Capture.Recording.Stop();}catch{ }
-            Log("dictation.fail",new(){["id"]=flow.Meta.Id,["stage"]="stop",["reason"]="exception",["exType"]=ex.GetType().Name,["path"]=flow.Meta.Paths.FirstOrDefault()??Store.Folder,["seconds"]=Math.Round(flow.Rec.Seconds,1)});
+            try{flow.Capture.Recording.Stop();}catch(Exception inner){Diag.Fail("dictation-recording-stop",inner);}
+            Log("dictation.fail",Redact.Of(ex,new(){["id"]=flow.Meta.Id,["stage"]="stop",["reason"]="exception",["path"]=flow.Meta.Paths.FirstOrDefault()??Store.Folder,["seconds"]=Math.Round(flow.Rec.Seconds,1)}));
             return flow;
         }
     }
@@ -141,7 +141,7 @@ internal sealed class DictationManager : IDisposable
     {
         if(ReferenceEquals(live,flow))live=null;
         flow.Cts.Cancel();
-        try{await flow.Capture.Finish();}catch{ }
+        try{await flow.Capture.Finish();}catch(Exception ex){Diag.Fail("dictation-abort-finish",ex);}
         var m=flow.Meta;m.State="discarded";m.Reason=why;m.Ended=DateTimeOffset.UtcNow;m.Seconds=flow.Rec.Seconds;Save(m);
         Log("dictation.discard",new(){["id"]=m.Id,["why"]=why,["seconds"]=Math.Round(m.Seconds,1),["path"]=m.Paths.FirstOrDefault()??Store.Folder});
         flow.Capture.Dispose();
@@ -152,14 +152,14 @@ internal sealed class DictationManager : IDisposable
     {
         if(live is not {} f)return;
         live=null;
-        try{f.Cts.Cancel();f.Capture.Finish().Wait(2000);}catch{ }
+        try{f.Cts.Cancel();f.Capture.Finish().Wait(2000);}catch(Exception ex){Diag.Fail("dictation-abort",ex);}
         var m=f.Meta;m.State="failed";m.Stage="shutdown";m.Reason=reason;m.Seconds=f.Rec.Seconds;m.Ended=DateTimeOffset.UtcNow;m.PartialText=NullIfEmpty(captions.Text);Save(m);
         Log("dictation.fail",new(){["id"]=m.Id,["stage"]="shutdown",["reason"]=reason,["seconds"]=Math.Round(m.Seconds,1),["path"]=m.Paths.FirstOrDefault()??Store.Folder,["bytes"]=m.Bytes});
         f.Capture.Dispose();
     }
 
     static string? NullIfEmpty(string? s)=>string.IsNullOrWhiteSpace(s)?null:s;
-    void Save(DictationMeta m){try{Store.Save(m);}catch(Exception ex){Log("dictation.fail",new(){["id"]=m.Id,["stage"]="sidecar",["reason"]="save",["exType"]=ex.GetType().Name,["path"]=Store.Folder});}}
+    void Save(DictationMeta m){try{Store.Save(m);}catch(Exception ex){Log("dictation.fail",Redact.Of(ex,new(){["id"]=m.Id,["stage"]="sidecar",["reason"]="save",["path"]=Store.Folder}));}}
 
     // Delivery after the job finished (queued in order). inject: the text into the window he dictated into; true = typed or pasted there.
     public async Task Deliver(DictationFlow flow,Func<string,Task<bool>> inject)
@@ -173,7 +173,7 @@ internal sealed class DictationManager : IDisposable
         }
         DictationOutcome o;
         try{o=await flow.Outcome!;}
-        catch(Exception ex){Fail(m,"Verarbeitung abgebrochen","deliver",0,ex.GetType().Name,null,false);flow.Capture.Dispose();return;}
+        catch(Exception ex){Fail(m,"Verarbeitung abgebrochen","deliver",0,ex.GetType().Name,null,false,null,ex);flow.Capture.Dispose();return;}
         finally{lock(active)active.Remove(flow);}
         flow.Capture.Dispose();
         await Finish(m,o,flow.Process,captions.Text,inject,false);
@@ -183,7 +183,7 @@ internal sealed class DictationManager : IDisposable
     {
         if(o.Complete)
         {
-            if(o.Text.Length==0){notice("Diktat · nichts erkannt",Level.Warn);}
+            if(o.Text.Length==0){Log("dictation.empty",new(){["id"]=m.Id,["seconds"]=Math.Round(m.Seconds,1),["chunks"]=o.Chunks,["ms"]=o.Ms});notice("Diktat · nichts erkannt",Level.Warn);}
             else
             {
                 bool shown=retry&&m.Stage=="partial-injected";   // a first, partial text is already in his field: do not type it twice
@@ -208,11 +208,11 @@ internal sealed class DictationManager : IDisposable
         if(wentIn&&o.FromFallback)notice("Teil aus Live-Text",Level.Warn);
     }
 
-    void Fail(DictationMeta m,string reason,string stage,int status,string exType,string? partial,bool window,DictationOutcome? o=null)
+    void Fail(DictationMeta m,string reason,string stage,int status,string exType,string? partial,bool window,DictationOutcome? o=null,Exception? ex=null)
     {
         string path=m.Paths.FirstOrDefault()??Store.Folder;
         m.State="failed";m.Reason=reason;m.Stage=m.Stage is "partial-injected"?m.Stage:stage;m.Ended=DateTimeOffset.UtcNow;m.PartialText=partial;m.Bytes=Store.BytesOf(m);Save(m);
-        Log("dictation.fail",new(){["id"]=m.Id,["stage"]=stage,["reason"]=reason,["exType"]=exType,["status"]=status,["path"]=path,["bytes"]=m.Bytes,["seconds"]=Math.Round(m.Seconds,1),["chunks"]=o?.Chunks,["failedChunks"]=o?.Failed});
+        Log("dictation.fail",new(){["id"]=m.Id,["stage"]=stage,["reason"]=reason,["exType"]=exType,["status"]=status,["path"]=path,["bytes"]=m.Bytes,["seconds"]=Math.Round(m.Seconds,1),["chunks"]=o?.Chunks,["failedChunks"]=o?.Failed,["msg"]=ex is null?"":Redact.Message(ex.Message)});
         notice($"Diktat nicht verarbeitet: {reason} · {path}",Level.Warn);
         if(window)_=ui.BeginInvoke(new System.Action(()=>DictationWindow.ShowFailure(m,reason,path,partial,()=>_=Retry(m))));
     }
@@ -237,7 +237,7 @@ internal sealed class DictationManager : IDisposable
             var o=await job.Complete(last);
             await Finish(m,o,m.Process,m.PartialText??"",text=>injectRetry(m.Process,text),true);
         }
-        catch(Exception ex){Fail(m,"Wiederholung fehlgeschlagen","retry",0,ex.GetType().Name,m.PartialText,true);}
+        catch(Exception ex){Fail(m,"Wiederholung fehlgeschlagen","retry",0,ex.GetType().Name,m.PartialText,true,null,ex);}
         finally{lock(retrying)retrying.Remove(m.Id);}
     }
     sealed class RetryState{public long Samples;public int Peak;public bool Missing;}

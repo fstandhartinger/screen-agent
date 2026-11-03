@@ -86,9 +86,9 @@ internal static class ScreenFlash
         var screen=System.Windows.Forms.Screen.AllScreens.FirstOrDefault(s=>s.Bounds==monitor)??System.Windows.Forms.Screen.FromRectangle(monitor);
         var overlay=new FeedbackOverlay(screen,thumb);
         if(!overlay.CaptureExcluded){overlay.Close();return (false,"no-exclusion");}
-        try{current?.Close();}catch{ /* already gone */ }
+        try{current?.Close();}catch(Exception){ /* already gone */ }
         current=overlay;
-        overlay.Finished+=()=>{try{overlay.Close();}catch{ }if(ReferenceEquals(current,overlay))current=null;};
+        overlay.Finished+=()=>{try{overlay.Close();}catch(Exception){ /* already closed */ }if(ReferenceEquals(current,overlay))current=null;};
         overlay.Show();
         return (true,"");
     }
