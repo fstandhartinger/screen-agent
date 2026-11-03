@@ -235,6 +235,7 @@ internal sealed class ComputerAgent:IDisposable
         if(g is {} stop)
         {
             Log("computer.refused",new(){["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=tool,["class"]=null,["rule"]=stop.Rule});
+            if(stop.Code==ComputerCodes.HandsOn&&!handsOnNoted){handsOnNoted=true;Log("computer.handson",new(){["run"]=r.Id});}
             Send(w,Reply(false,stop.Code,null,stop.Rule,null,null,r.StateName));
             if(r.IsClosed||r.Revoked)EndRun(stop.Rule);
             return;

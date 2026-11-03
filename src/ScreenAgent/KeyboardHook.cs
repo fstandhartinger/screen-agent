@@ -15,6 +15,7 @@ internal sealed class KeyboardHook : IDisposable
     uint threadId;
     volatile bool mouseHealthy;
     public bool ComputerHotkeyOk {get;private set;}
+    public int ComputerHotkeyError {get;private set;}
     volatile bool swallowCaps,muteLive,baseline,disposed,healthy;
     bool capsOwned,muteOwned;
     readonly System.Threading.Timer watchdog,runWatchdog;
@@ -78,7 +79,7 @@ internal sealed class KeyboardHook : IDisposable
     void RunStarted()
     {
         InstallMouse();
-        ComputerHotkeyOk=ComputerNative.RegisterHotKey(IntPtr.Zero,ComputerNative.HotkeyKill,0x2|0x4|0x8|0x4000,0x58);   // Ctrl+Shift+Win+X, no repeat; false = another program owns the chord
+        ComputerHotkeyOk=ComputerNative.RegisterHotKey(IntPtr.Zero,ComputerNative.HotkeyKill,0x2|0x4|0x8|0x4000,0x58);ComputerHotkeyError=ComputerHotkeyOk?0:Marshal.GetLastWin32Error();   // Ctrl+Shift+Win+X, no repeat; false = another program owns the chord
     }
     void RunEnded()
     {

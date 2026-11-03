@@ -5,7 +5,7 @@ namespace ScreenAgent;
 // Win32 pieces of computer use that nothing else needs: the second kill path (RegisterHotKey), the mouse hook for hands-on, the owner of the debug port, image paths.
 internal static class ComputerNative
 {
-    [DllImport("user32.dll")] internal static extern bool RegisterHotKey(IntPtr h,int id,uint mods,uint vk);
+    [DllImport("user32.dll",SetLastError=true)] internal static extern bool RegisterHotKey(IntPtr h,int id,uint mods,uint vk);
     [DllImport("user32.dll")] internal static extern bool UnregisterHotKey(IntPtr h,int id);
     [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);

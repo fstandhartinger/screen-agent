@@ -246,7 +246,7 @@ internal static partial class ComputerSelftest
         {
             KeyboardHook.AcceptInjectedForTests=viaHook;
             run=await Start("Schreib was in den Editor");await Task.Delay(400);
-            bool registered=hook.ComputerHotkeyOk;
+            bool registered=hook.ComputerHotkeyOk;int regErr=hook.ComputerHotkeyError;
             Inject(K(0x11,false),K(0x10,false),K(0x5b,false),K(0x58,false),K(0x58,true));Native.Mask();Inject(K(0x5b,true),K(0x10,true),K(0x11,true));
             await WaitFor(()=>ComputerGuard.Current?.Revoked==true||ComputerGuard.Current is null,2500);
             var rr=Ui(()=>ComputerGuard.Current);
@@ -256,8 +256,8 @@ internal static partial class ComputerSelftest
             bool revoked=agent.Run is null;
             if(!revoked)ComputerGuard.Kill("selftest-cleanup");
             await Task.Delay(700);
-            if(!revoked)Skip(viaHook?"kill chord through the real keyboard hook":"kill chord through RegisterHotKey","the runner did not deliver Ctrl+Win+Shift+X (hotkey registered: "+registered+"); the flag path is proven above");
-            else Ok(viaHook?"kill chord through the real keyboard hook (injected keys, test mode)":"kill chord through RegisterHotKey alone (hook ignores injected keys)",revoked,"",("registered",registered),("via",via));
+            if(!revoked)Skip(viaHook?"kill chord through the real keyboard hook":"kill chord through RegisterHotKey","the runner did not deliver Ctrl+Win+Shift+X (hotkey registered: "+registered+", win32 error "+regErr+"); the flag path is proven above");
+            else Ok(viaHook?"kill chord through the real keyboard hook (injected keys, test mode)":"kill chord through RegisterHotKey alone (hook ignores injected keys)",revoked,"",("registered",registered),("registerError",regErr),("via",via));
             KeyboardHook.AcceptInjectedForTests=false;
             ComputerGuard.Attach(null);
         }
@@ -295,10 +295,11 @@ internal static partial class ComputerSelftest
         Ok("local log: intent line is written before the action's done line",intent>=0&&doneAt>intent,"intent line "+intent+", done line "+doneAt);
         string tele=string.Join("\n",Telemetry),posted=string.Join("\n",Posted);
         bool leaks=new[]{"Quartalszahlen","chef@example.org","Wetter heute","Hallo Welt","geheim","angreifer@example.net"}.Any(w=>log.Contains(w)||tele.Contains(w));
-        Ok("log and trace carry no page text, no typed text, no form content",!leaks&&log.Contains("computer.run.start")&&log.Contains("computer.confirm.ask")&&log.Contains("computer.kill")&&log.Contains("computer.handson"),leaks?"a secret word reached the log":"",("logBytes",log.Length));
+        string leaked=string.Join(",",new[]{"Quartalszahlen","chef@example.org","Wetter heute","Hallo Welt","geheim","angreifer@example.net"}.Where(w=>log.Contains(w)||tele.Contains(w)));
+        Ok("log and trace carry no page text, no typed text, no form content",!leaks,leaked.Length>0?"leaked: "+leaked:"",("logBytes",log.Length));
         bool codeLeak=Codes.Distinct().Any(c=>Regex.IsMatch(log+tele,@"Code "+c)||Regex.IsMatch(string.Join("\n",Regex.Matches(posted,"\"spoken\":\"[^\"]*\"").Select(m=>m.Value)),@"\b"+c+@"\b"));
         Ok("the confirm code is in no reply, log or trace line",!codeLeak,"",("codes",Codes.Distinct().Count()));
-        Ok("every confirm and refusal event kind was produced (ask, ok, no, expired-or-denied, refused, kill, handson)",new[]{"computer.confirm.ask","computer.confirm.ok","computer.confirm.no","computer.refused","computer.kill","computer.handson","computer.run.stop"}.All(t=>tele.Contains(t)),"");
+        Ok("every confirm and refusal event kind was produced (ask, ok, no, expired-or-denied, refused, kill, handson)",new[]{"computer.run.start","computer.confirm.ask","computer.confirm.ok","computer.confirm.no","computer.refused","computer.kill","computer.handson","computer.run.stop"}.All(t=>tele.Contains(t)&&log.Contains(t)),"missing: "+string.Join(",",new[]{"computer.run.start","computer.confirm.ask","computer.confirm.ok","computer.confirm.no","computer.refused","computer.kill","computer.handson","computer.run.stop"}.Where(t=>!(tele.Contains(t)&&log.Contains(t)))));
         Ok("stray: no ScreenAgent window and no overlay left over",!Ui(()=>overlay.Visible));
     }
     static void TestWriteFailsOn(bool on)=>ComputerAgent.TestWriteFails=on;
