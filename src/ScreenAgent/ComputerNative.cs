@@ -50,5 +50,25 @@ internal static class ComputerNative
         return (owner,clients);
     }
     static int Port(int raw)=>((raw&0xff)<<8)|((raw>>8)&0xff);
-    public static bool Elevated(IntPtr hwnd)=>TextInjector.Elevated(hwnd);
+    [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+    [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int cls,ref int info,int size,out int needed);
+    // 1 elevated, 0 not, -1 cannot tell (treated as elevated by the caller: fail closed).
+    static int Elevation(IntPtr process)
+    {
+        if(!OpenProcessToken(process,8,out var token))return -1;
+        try{int e=0;return GetTokenInformation(token,20,ref e,4,out _)?(e!=0?1:0):-1;}finally{CloseHandle(token);}
+    }
+    static readonly int Self=Elevation(Process.GetCurrentProcess().Handle);
+    // The window's process runs with more rights than this app: our input would be blocked by UIPI, so we do not try. An app that is itself elevated (the CI runner) may act on elevated windows.
+    public static bool ElevatedAbove(IntPtr hwnd)
+    {
+        Native.GetWindowThreadProcessId(hwnd,out uint pid);
+        try
+        {
+            using var p=Process.GetProcessById((int)pid);int t=Elevation(p.Handle);
+            if(t==0)return false;
+            return t==1?Self!=1:true;   // elevated target: only fine when this app is elevated too; unreadable: fail closed
+        }
+        catch{return true;}
+    }
 }

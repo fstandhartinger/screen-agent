@@ -240,7 +240,7 @@ internal sealed class ComputerAgent:IDisposable
             return;
         }
         // A window with administrator rights in front: our input would not reach it, and we do not try. The run closes.
-        if(Native.GetForegroundWindow() is var f&&f!=IntPtr.Zero&&TextInjector.ElevationRefusal(UiaDriver.Root(f)) is not null&&UiaDriver.ProcessOf(UiaDriver.Root(f)) is not "")
+        if(Native.GetForegroundWindow() is var f&&f!=IntPtr.Zero&&ComputerNative.ElevatedAbove(UiaDriver.Root(f))&&UiaDriver.ProcessOf(UiaDriver.Root(f)) is not "")
         {r.Close("elevated");Log("computer.refused",new(){["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=tool,["class"]="R3",["rule"]="elevated"});Send(w,Reply(false,ComputerCodes.Refused,ActionClass.R3,"elevated",null,null,"closed"));EndRun("elevated");return;}
         Plan plan;Verdict v;
         try
