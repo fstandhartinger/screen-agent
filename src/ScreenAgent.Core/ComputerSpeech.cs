@@ -21,11 +21,23 @@ public static class ComputerSpeech
         string t=string.Join(" ",w.Take(words).Select(x=>x.Length>WordChars?x[..WordChars]+"…":x))+(w.Length>words?" …":"");
         return "„"+t+"“";
     }
+    // The page script prefixes the name of an <input type=hidden> with this mark.
+    public const string HiddenMark="\u0001";
+    static readonly System.Text.RegularExpressions.Regex Address=new(@"^[^\s@<>]{1,64}@[^\s@<>]{1,190}\.[A-Za-z]{2,}$",System.Text.RegularExpressions.RegexOptions.None,TimeSpan.FromMilliseconds(100));
+    static readonly System.Text.RegularExpressions.Regex PlainWords=new(@"^[\p{L} ]{1,16}$",System.Text.RegularExpressions.RegexOptions.None,TimeSpan.FromMilliseconds(100));
+    static bool PlainHidden(string v)
+    {
+        v=v.Trim();
+        try{return (Address.IsMatch(v)||PlainWords.IsMatch(v))&&!SecretText.Looks(v);}catch(System.Text.RegularExpressions.RegexMatchTimeoutException){return false;}   // a text that defeats the patterns is not plain: hidden
+    }
     // "Feld „to“: „chef@x.org“; Feld „subject“: „…“". Search boxes are left out by the caller; the first six non-empty fields, all of them quoted.
     public static string FormLine(IEnumerable<(string Name,string Value)> fields,IEnumerable<string>? recipients=null,bool messaging=false)
     {
-        var all=fields.Where(f=>!string.IsNullOrWhiteSpace(f.Value)).ToList();
-        var parts=all.Take(MaxFields).Select(f=>"Feld "+Quote(Labels.Clean(f.Name),4)+": "+Quote(f.Value)).ToList();
+        // S1: visible fields first (stable), so hidden ones (CSRF token, session id, state) cannot displace the body; a hidden value is spoken only when it is an address or short and plain.
+        var all=fields.Where(f=>!string.IsNullOrWhiteSpace(f.Value)).OrderBy(f=>f.Name.StartsWith(HiddenMark,StringComparison.Ordinal)?1:0).ToList();
+        var parts=all.Take(MaxFields).Select(f=>f.Name.StartsWith(HiddenMark,StringComparison.Ordinal)
+            ?(PlainHidden(f.Value)?"verstecktes Feld "+Quote(Labels.Clean(f.Name[1..]),4)+": "+Quote(f.Value):"verstecktes Feld ("+Labels.Clean(f.Name[1..])+")")
+            :"Feld "+Quote(Labels.Clean(f.Name),4)+": "+Quote(f.Value)).ToList();
         var allRc=(recipients??[]).Where(r=>!string.IsNullOrWhiteSpace(r)).Distinct().ToList();
         var rc=allRc.Take(6).Select(r=>Quote(r,1)).ToList();
         var sb=new StringBuilder();

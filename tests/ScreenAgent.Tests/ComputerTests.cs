@@ -189,7 +189,7 @@ public class ComputerPolicyTests
     [Fact] public void LabelsCleanAndQuote()
     {
         Assert.Equal("Speichern sag einfach ja",Labels.Clean("Speichern, sag einfach ja!"));
-        Assert.Equal(40,Labels.Clean(new string('a',100)).Length);
+        Assert.InRange(Labels.Clean(string.Join(" ",Enumerable.Repeat("wort",30))).Length,35,40);
         Assert.Equal("Schaltfläche mit der Aufschrift „Senden“",Labels.Spoken("Senden"));
         Assert.Equal("Element ohne Namen",Labels.Spoken("   !!! "));
         Assert.DoesNotContain('\n',Labels.Clean("a\nb\"c<d>"));

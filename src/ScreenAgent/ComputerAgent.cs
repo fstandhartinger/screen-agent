@@ -489,10 +489,10 @@ internal sealed class ComputerAgent:IDisposable
                 // F2: only a window (never the whole screen) with a verified in-scope URL (a browser) or a non-browser window that is not read-denied, and only when no other window lies over it.
                 string? wr=Arg(cmd,"window");var win=wr is not null?u.Window(wr):null;if(wr is not null&&win is null)throw new UiaStaleException("window");
                 var fg=Foreground();IntPtr h=win?.Hwnd??fg.Hwnd;string proc=win?.Process??fg.Process,title=win?.Title??fg.Title;
-                string? shotUrl=win is null?fg.Url:null;bool isBrowser=ComputerPolicy.IsBrowser(proc,UiaDriver.ClassOf(h));
+                string? shotUrl=win is null?fg.Url:null,shotTab=null;bool isBrowser=ComputerPolicy.IsBrowser(proc,UiaDriver.ClassOf(h));
                 if(isBrowser&&shotUrl is null)
                 {   // the window's tab is looked up by its exact title, in the browser that owns the debugging port only; no CDP, no tie-free match: no verified URL
-                    var c=Cdp(out _);if(c is not null&&c.TabForWindow(proc,title).GetAwaiter().GetResult() is {} t)shotUrl=t.Url;
+                    var c=Cdp(out _);if(c is not null&&c.TabForWindow(proc,title).GetAwaiter().GetResult() is {} t){shotUrl=t.Url;shotTab=t.TargetId;}
                 }
                 bool denied=policy.ReadDenied(proc,title,shotUrl);
                 bool verified=!isBrowser||(shotUrl is not null&&Domains.HostOf(shotUrl) is {} sh&&r.Scope.Reaches(sh));
@@ -502,7 +502,10 @@ internal sealed class ComputerAgent:IDisposable
                     if(denied||!verified)return "ausgeblendet";
                     if(UiaDriver.Covered(h))return "ausgeblendet (ein anderes Fenster liegt über diesem)";
                     r.NoteRead(ComputerPolicy.ReadOrigin(proc,shotUrl));
-                    return Shot(h);
+                    string img=Shot(h);
+                    // S4: the tab is looked up again after the capture; a page that flipped to another target or URL in between is not returned.
+                    if(isBrowser&&!ComputerPolicy.SameTab(shotTab,shotUrl,Cdp(out _) is {} c2&&c2.TabForWindow(proc,title).GetAwaiter().GetResult() is {} t2?(t2.TargetId,t2.Url):((string?)null,(string?)null)))return "ausgeblendet";
+                    return img;
                 },()=>("",""),proc,false,true,sens),null);
             }
             case "scroll":

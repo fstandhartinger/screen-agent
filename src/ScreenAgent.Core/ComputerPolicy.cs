@@ -149,7 +149,7 @@ public static class Labels
     public static string Clean(string? label)
     {
         var sb=new StringBuilder();
-        foreach(char c in label??"")sb.Append(char.IsLetterOrDigit(c)?c:' ');
+        foreach(char c in SecretText.Redact(label))sb.Append(char.IsLetterOrDigit(c)?c:' ');
         string s=Regex.Replace(sb.ToString(),@"\s+"," ").Trim();
         if(s.Length>40){s=s[..40].TrimEnd();if(s.Length>0&&char.IsHighSurrogate(s[^1]))s=s[..^1];}
         return s;
@@ -341,7 +341,7 @@ public sealed class ComputerPolicy
         if(Array.IndexOf(ReadTools,tool)>=0)return Verdict.Of(ActionClass.R0,"read");
         if(tool is "window_focus")return Verdict.Of(ActionClass.R1,"focus");
         // Covert channels: a scroll offset or a key is a few bits the page can read. After a sensitive read only reads run; scroll and keys ask.
-        if(tool is "scroll")return c.Tainted?Verdict.Of(ActionClass.R2,"tainted"):Verdict.Of(ActionClass.R1,"scroll");
+        if(tool is "scroll")return c.Tainted?Verdict.Of(ActionClass.R2,"tainted"):CrossRead(c,OriginOf(c,p)) is {} xs?xs:Verdict.Of(ActionClass.R1,"scroll");
         if(tool is "chrome_open")return Open(c,scope);
         // ---- key
         if(tool is "key")
@@ -360,6 +360,7 @@ public sealed class ComputerPolicy
             var ctx=Target(c,p,host,scope);
             if(ctx is not null)return ctx;
             if(c.Tainted)return Verdict.Of(ActionClass.R2,"tainted");
+            if(CrossRead(c,OriginOf(c,p)) is {} xk)return xk;
             if(enter)return k=="enter"&&c.SearchBox?Verdict.Of(ActionClass.R1,"enter-search"):Verdict.Of(ActionClass.R2,"enter");
             return Verdict.Of(ActionClass.R1,"key");
         }
@@ -385,6 +386,10 @@ public sealed class ComputerPolicy
         return Verdict.Of(ActionClass.R1,"in-scope");
     }
     // "https://host:port" of the page the action lands on, "app:<process>" for a window.
+    // S3: the run read another origin than the one this open, scroll or key lands on (an unlisted page he named himself): the choice of link, offset or key is a channel, so it asks.
+    static Verdict? CrossRead(ActionContext c,string origin)=>c.ReadOrigins is {Count:>0} read&&read.Any(o=>o!=origin)?Verdict.Of(ActionClass.R2,"cross-origin"):null;
+    // S4: the tab found after a screenshot is the one found before (same target when known, same URL).
+    public static bool SameTab(string? idBefore,string? urlBefore,(string? Id,string? Url) after)=>after.Url is not null&&after.Url==urlBefore&&(idBefore is null||idBefore==after.Id);
     static string OriginOf(ActionContext c,string p)=>Domains.HostOf(c.Url) is not null?Domains.Origin(c.Url!):"app:"+p;
     public static string ReadOrigin(string process,string? url)=>Domains.HostOf(url) is not null?Domains.Origin(url!):"app:"+ProcessName(process);
     bool IsComposerTarget(string p,string? host)=>ComposerApps.Contains(p)||(host is not null&&Composer(host));
@@ -430,6 +435,7 @@ public sealed class ComputerPolicy
         if((!exact||!u.IsDefaultPort)&&!c.UrlInWords&&!c.UrlInSnapshot)return Verdict.Of(ActionClass.R3,"url-host");
         if(scope.Empty)return Verdict.Of(ActionClass.R2,"no-scope");
         if(!scope.ContainsHost(host))return Verdict.Of(ActionClass.R2,"open-out-of-scope");
-        return c.Tainted?Verdict.Of(ActionClass.R2,"tainted"):Verdict.Of(ActionClass.R1,"open-in-scope");   // after a sensitive read every open asks: which of his links it takes is a channel
+        if(c.Tainted)return Verdict.Of(ActionClass.R2,"tainted");
+        return CrossRead(c,Domains.Origin(raw)) is {} xo?xo:Verdict.Of(ActionClass.R1,"open-in-scope");   // after a sensitive read every open asks: which of his links it takes is a channel
     }
 }
