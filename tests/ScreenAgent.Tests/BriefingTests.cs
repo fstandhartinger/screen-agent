@@ -157,7 +157,7 @@ public class BriefingTests
         var gate=new ManualResetEventSlim();
         var clock=System.Diagnostics.Stopwatch.StartNew();
         var g=BriefingGather.Run(
-            _=>new(new List<WindowInfo>{new("chrome","Titel")}),
+            _=>new(new List<BriefingWindow>{new("chrome","Titel")}),
             ct=>{gate.Wait(10_000);return new(new List<TabInfo>());},   // a stalled path: does not look at the token
             _=>throw new InvalidOperationException("boom"),budgetMs:500);
         gate.Set();
@@ -168,7 +168,7 @@ public class BriefingTests
     }
     [Fact]public void ASourceThatHonoursTheTokenHandsOverWhatItHas()
     {
-        var g=BriefingGather.Run(_=>new(new List<WindowInfo>()),ct=>{var list=new List<TabInfo>{new("Chrome 1","A",true,null)};while(!ct.IsCancellationRequested)Thread.Sleep(10);return new(list);},_=>new(null,"main-session:path-missing"),budgetMs:600);
+        var g=BriefingGather.Run(_=>new(new List<BriefingWindow>()),ct=>{var list=new List<TabInfo>{new("Chrome 1","A",true,null)};while(!ct.IsCancellationRequested)Thread.Sleep(10);return new(list);},_=>new(null,"main-session:path-missing"),budgetMs:600);
         Assert.Single(g.Tabs);Assert.Equal(["main-session:path-missing"],g.Missing);
     }
     [Fact]public void CommandRequestIsParsed()
@@ -179,7 +179,7 @@ public class BriefingTests
     }
     [Fact]public void PayloadFollowsTheDeskContract()
     {
-        var windows=Enumerable.Range(0,50).Select(i=>new WindowInfo("proc"+i,"Fenster "+i)).ToList();
+        var windows=Enumerable.Range(0,50).Select(i=>new BriefingWindow("proc"+i,"Fenster "+i)).ToList();
         var tabs=Enumerable.Range(0,60).Select(i=>new TabInfo("Chrome 1","Tab "+i,i==3,"https://example.com/seite?token=geheim123&x=1#frag")).ToList();
         var main=new MainSession(".claude-A","2026-11-03T10:00:00Z",[new("user","2026-11-03T09:59:00Z","hallo")]);
         string json=JsonSerializer.Serialize(MakeBody(windows,tabs,main,"Zeile eins\n\n\n\nZeile   zwei sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789","c0ffee12"));
@@ -195,12 +195,12 @@ public class BriefingTests
         Assert.Equal("c0ffee12",r.GetProperty("commandId").GetString());
         Assert.True(json.Length<64000);
     }
-    static Dictionary<string,object?> MakeBody(List<WindowInfo> w,List<TabInfo> t,MainSession? m,string? s,string? id)=>BriefingPayload.Build(w,t,m,s,id);
+    static Dictionary<string,object?> MakeBody(List<BriefingWindow> w,List<TabInfo> t,MainSession? m,string? s,string? id)=>BriefingPayload.Build(w,t,m,s,id);
     [Fact]public void EmptyPartsAreLeftOutAndTheBodyStaysSmall()
     {
         var body=BriefingPayload.Build([],[],null,"  ",null);
         Assert.Empty(body);
-        var big=BriefingPayload.Build(Enumerable.Range(0,30).Select(i=>new WindowInfo(new string('p',200),new string('t',500))).ToList(),
+        var big=BriefingPayload.Build(Enumerable.Range(0,30).Select(i=>new BriefingWindow(new string('p',200),new string('t',500))).ToList(),
             Enumerable.Range(0,40).Select(i=>new TabInfo("Chrome 1",new string('t',500),i==0,"https://e.com/"+new string('u',500))).ToList(),
             new MainSession(".claude",null,Enumerable.Range(0,12).Select(i=>new BriefingMessage("user",null,new string('m',300))).ToList()),new string('s',9000),"abc12345");
         Assert.True(JsonSerializer.SerializeToUtf8Bytes(big).Length<BriefingPayload.MaxBytes);

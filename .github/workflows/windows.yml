@@ -119,6 +119,13 @@ jobs:
               Write-Host "Controller $scale percent: $($image.Width)x$($image.Height) pixels"
             } finally { $image.Dispose() }
           }
+      - name: Start briefing selftest (stub Desk, 50 MB transcript within 512 kB, UI Automation tabs, secrets, retry)
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Invoke-SA --selftest-briefing | Tee-Object artifacts/briefing.json
+          if ($LASTEXITCODE -ne 0) { throw 'Start briefing selftest failed' }
       - name: Notepad injection and read-back
         shell: pwsh
         run: |

@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 namespace ScreenAgent.Core;
 // Start briefing (v0.1.7): what the app tells the Desk about the desktop when a session starts or the agent asks "what is going on".
 // Windows, Chrome tabs, the last OCR text and the tail of the main Claude Code session. Everything here is pure logic; the Windows side is BriefingCollector.
-public sealed record WindowInfo(string Process,string Title);
+public sealed record BriefingWindow(string Process,string Title);
 public sealed record TabInfo(string Window,string Title,bool Active,string? Url);
 public sealed record BriefingMessage(string Role,string? At,string Text);
 public sealed record MainSession(string Source,string? UpdatedAt,IReadOnlyList<BriefingMessage> Messages);
@@ -84,12 +84,12 @@ public static class Timeboxed
     }
 }
 
-public sealed record Gathered(List<WindowInfo> Windows,List<TabInfo> Tabs,MainSession? Main,List<string> Missing,List<(string Stage,string Reason)> Failures,long Ms);
+public sealed record Gathered(List<BriefingWindow> Windows,List<TabInfo> Tabs,MainSession? Main,List<string> Missing,List<(string Stage,string Reason)> Failures,long Ms);
 public static class BriefingGather
 {
     // The three sources run in parallel inside one budget (1.5 s). They get a cancel signal shortly before it ends so they can hand over what they have;
     // a source that is still stuck at the end (a UNC path that stalls) is abandoned and named as missing.
-    public static Gathered Run(Func<CancellationToken,Part<List<WindowInfo>>> windows,Func<CancellationToken,Part<List<TabInfo>>> tabs,Func<CancellationToken,Part<MainSession>> main,int budgetMs=1500)
+    public static Gathered Run(Func<CancellationToken,Part<List<BriefingWindow>>> windows,Func<CancellationToken,Part<List<TabInfo>>> tabs,Func<CancellationToken,Part<MainSession>> main,int budgetMs=1500)
     {
         var clock=System.Diagnostics.Stopwatch.StartNew();
         using var cts=new CancellationTokenSource();
@@ -126,7 +126,7 @@ public static class BriefingPayload
         return SecretFilter.Clip(u,150) is {Length:>0} r?r:null;
     }
     // The Desk body. Missing parts are left out (every part is optional on the route); order and caps follow the route's contract.
-    public static Dictionary<string,object?> Build(IReadOnlyList<WindowInfo> windows,IReadOnlyList<TabInfo> tabs,MainSession? main,string? screenText,string? commandId)
+    public static Dictionary<string,object?> Build(IReadOnlyList<BriefingWindow> windows,IReadOnlyList<TabInfo> tabs,MainSession? main,string? screenText,string? commandId)
     {
         var body=new Dictionary<string,object?>();
         if(windows.Count>0)body["windows"]=windows.Take(MaxWindows).Select(w=>new{process=SecretFilter.Clip(w.Process,60),title=SecretFilter.Clip(SecretFilter.Redact(w.Title),120)}).ToArray();
