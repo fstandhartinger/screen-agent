@@ -163,6 +163,8 @@ internal sealed class DeviceClient : IDisposable
     // Providers: {groq:{ok,ms,status,reason},...} becomes "groq:ok", "openai:503".
     public async Task<ChunkReply> DictateChunk(ChunkRequest r,DictationContext baseContext,CancellationToken ct)
     {
+        // A digitally silent chunk inside a long recording: providers invent text for it (cake recipes in the 3 Nov test), so it is not sent.
+        if(!r.Only&&AudioLevel.Peak(r.Chunk.Samples)<=DictationGate.SilentPeak){Diag.Event("dictation.chunk.silent",new(){["id"]=r.DictationId,["index"]=r.Chunk.Index,["seconds"]=Math.Round(r.Chunk.Seconds,1)});return new(200,"");}
         if(!Paired)return new(401,Code:"not-paired",Failure:"NotPaired");
         using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(r.Chunk.WavBytes);audio.Headers.ContentType=new("audio/wav");
         form.Add(audio,"audio","dictation.wav");form.Add(new StringContent(JsonSerializer.Serialize(baseContext with{fieldBefore=r.FieldBefore})),"context");
