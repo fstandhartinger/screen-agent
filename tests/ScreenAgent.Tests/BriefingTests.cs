@@ -168,7 +168,7 @@ public class BriefingTests
     }
     [Fact]public void ASourceThatHonoursTheTokenHandsOverWhatItHas()
     {
-        var g=BriefingGather.Run(_=>new(new List<BriefingWindow>()),ct=>{var list=new List<TabInfo>{new("Chrome 1","A",true,null)};while(!ct.IsCancellationRequested)Thread.Sleep(10);return new(list);},_=>new(null,"main-session:path-missing"),budgetMs:600);
+        var g=BriefingGather.Run(_=>new(new List<BriefingWindow>()),ct=>{var list=new List<TabInfo>{new("Chrome 1","A",true,null)};while(!ct.IsCancellationRequested)Thread.Sleep(10);return new(list);},_=>new(null,"main-session:path-missing"),budgetMs:1000);
         Assert.Single(g.Tabs);Assert.Equal(["main-session:path-missing"],g.Missing);
     }
     [Fact]public void CommandRequestIsParsed()

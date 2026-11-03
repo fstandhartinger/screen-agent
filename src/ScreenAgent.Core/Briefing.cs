@@ -94,10 +94,11 @@ public static class BriefingGather
         var clock=System.Diagnostics.Stopwatch.StartNew();
         using var cts=new CancellationTokenSource();
         var w=Timeboxed.Start(windows,cts.Token,"windows");var t=Timeboxed.Start(tabs,cts.Token,"tabs");var m=Timeboxed.Start(main,cts.Token,"main");
-        cts.CancelAfter(Math.Max(1,budgetMs-150));
+        cts.CancelAfter(Math.Max(1,budgetMs-200));
         var all=new Task[]{w,t,m};
         try{Task.WaitAll(all,Math.Max(1,budgetMs-(int)clock.ElapsedMilliseconds));}catch(AggregateException){ /* read per task below */ }
         cts.Cancel();   // a source still stuck stops at its next check; it only ever reads the token
+        if(all.Any(x=>!x.IsCompleted))try{Task.WaitAll(all,100);}catch(AggregateException){}   // a short grace for sources that were about to hand over
         var missing=new List<string>();var failures=new List<(string,string)>();
         T? Take<T>(Task<T> task,string name,string stage) where T:class
         {
