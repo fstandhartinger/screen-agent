@@ -19,6 +19,8 @@ internal sealed class CaptionHost : IDisposable
     WasapiCapture? tap;
     readonly System.Threading.Timer timer;
     bool active,dictating,sending;long statsAt,startedAt,tapRetryAt;
+    DictationVisual visual;string? visualDetail;
+    readonly LevelRing levels=new();
     readonly List<DictationCaptions> dictations=[];   // the dictations whose own text the answers are added to (live ones and ones that ended a moment ago)
     public CaptionHost(AppConfig config,DeviceClient client,Telemetry telemetry,System.Windows.Threading.Dispatcher ui,Func<(string[] Ids,string[] Terms)> context)
     {
@@ -48,6 +50,15 @@ internal sealed class CaptionHost : IDisposable
         return d;
     }
     public void EndDictation(DictationCaptions d)=>d.End(Environment.TickCount64,EndGraceMs);
+    // From the app tick (UI thread): waveform while he talks, the circle while it is processed. Works with captions switched off too.
+    public void Visual(DictationVisual v,string? detail)
+    {
+        if(v==visual&&detail==visualDetail)return;
+        visual=v;visualDetail=detail;
+        if(v==DictationVisual.None&&overlay is null)return;
+        try{(overlay??=new CaptionOverlay()).SetVisual(v,detail,levels);}
+        catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="visual"}));}
+    }
     void Begin()
     {
         active=true;startedAt=Environment.TickCount64;statsAt=startedAt;
@@ -79,6 +90,7 @@ internal sealed class CaptionHost : IDisposable
     public void Feed(byte[] buffer,int count)
     {
         if(count<=0)return;
+        levels.AddPcm(buffer.AsSpan(0,count));
         lock(gate)
         {
             if(count>=MaxBytes){Buffer.BlockCopy(buffer,count-MaxBytes,ring,0,MaxBytes);filled=MaxBytes;}
@@ -114,7 +126,7 @@ internal sealed class CaptionHost : IDisposable
             using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(6));
             var r=await client.Caption(wav,ids,terms,cts.Token);
             long now=Environment.TickCount64;bool ok=r.Status is >=200 and <300;
-            bool show=policy.Answered(id,ok,r.Status,now);
+            bool show=policy.Answered(id,ok,r.Status,now,r.Code);
             if(ok)stats.Ok(r.Seconds>0?r.Seconds:wav.Length/(double)Wav.BytesPerSecond,r.Ms,r.Cost);
             if(!ok&&policy.Disabled)
             {
@@ -124,7 +136,7 @@ internal sealed class CaptionHost : IDisposable
             {
                 string shown;lock(gate){stitch.Add(r.Text);shown=stitch.Last(110);}
                 foreach(var d in owners)d.Add(r.Text);
-                _=ui.BeginInvoke(new System.Action(()=>{try{(overlay??=new CaptionOverlay()).Present(shown);}catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="overlay"}));}}));
+                _=ui.BeginInvoke(new System.Action(()=>{try{if(active||visual==DictationVisual.Processing)(overlay??=new CaptionOverlay()).Present(shown);}catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="overlay"}));}}));
             }
         }
         catch(Exception ex)

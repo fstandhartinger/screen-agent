@@ -44,6 +44,25 @@ internal sealed class DictationManager : IDisposable
     }
     void Log(string type,Dictionary<string,object?> d)=>tel.Event(type,d);
     public bool Recording=>live is not null;
+    int processing;
+    // From the moment he lets go until the text is in his field or in front of him. Also a retry.
+    public bool Processing=>Volatile.Read(ref processing)>0;
+    public string? ProcessingDetail
+    {
+        get
+        {
+            DictationFlow? p;lock(active)p=active.FirstOrDefault(a=>a.Outcome is not null);
+            return p is {Job:{Enqueued:>1}}?$"{p.Job.Done}/{p.Job.Enqueued}":null;
+        }
+    }
+    public List<DictationMeta> Recent()
+    {
+        try{return DictationHistory.Recent(Store.All());}
+        catch(Exception ex){Log("dictation.fail",Redact.Of(ex,new(){["stage"]="history",["reason"]="list",["path"]=Store.Folder}));return [];}
+    }
+    public DictationMeta? Latest()=>Recent().FirstOrDefault();
+    // A dictation that went well can be transcribed again too (tray, history): the same path as a retry, the result opens in the window with the text.
+    public Task Again(DictationMeta m)=>Retry(m,true);
     // The note while he talks and while the chunks are still being transcribed: "Diktat · 3:12 · 4/5 fertig".
     public string? Status
     {
@@ -131,6 +150,7 @@ internal sealed class DictationManager : IDisposable
     // Stop the microphone (called in key order, so a second dictation can start at once). The returned task is the delivery, to be queued behind earlier ones.
     public async Task<DictationFlow> Stop(DictationFlow flow)
     {
+        Interlocked.Increment(ref processing);
         if(ReferenceEquals(live,flow))live=null;
         try{return await StopCore(flow);}
         catch(Exception ex)
@@ -202,6 +222,7 @@ internal sealed class DictationManager : IDisposable
             bool isHeld;lock(held)isHeld=held.ContainsKey(flow.Meta.Id);
             if(!isHeld)try{flow.Capture.Dispose();}catch(Exception disposeEx){Diag.Fail("dictation-deliver-dispose",disposeEx);}
         }
+        finally{Interlocked.Decrement(ref processing);}
     }
     async Task DeliverCore(DictationFlow flow,Func<string,Task<bool>> inject)
     {
@@ -240,6 +261,7 @@ internal sealed class DictationManager : IDisposable
     {
         string? lost=!retry&&flow is {CaptureLostAt:{} at,CaptureLost:true}?$"Mikrofon getrennt bei {Clock(at)} · der Rest fehlt":null;
         string gap=!retry&&flow is {CaptureLostAt:{} at2,CaptureLost:false}?$" · Lücke bei {Clock(at2)}":"";
+        if(o.Text.Length>0)m.Text=o.Text;   // kept for copy and history, also when something else goes wrong below
         if(o.Complete)
         {
             bool shown=retry&&m.Stage=="partial-injected";   // a first, partial text is already in his field: do not type it twice
@@ -319,14 +341,16 @@ internal sealed class DictationManager : IDisposable
     }
 
     // "Erneut versuchen" and the tray entries: the same chunks and job over the file(s) on disk.
-    public async Task Retry(DictationMeta m)
+    public Task Retry(DictationMeta m)=>Retry(m,false);
+    async Task Retry(DictationMeta m,bool fresh)
     {
         lock(retrying){if(!retrying.Add(m.Id))return;}
+        Interlocked.Increment(ref processing);
         try
         {
             m=Store.Load(m.MetaPath)??m;
             // The text is already there, only not in a field: show it again, no new transcription.
-            if(DictationDelivery.ShowStoredText(m)){ShowText(m,m.PartialText!,"Diktat fertig · Text zum Einfügen");return;}
+            if(!fresh&&DictationDelivery.ShowStoredText(m)){ShowText(m,m.PartialText!,"Diktat fertig · Text zum Einfügen");return;}
             m.Attempts++;m.State="processing";Save(m);
             Log("dictation.retry",new(){["id"]=m.Id,["attempt"]=m.Attempts,["seconds"]=Math.Round(m.Seconds,1),["path"]=m.Paths.FirstOrDefault()??Store.Folder,["bytes"]=m.Bytes});
             notice("Diktat · neuer Versuch",Level.Active);
@@ -342,7 +366,7 @@ internal sealed class DictationManager : IDisposable
             if(m.State=="done")Release(m.Id);
         }
         catch(Exception ex){Fail(m,"Wiederholung fehlgeschlagen","retry",0,ex.GetType().Name,m.PartialText,true,null,ex);}
-        finally{lock(retrying)retrying.Remove(m.Id);}
+        finally{Interlocked.Decrement(ref processing);lock(retrying)retrying.Remove(m.Id);}
     }
     sealed class RetryState{public long Samples;public int Peak;public bool Missing;}
     Chunk? Feed(DictationMeta m,DictationJob job,RetryState st)

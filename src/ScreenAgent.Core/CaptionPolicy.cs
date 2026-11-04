@@ -6,8 +6,8 @@ public static class CaptionModes
     public static bool Valid(string s)=>s is "off" or "dictation" or "dictation+voice";
 }
 // When a caption request may go out. Every IntervalMs while the recent audio shows speech (the RMS gate: silence costs nothing), at most one in flight,
-// 5 failures in a row stop it for 60 s, a 429/503 switches captions off for the rest of the session. An answer older than one already shown is dropped.
-public sealed class CaptionPolicy(int intervalMs=1500,double speechRms=400,int maxFailures=5,int pauseMs=60000)
+// 3 failures in a row stop it for 15 s; only "no key" and "budget used up" switch captions off for the rest of the session (one slow answer used to, 4 Nov). An answer older than one already shown is dropped.
+public sealed class CaptionPolicy(int intervalMs=1500,double speechRms=400,int maxFailures=3,int pauseMs=15000)
 {
     long lastSendAt=long.MinValue/2,pausedUntil,lastSpeechAt=long.MinValue/2;
     int failures,seq,shownSeq;
@@ -24,13 +24,13 @@ public sealed class CaptionPolicy(int intervalMs=1500,double speechRms=400,int m
     public bool ShouldSend(long now)=>!Disabled&&!InFlight&&now>=pausedUntil&&now-lastSendAt>=intervalMs&&Speaking(now);
     public int Begin(long now){InFlight=true;lastSendAt=now;Sent++;return ++seq;}
     // Returns true when the answer may be shown.
-    public bool Answered(int id,bool ok,int status,long now)
+    public bool Answered(int id,bool ok,int status,long now,string? code=null)
     {
         InFlight=false;
         if(!ok)
         {
             Failed++;
-            if(status is 429 or 503){Disabled=true;DisabledWhy="http-"+status;return false;}
+            if(code is "no-key" or "caption-budget"){Disabled=true;DisabledWhy=code;return false;}
             if(++failures>=maxFailures){pausedUntil=now+pauseMs;failures=0;}
             return false;
         }

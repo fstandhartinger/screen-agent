@@ -35,6 +35,10 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern uint GetWindowThreadProcessId(IntPtr h,out uint id);
     [DllImport("dwmapi.dll")] internal static extern int DwmGetWindowAttribute(IntPtr h,int attr,out int value,int size);
     [DllImport("user32.dll")] internal static extern bool SetWindowDisplayAffinity(IntPtr h,uint affinity);
+    [DllImport("user32.dll",EntryPoint="LoadCursorW")] internal static extern IntPtr LoadCursor(IntPtr instance,IntPtr name);
+    [DllImport("user32.dll")] internal static extern IntPtr CopyIcon(IntPtr icon);
+    [DllImport("user32.dll")] internal static extern bool SetSystemCursor(IntPtr cursor,uint id);
+    [DllImport("user32.dll",EntryPoint="SystemParametersInfoW")] internal static extern bool SystemParametersInfo(uint action,uint param,IntPtr pv,uint winIni);
     [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")] internal static extern IntPtr GetWindowLongPtr(IntPtr h,int index);
     [DllImport("user32.dll",EntryPoint="SetWindowLongPtrW")] internal static extern IntPtr SetWindowLongPtr(IntPtr h,int index,IntPtr val);
     [DllImport("user32.dll",SetLastError=true)] internal static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);

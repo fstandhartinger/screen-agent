@@ -59,8 +59,9 @@ internal sealed class DictationWindow : Window
     }
     static DictationWindow Window2(){if(current is {IsVisible:true} w)return w;return current=new DictationWindow();}
     static string Folder(string path)=>System.IO.Path.GetDirectoryName(path)??path;
-    static void OpenFolder(string file){System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe",System.IO.File.Exists(file)?$"/select,\"{file}\"":$"\"{Folder(file)}\""){UseShellExecute=true});}
-    static void Copy(string text){try{Clipboard.SetText(text);}catch(Exception ex){Diag.Fail("dictation-window-copy",ex);}   /* the window stays; the file is there */ }
+    internal static void OpenFolder(string file){System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe",System.IO.File.Exists(file)?$"/select,\"{file}\"":$"\"{Folder(file)}\""){UseShellExecute=true});}
+    // Only ever from a click of his.
+    internal static bool Copy(string text){try{Clipboard.SetText(text);return true;}catch(Exception ex){Diag.Fail("dictation-window-copy",ex);return false;}   /* the window stays; the file is there */ }
     // Failure: reason, where the file is, and what can be done. "Text kopieren" only when a partial or caption text exists.
     internal static DictationWindow ShowFailure(DictationMeta m,string reason,string file,string? partial,Action? retry)
     {
@@ -68,7 +69,7 @@ internal sealed class DictationWindow : Window
         var w=Window2();var acts=new List<(string,Action,bool)>();
         if(retry is not null)acts.Add(("Erneut versuchen",retry,true));
         acts.Add(("Ordner öffnen",()=>OpenFolder(file),false));
-        if(!string.IsNullOrWhiteSpace(partial))acts.Add(("Text kopieren",()=>Copy(partial),false));
+        if(!string.IsNullOrWhiteSpace(partial))acts.Add(("Text kopieren",()=>_=Copy(partial),false));
         acts.Add(("Schließen",()=>{},true));
         w.Fill($"Diktat nicht verarbeitet: {reason}",$"{m.Label} · {file}",partial,acts);w.Present();return w;
     }
@@ -79,7 +80,7 @@ internal sealed class DictationWindow : Window
         Diag.Event("ui.window",new(){["window"]="dictation-result",["id"]=m.Id,["msg"]=head,["chars"]=text.Length});
         var w=Window2();var acts=new List<(string,Action,bool)>();
         if(insert is not null)acts.Add(("In aktuelles Feld einfügen",()=>_=w.InsertAsync(m,insert),false));
-        acts.Add(("Text kopieren",()=>Copy(text),false));acts.Add(("Schließen",()=>{},true));
+        acts.Add(("Text kopieren",()=>_=Copy(text),false));acts.Add(("Schließen",()=>{},true));
         w.Fill(head,m.Label,text,acts,closed);w.Present();return w;
     }
     async Task InsertAsync(DictationMeta m,Func<string,Task<bool>> insert)

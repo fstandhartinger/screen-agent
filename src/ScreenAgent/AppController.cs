@@ -113,7 +113,13 @@ internal sealed class AppController : IDisposable
             {
                 if(client.Paired&&(scopeSent!=config.ComputerUse||config.ComputerUse&&Environment.TickCount64>=scopeRefreshAt)&&!scopePosting&&Environment.TickCount64>=scopeRetryAt)_=PostComputerScope(config.ComputerUse);
                 // Their own guards: a throw in the subtitles or the activity rows must not starve the session logic below (and is logged, once per 30 s per type).
-                try{captions.Update(audio!=null,bridge.VoiceOn,micMuted);}
+                try
+                {
+                    captions.Update(audio!=null,bridge.VoiceOn,micMuted);
+                    bool working=audio==null&&dictation.Processing;
+                    captions.Visual(audio!=null?DictationVisual.Listening:working?DictationVisual.Processing:DictationVisual.None,dictation.ProcessingDetail);
+                    BusyCursor.Set(working&&config.DictationBusyCursor);
+                }
                 catch(Exception ex){TickFailed("captions",ex);}   // logged: tick.error
                 try{activity?.Tick();}
                 catch(Exception ex){TickFailed("activity",ex);}   // logged: tick.error
@@ -136,6 +142,9 @@ internal sealed class AppController : IDisposable
                 Notice("Anfrage fehlgeschlagen",Level.Warn,"tick-exception",ex);
             }
         };timer.Start();
+        BusyCursor.RestoreIfLeftOn();
+        AppDomain.CurrentDomain.ProcessExit+=(_,_)=>BusyCursor.Set(false);
+        AppDomain.CurrentDomain.UnhandledException+=(_,_)=>BusyCursor.Set(false);
         var menu=new System.Windows.Forms.ContextMenuStrip();
         string chord=KeyNames.Display(config.Hotkeys["session"]);
         menu.Items.Add(statusItem);
@@ -146,6 +155,13 @@ internal sealed class AppController : IDisposable
         pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
         computerItem.Checked=config.ComputerUse;computerItem.Click+=(_,_)=>_=SetComputer(!config.ComputerUse);menu.Items.Add(computerItem);
         menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset("stop");bridge.Disconnect();});
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        menu.Items.Add("Wörterbuch bearbeiten …",null,(_,_)=>DictionaryWindow.Open(client,()=>terms=[]));
+        menu.Items.Add("Diktat-Verlauf …",null,(_,_)=>DictationHistoryWindow.Open(dictation.Recent,dictation.Again));
+        var copyLast=new System.Windows.Forms.ToolStripMenuItem("Letztes Diktat kopieren");var againLast=new System.Windows.Forms.ToolStripMenuItem("Letztes Diktat neu transkribieren");
+        copyLast.Click+=(_,_)=>CopyLastDictation();
+        againLast.Click+=(_,_)=>{if(dictation.Latest() is {} last)_=dictation.Again(last);};
+        menu.Items.Add(copyLast);menu.Items.Add(againLast);
         var keysSeparator=new System.Windows.Forms.ToolStripSeparator();menu.Items.Add(keysSeparator);
         foreach(var line in KeyHelp(config.Hotkeys))menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(line){Enabled=false});
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
@@ -157,6 +173,9 @@ internal sealed class AppController : IDisposable
             computerItem.Checked=config.ComputerUse;computerItem.Text=config.ComputerUse?"Computer-Steuerung erlauben (an)":"Computer-Steuerung erlauben";
             pauseItem.Text=hook.Paused?"Fortsetzen":"Pause";
             dictation.FillTray(menu.Items,keysSeparator);   // failed dictations that can be retried
+            var latest=dictation.Latest();
+            copyLast.Enabled=latest is not null&&DictationHistory.TextOf(latest) is not null;
+            againLast.Enabled=latest is not null&&latest.Paths.Any(File.Exists);
         };
         tray=new(){Icon=TrayIcons.For(Level.Idle),Text="Screen Agent",Visible=true,ContextMenuStrip=menu};
         // A left click is the obvious thing to try on a tray icon; the menu stays on the right button.
@@ -434,6 +453,13 @@ internal sealed class AppController : IDisposable
         Notice(micMuted?"Mikro stumm":"Mikro an",micMuted?Level.Muted:Level.Active,"mute-toggle");
     }
     // The Desk learns the scope only from here; a lost POST is retried every 30 s while the paired app runs.
+    void CopyLastDictation()
+    {
+        if(dictation.Latest() is not {} last||DictationHistory.TextOf(last) is not {} text)return;
+        bool ok=DictationWindow.Copy(text);
+        telemetry.Event("dictation.copy",new(){["id"]=last.Id,["chars"]=text.Length,["ok"]=ok,["via"]="tray"});
+        Notice(ok?"Letztes Diktat kopiert":"Zwischenablage war belegt, bitte noch einmal",ok?Level.Active:Level.Warn,"dictation-copy");
+    }
     async Task PostComputerScope(bool on)
     {
         scopePosting=true;
@@ -719,7 +745,7 @@ internal sealed class AppController : IDisposable
     public void Dispose()
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);
-        disposed=true;computer.Dispose();computerOverlay.Dispose();canvas?.Terminate();activity?.Close();ScreenFlash.CloseCurrent();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
+        disposed=true;BusyCursor.Set(false);computer.Dispose();computerOverlay.Dispose();canvas?.Terminate();activity?.Close();ScreenFlash.CloseCurrent();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
         // After the dictation and the captions are gone: their last events (dictation.fail stage=shutdown) are in the queue the flush and the final save see.
         telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);telemetry.Dispose();
         foreach(var d in drawings)d.Close();drawings.Clear();tray.Visible=false;tray.Dispose();epoch.Dispose();
