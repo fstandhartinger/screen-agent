@@ -238,10 +238,10 @@ internal sealed class UiaDriver
     public string Type(UiaHeld h,string text,ActionBinding? expected)
     {
         Check();
-        if(h.Password)throw new InvalidOperationException("password-field");
+        if(h.Password&&!policy.Unrestricted)throw new InvalidOperationException("password-field");
         var fresh=Bind(h,"ui_type",text,expected is not null);
         if(expected is not null&&!expected.Same(fresh))throw new UiaStaleException("changed:"+string.Join(",",expected.Diff(fresh)));
-        if(h.El.Current.IsPassword||!h.El.Current.IsEnabled)throw new InvalidOperationException("password-field");
+        if(!policy.Unrestricted&&h.El.Current.IsPassword||!h.El.Current.IsEnabled)throw new InvalidOperationException("password-field");
         if(ComputerNative.ElevatedAbove(h.Hwnd))throw new InvalidOperationException("elevated");
         if(Root(Native.GetForegroundWindow())!=h.Hwnd&&!Focus(h.Hwnd))throw new UiaStaleException("not-foreground");
         try{h.El.SetFocus();}catch(InvalidOperationException){throw new UiaStaleException("no-focus");}

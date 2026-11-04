@@ -187,6 +187,16 @@ public class DictationFlowTests
     [InlineData("Klick auf den Link",false)]
     [InlineData("Diese Hierarchie ist gut",false)]
     public void HisPointingCountsAsHere(string goal,bool here)=>Assert.Equal(here,ComputerScope.MentionsHere(goal));
+    [Fact] public void UnrestrictedAsksNothingAndHidesNothing()
+    {
+        var p=new ComputerPolicy(new PrivacyPolicy()){Unrestricted=true};var scope=new ComputerScope{All=true};
+        foreach(var c in new[]{new ActionContext("chrome_click"){Url="https://web.telegram.org/a",Label="Senden"},new ActionContext("chrome_click"){Url="https://www.paypal.com/x",Label="Jetzt bezahlen"},new ActionContext("ui_type"){Process="cmd",Text="dir"},new ActionContext("key"){Process="code",Key="enter"}})
+        {var v=p.Classify(c,scope);Assert.False(v.Refused);Assert.False(v.Confirm);}
+        Assert.False(p.ReadDenied("1password","x",null));Assert.False(p.SensitiveRead("chrome","x","https://mail.google.com/"));
+        Assert.True(scope.Reaches("any.example.org"));Assert.True(scope.ContainsApp("cmd"));
+        var strict=new ComputerPolicy(new PrivacyPolicy());Assert.True(strict.Classify(new ActionContext("ui_type"){Process="cmd",Text="dir"},new ComputerScope()).Class>=ActionClass.R2);
+        var r=new ComputerRun("r","g",scope,null,ComputerCaps.Unrestricted);Assert.Equal(1000,r.Caps.MaxActions);
+    }
     [Fact] public void TheWaveformRingKeepsTheNewestLevelsAndCutsAudioIntoBars()
     {
         var r=new LevelRing(4);foreach(var v in new double[]{1,2,3,4,5,6})r.Add(v);
