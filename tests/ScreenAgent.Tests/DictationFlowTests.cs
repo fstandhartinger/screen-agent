@@ -169,14 +169,43 @@ public class DictationFlowTests
         Assert.True(q.Answered(second,true,200,2100));Assert.Equal(0,q.Dropped);
         Assert.False(q.Answered(first,true,200,2200));Assert.Equal(1,q.Dropped);
     }
-    [Fact] public void FiveFailuresPauseSixtySecondsAnd503SwitchesCaptionsOffForTheSession()
+    [Fact] public void ThreeFailuresPauseFifteenSecondsAndOnlyNoKeyOrBudgetEndTheSession()
     {
         var p=new CaptionPolicy();long t=0;
-        for(int i=0;i<5;i++){t+=2000;p.Heard(t,1000);Assert.True(p.ShouldSend(t));p.Answered(p.Begin(t),false,500,t+10);}
-        p.Heard(t+3000,1000);Assert.False(p.ShouldSend(t+3000));Assert.False(p.ShouldSend(t+59000));p.Heard(t+61000,1000);Assert.True(p.ShouldSend(t+61000));
-        int id=p.Begin(t+61000);Assert.False(p.Answered(id,false,503,t+61100));Assert.True(p.Disabled);Assert.Equal("http-503",p.DisabledWhy);
-        p.Heard(t+70000,1000);Assert.False(p.ShouldSend(t+70000));
-        p.NewSession();p.Heard(t+80000,1000);Assert.True(p.ShouldSend(t+80000));
+        for(int i=0;i<3;i++){t+=2000;p.Heard(t,1000);Assert.True(p.ShouldSend(t));p.Answered(p.Begin(t),false,503,t+10,"mai-down");}
+        Assert.False(p.Disabled);p.Heard(t+2000,1000);Assert.False(p.ShouldSend(t+2000));
+        p.Heard(t+16000,1000);Assert.True(p.ShouldSend(t+16000));
+        int id=p.Begin(t+16000);Assert.False(p.Answered(id,false,503,t+16100,"no-key"));Assert.True(p.Disabled);Assert.Equal("no-key",p.DisabledWhy);
+        var q=new CaptionPolicy();q.Answered(q.Begin(0),false,429,10,"caption-budget");Assert.True(q.Disabled);
+        p.NewSession();Assert.False(p.Disabled);
+    }
+    [Theory]
+    [InlineData("Klicke auf diesen Details-Link.",true)]
+    [InlineData("Klick diesen blauen Button",true)]
+    [InlineData("öffne diese Seite",true)]
+    [InlineData("hier klicken",true)]
+    [InlineData("Klick auf den Link",false)]
+    [InlineData("Diese Hierarchie ist gut",false)]
+    public void HisPointingCountsAsHere(string goal,bool here)=>Assert.Equal(here,ComputerScope.MentionsHere(goal));
+    [Fact] public void TheWaveformRingKeepsTheNewestLevelsAndCutsAudioIntoBars()
+    {
+        var r=new LevelRing(4);foreach(var v in new double[]{1,2,3,4,5,6})r.Add(v);
+        Assert.Equal(new double[]{4,5,6},r.Last(3));Assert.Equal(new double[]{3,4,5,6},r.Last(9));
+        var bars=new LevelRing();bars.AddPcm(new byte[LevelRing.SliceBytes*3]);Assert.Equal(3,bars.Last(10).Length);
+        Assert.Equal(4,LevelRing.BarHeight(0,4,30));Assert.Equal(30,LevelRing.BarHeight(60000,4,30));Assert.InRange(LevelRing.BarHeight(1500,4,30),15,20);
+    }
+    [Fact] public void DictionaryEntriesAndHistoryLines()
+    {
+        var e=DictionaryEntry.Parse("{\"items\":[{\"term\":\"Jev\",\"replace_from\":[\"Jeff\"],\"source\":\"wispr\"},{\"term\":\"Reax\"},{\"x\":1}]}");
+        Assert.Equal(2,e.Length);Assert.Equal(new[]{"Jeff"},e[0].ReplaceFrom);Assert.Equal("wispr",e[0].Source);Assert.Empty(e[1].ReplaceFrom);
+        Assert.Equal(new[]{"Karpati","Karpaty"},DictionaryEntry.SplitForms(" Karpati, Karpaty,,Karpati "));
+        var done=new DictationMeta{Id="a",State="done",Seconds=63,Started=DateTimeOffset.Now,Text="Fertiger Text"};
+        var dropped=new DictationMeta{Id="b",State="discarded",Started=DateTimeOffset.Now.AddMinutes(1)};
+        var failed=new DictationMeta{Id="c",State="failed",Started=DateTimeOffset.Now.AddMinutes(-1),PartialText="Teil"};
+        var recent=DictationHistory.Recent([failed,done,dropped]);
+        Assert.Equal(new[]{"a","c"},recent.Select(m=>m.Id));
+        Assert.Equal("Fertiger Text",DictationHistory.TextOf(done));Assert.Equal("Teil",DictationHistory.TextOf(failed));
+        Assert.Contains("1:03 · Fertiger Text",DictationHistory.Line(done));
     }
     [Fact] public void CaptionStatsReportCostPerSpeechHourWithoutText()
     {

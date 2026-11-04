@@ -149,14 +149,14 @@ internal static class DictationSelftest
             Check("caption reply parsed",cap.Status==200&&cap.Text=="Untertitel Probe"&&cap.Ms==420&&cap.Cost is 0.0012,$"{cap.Status} {cap.Ms} {cap.Cost}");
 
             // 6. Windows: the failure window and the subtitle overlay.
-            WindowChecks(again);
+            WindowChecks(again,store,client);
         }
         catch(Exception ex){Check("selftest ran",false,ex.GetType().Name+": "+ex.Message);}
         finally{try{Directory.Delete(dir,true);}catch{ }}
         Console.WriteLine(JsonSerializer.Serialize(new{test="dictation",failures,results=Results}));
         return failures==0?0:1;
     }
-    static void WindowChecks(DictationMeta meta)
+    static void WindowChecks(DictationMeta meta,DictationStore store,DeviceClient client)
     {
         var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};   // closing the last test window must not end the run (the finally shuts down)
         app.Startup+=async (_,_)=>
@@ -182,11 +182,67 @@ internal static class DictationSelftest
                 var cap=new CaptionOverlay();cap.Present("Das ist ein Probe-Untertitel");await Task.Delay(400);   // a layered window reports IsVisible only after its first render
                 long cx=Native.GetWindowLongPtr(new System.Windows.Interop.WindowInteropHelper(cap).Handle,-20).ToInt64();
                 Check("subtitle click-through, no focus, excluded from capture",cap.IsVisible&&(cx&0x20L)!=0&&(cx&0x08000000L)!=0&&cap.AffinityOk,$"visible={cap.IsVisible} exstyle={cx:x} affinity={cap.AffinityOk} text={cap.Text.Length}");
+                // 0.1.9: after a fade the subtitle must really come back (the fade used to hold Opacity at 0, so it only flashed at the end of a dictation).
+                cap.Dismiss();await Task.Delay(600);
+                Check("subtitle hidden after the fade",!cap.IsVisible,$"visible={cap.IsVisible}");
+                cap.Present("Der zweite Untertitel");await Task.Delay(300);
+                Check("the second subtitle is really visible, not transparent",cap.IsVisible&&Math.Abs(cap.Opacity-1)<0.01,$"visible={cap.IsVisible} opacity={cap.Opacity}");
+                var ring=new LevelRing();for(int i=0;i<64;i++)ring.Add(500+4000*Math.Abs(Math.Sin(i/3.0)));
+                cap.SetVisual(DictationVisual.Listening,null,ring);await Task.Delay(200);
+                Check("listening: waveform, no old text",cap.Visual==DictationVisual.Listening&&cap.Text==""&&cap.StateText.Contains("höre"),$"text={cap.Text} state={cap.StateText}");
+                Picture(cap.Pill,"listening-empty");
+                cap.Present("Ich teste gerade noch mal den Screen Agent und vor allem die Diktatfunktion");await Task.Delay(200);Picture(cap.Pill,"listening-caption");
+                cap.Dismiss();await Task.Delay(400);
+                Check("a dictation in progress is not faded out",cap.IsVisible&&Math.Abs(cap.Opacity-1)<0.01,$"opacity={cap.Opacity}");
+                cap.SetVisual(DictationVisual.Processing,"2/3",ring);await Task.Delay(200);
+                Check("processing: circle and status",cap.Visual==DictationVisual.Processing&&cap.StateText.Contains("verarbeitet")&&cap.StateText.Contains("2/3"),cap.StateText);
+                Picture(cap.Pill,"processing");
+                cap.SetVisual(DictationVisual.None,null,ring);await Task.Delay(500);
+                Check("gone when the text is in",!cap.IsVisible,$"visible={cap.IsVisible}");
+                cap.SetVisual(DictationVisual.Listening,null,ring);await Task.Delay(200);
+                Check("the next dictation shows it again",cap.IsVisible&&Math.Abs(cap.Opacity-1)<0.01,$"opacity={cap.Opacity}");
+                cap.SetVisual(DictationVisual.None,null,ring);await Task.Delay(300);
                 cap.Close();
+                // The tray's two windows, with stand-in data, and the busy pointer that must come back.
+                var dict=new DictionaryWindow(client,()=>{}){ShowActivated=false};dict.Show();dict.Show([new("Karpathy",["Karpati","Karpaty"],"manual"),new("Bittensor",["Bit Tensor"],"wispr"),new("Reax",[],"learned")]);await Task.Delay(300);
+                Check("dictionary window lists the words",dict.Count==3,dict.Count.ToString());Picture((FrameworkElement)dict.Content,"dictionary");dict.Close();
+                var done=store.Begin("code");done.State="done";done.Seconds=23;done.Text="Das ist der fertige Text eines Diktats.";done.Files=[];store.Save(done);
+                var hist=new DictationHistoryWindow(()=>DictationHistory.Recent(store.All()),_=>Task.CompletedTask){ShowActivated=false};hist.Show();await Task.Delay(300);
+                Check("history lists the dictation with its text",hist.Count>=1&&hist.AffinityOk,$"{hist.Count} affinity={hist.AffinityOk}");Picture((FrameworkElement)hist.Content,"history");hist.Close();
+                BusyCursor.Set(true);Check("busy pointer on",BusyCursor.On);await Task.Delay(150);BusyCursor.Set(false);Check("busy pointer back",!BusyCursor.On);
             }
             catch(Exception ex){Check("window checks ran",false,ex.GetType().Name+": "+ex.Message);}
             finally{DictationWindow.CloseCurrent();app.Shutdown();}
         };
         app.Run();
+    }
+    // --selftest-dictionary-live: save, read back, rename and delete one throwaway word against the real Desk with this device's pairing. Prints statuses only.
+    internal static int DictionaryLive()
+    {
+        const string word="ZzScreenAgentTestwort",renamed="ZzScreenAgentTestwort2";
+        var config=ScreenConfig.Load();using var client=new DeviceClient(config);
+        using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(30));var ct=cts.Token;
+        using var a=client.SaveTerm(word,["zz falsch eins","zz falsch zwei"],null,ct).GetAwaiter().GetResult();
+        using var b=client.SaveTerm(word,["zz falsch drei"],null,ct).GetAwaiter().GetResult();
+        var one=client.DictionaryItems(ct).GetAwaiter().GetResult().FirstOrDefault(e=>e.Term==word);
+        using var c=client.SaveTerm(renamed,["zz falsch drei"],word,ct).GetAwaiter().GetResult();
+        var items=client.DictionaryItems(ct).GetAwaiter().GetResult();
+        bool gone=items.All(e=>e.Term!=word),there=items.Any(e=>e.Term==renamed);
+        using var d=client.DeleteTerm(renamed,ct).GetAwaiter().GetResult();
+        int count=client.DictionaryItems(ct).GetAwaiter().GetResult().Count(e=>e.Term==renamed);
+        bool ok=a.Ok&&b.Ok&&c.Ok&&d.Ok&&one is {ReplaceFrom:["zz falsch drei"]}&&gone&&there&&count==0;
+        Console.WriteLine(JsonSerializer.Serialize(new{ok,save=a.Status,replace=b.Status,exact=one?.ReplaceFrom,rename=c.Status,gone,there,delete=d.Status,left=count,words=items.Length}));
+        return ok?0:1;
+    }
+    // Screen captures cannot see these windows by design, so the pictures for a look are rendered from the element itself (only when SCREENAGENT_PICTURES names a folder).
+    static void Picture(FrameworkElement e,string name)
+    {
+        string? dir=Environment.GetEnvironmentVariable("SCREENAGENT_PICTURES");
+        if(string.IsNullOrEmpty(dir))return;
+        Directory.CreateDirectory(dir);
+        e.UpdateLayout();
+        var bmp=new System.Windows.Media.Imaging.RenderTargetBitmap(Math.Max(1,(int)Math.Ceiling(e.ActualWidth)),Math.Max(1,(int)Math.Ceiling(e.ActualHeight)),96,96,System.Windows.Media.PixelFormats.Pbgra32);bmp.Render(e);
+        var png=new System.Windows.Media.Imaging.PngBitmapEncoder();png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+        using var f=File.Create(Path.Combine(dir,name+".png"));png.Save(f);
     }
 }

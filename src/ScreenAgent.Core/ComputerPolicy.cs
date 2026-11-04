@@ -74,8 +74,8 @@ public sealed class ComputerScope
     {
         ["notepad"]="notepad",["editor"]="notepad",["rechner"]="calculatorapp",["taschenrechner"]="calculatorapp",["calc"]="calculatorapp",["paint"]="mspaint",["wordpad"]="wordpad",["explorer"]="explorer"
     };
-    static readonly Regex HereRx=new(@"(?<![\p{L}\p{N}])(?:hier|diese[rn]?\s+(?:seite|tab))(?![\p{L}\p{N}])",RegexOptions.Compiled|RegexOptions.CultureInvariant,TimeSpan.FromMilliseconds(100));
-    // "hier" / "diese Seite" as whole words ("Hierarchie" is not "hier").
+    static readonly Regex HereRx=new(@"(?<![\p{L}\p{N}])(?:hier|diese[rn]?\s+(?:seite|tab)|dies(?:e|en|er|es|em)\s+(?:[\p{L}\p{N}-]+\s+){0,2}[\p{L}\p{N}-]*(?:link|button|knopf|eintrag|feld))(?![\p{L}\p{N}])",RegexOptions.Compiled|RegexOptions.CultureInvariant,TimeSpan.FromMilliseconds(100));
+    // "hier" / "diese Seite" / "diesen Details-Link" (he points at what is in front; 4 Nov: that order could only read) as whole words ("Hierarchie" is not "hier").
     public static bool MentionsHere(string? goal){try{return HereRx.IsMatch((goal??"").ToLowerInvariant());}catch(RegexMatchTimeoutException){return false;}}   // a timeout means "not here": the scope then stays smaller (closed)
     static readonly Regex HostRx=new(@"(?<![\w@.-])((?:[a-z0-9-]+\.)+[a-z]{2,})(?![\w-])",RegexOptions.Compiled|RegexOptions.CultureInvariant,TimeSpan.FromMilliseconds(100));
     public static ComputerScope From(string goal,string? hereHost=null,string boardHost="board.app.mintapis.com"){var s=new ComputerScope();s.Extend(goal,hereHost,boardHost);return s;}

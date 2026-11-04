@@ -19,6 +19,8 @@ public sealed class DictationMeta
     public long Bytes {get;set;}
     public bool DiskOk {get;set;}=true;
     public string? PartialText {get;set;}
+    // The final text (0.1.9), for the tray's copy and the history window. Local only, gone with the recording (DictationKeepHours); it never leaves the machine.
+    public string? Text {get;set;}
     public int Attempts {get;set;}
     [JsonIgnore] public string Folder {get;set;}="";
     [JsonIgnore] public string MetaPath=>Path.Combine(Folder,$"{Stamp}-{Id}.json");

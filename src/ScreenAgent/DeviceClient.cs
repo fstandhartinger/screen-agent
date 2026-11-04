@@ -154,6 +154,13 @@ internal sealed class DeviceClient : IDisposable
         using var r=await Send(HttpMethod.Get,"api/device/dictionary",null,ct);
         return DeviceProtocol.Terms(await r.Content.ReadAsStringAsync(ct));
     }
+    public async Task<DictionaryEntry[]> DictionaryItems(CancellationToken ct)
+    {
+        using var r=await Send(HttpMethod.Get,"api/device/dictionary",null,ct);
+        return DictionaryEntry.Parse(await r.Content.ReadAsStringAsync(ct));
+    }
+    public Task<RawReply> SaveTerm(string term,string[] from,string? previous,CancellationToken ct)=>Raw(HttpMethod.Post,"api/device/dictionary/term",previous is null?new{term,replace_from=from}:new{term,replace_from=from,previous},ct);
+    public Task<RawReply> DeleteTerm(string term,CancellationToken ct)=>Raw(HttpMethod.Delete,"api/device/dictionary/term/"+Uri.EscapeDataString(term),null,ct);
     public async Task<string> Dictate(byte[] wav,DictationContext context,CancellationToken ct)
     {
         using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(wav);audio.Headers.ContentType=new("audio/wav");form.Add(audio,"audio","dictation.wav");form.Add(new StringContent(JsonSerializer.Serialize(context)),"context");
