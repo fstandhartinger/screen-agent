@@ -8,10 +8,10 @@ namespace ScreenAgent;
 internal sealed class DictationHistoryWindow : Window
 {
     static DictationHistoryWindow? current;
-    sealed class Row(DictationMeta m)
+    sealed class Row(DictationMeta m,bool showText)
     {
         public DictationMeta Meta=>m;
-        public string Line=>DictationHistory.Line(m);
+        public string Line=>DictationHistory.Line(m,showText);
     }
     readonly Func<List<DictationMeta>> load;readonly Func<DictationMeta,Task> again;
     readonly ListBox list=new(){Width=300,Margin=new Thickness(0,0,10,0),DisplayMemberPath="Line"};
@@ -34,7 +34,7 @@ internal sealed class DictationHistoryWindow : Window
         copy.Click+=(_,_)=>{if(list.SelectedItem is Row r&&DictationHistory.TextOf(r.Meta) is {} t){status.Text=DictationWindow.Copy(t)?"Kopiert":"Zwischenablage war belegt, bitte noch einmal";Diag.Event("dictation.copy",new(){["id"]=r.Meta.Id,["chars"]=t.Length,["via"]="history"});}};
         redo.Click+=async (_,_)=>{if(list.SelectedItem is Row r){status.Text="Wird neu transkribiert …";try{await again(r.Meta);}catch(Exception ex){Diag.Fail("dictation-history-again",ex);}status.Text="";Refill();}};
         folder.Click+=(_,_)=>{if(list.SelectedItem is Row r)DictationWindow.OpenFolder(r.Meta.Paths.FirstOrDefault()??r.Meta.MetaPath);};
-        SourceInitialized+=(_,_)=>{var h=new WindowInteropHelper(this).Handle;AffinityOk=Native.SetWindowDisplayAffinity(h,0x11)&&Native.GetWindowDisplayAffinity(h,out uint now)&&now==0x11u;if(!AffinityOk)OverlayStyle.RefusedOnce("dictation-history");Selected();};
+        SourceInitialized+=(_,_)=>{var h=new WindowInteropHelper(this).Handle;AffinityOk=Native.SetWindowDisplayAffinity(h,0x11)&&Native.GetWindowDisplayAffinity(h,out uint now)&&now==0x11u;if(!AffinityOk)OverlayStyle.RefusedOnce("dictation-history");Refill();};
         Closed+=(_,_)=>{if(ReferenceEquals(current,this))current=null;};
         Refill();
     }
@@ -47,7 +47,7 @@ internal sealed class DictationHistoryWindow : Window
     internal void Refill()
     {
         string? keep=(list.SelectedItem as Row)?.Meta.Id;
-        var rows=load().Select(m=>new Row(m)).ToList();
+        var rows=load().Select(m=>new Row(m,AffinityOk)).ToList();
         list.ItemsSource=rows;
         list.SelectedItem=rows.FirstOrDefault(r=>r.Meta.Id==keep)??rows.FirstOrDefault();
         if(rows.Count==0){status.Text="Noch keine Diktate gespeichert";Selected();}

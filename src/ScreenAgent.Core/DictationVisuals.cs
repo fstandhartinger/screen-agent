@@ -55,11 +55,13 @@ public static class DictationHistory
     public static string? TextOf(DictationMeta m)=>!string.IsNullOrWhiteSpace(m.Text)?m.Text:string.IsNullOrWhiteSpace(m.PartialText)?null:m.PartialText;
     // Newest first: everything that was really said and is still on disk. A discarded or still running one is not listed.
     public static List<DictationMeta> Recent(IEnumerable<DictationMeta> all,int max=50)=>all.Where(m=>m.State is "done" or "failed").OrderByDescending(m=>m.Started).Take(max).ToList();
-    public static string Line(DictationMeta m)
+    // showText false: the window could not be proven out of screen captures, so the list shows no words either.
+    public static string Line(DictationMeta m,bool showText=true)
     {
         string? t=TextOf(m);
         string head=$"{m.Started.ToLocalTime():dd.MM. HH:mm} · {(int)(m.Seconds/60)}:{(int)m.Seconds%60:00}";
         if(t is null)return head+(m.State=="failed"?" · nicht verarbeitet":"");
+        if(!showText)return head;
         t=t.ReplaceLineEndings(" ");
         return head+" · "+(t.Length<=26?t:t[..26]+"…");
     }
