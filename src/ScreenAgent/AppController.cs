@@ -82,10 +82,11 @@ internal sealed class AppController : IDisposable
         promptChannel=new(client,prompts.Run,Trace,
             (code,text,chars)=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>{telemetry.Event("ui.window",new(){["window"]="prompt-fallback",["code"]=code,["chars"]=chars});try{PromptFallbackWindow.Show(code,text,chars);}catch(Exception ex){Diag.Fail("prompt-fallback-window",ex);}})),
             sid=>bridge.SessionId==sid&&bridge.VoiceOn,inputGate);
+        ChromeCdp.PasswordFieldsAllowed=config.ComputerUnrestricted;
         // Computer use: off until he allows it in the tray. The executor owns the run, the policy and the confirmations (see ComputerAgent).
         computerOverlay=new ComputerOverlay();
         computer=new(async (url,body)=>{using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);return reply.Ok||reply.Status is 404 or 409;},
-            (type,data)=>telemetry.Event(type,data),inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host,config.ComputerSensitive),computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
+            (type,data)=>telemetry.Event(type,data),inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host,config.ComputerSensitive){Unrestricted=config.ComputerUnrestricted},computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
             text=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,Level.Active,"computer"))),new ChromeCdp.ConnectOptions(),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","logs","computer.log"),bridge.Dispatcher);
         // The drawing panel waits while a prompt is typed (it could take the focus back), and opens when the prompt is over.
@@ -475,7 +476,7 @@ internal sealed class AppController : IDisposable
     async Task SetComputer(bool on)
     {
         if(on)telemetry.Event("ui.window",new(){["window"]="computer-consent"});
-        if(on&&Native.MessageBox(IntPtr.Zero,"Der Agent darf dann auf Zuruf deinen Computer bedienen: Fenster per Windows-Bedienungshilfen und Chrome über dessen Debug-Port. Riskante Aktionen fragen dich vorher mit einem Code. Strg+Win+Umschalt+X stoppt sofort.\r\n\r\nHinweis zu Chrome: Die Fernsteuerung in Chrome schaltest du selbst ein (chrome://inspect/#remote-debugging). Solange sie an ist, kann jedes Programm deines Benutzers mit einem Klick auf „Zulassen“ auf deinen Browser zugreifen.\r\n\r\nErlauben?","Screen Agent · Computer-Steuerung",0x4|0x20|0x10000|0x40000)!=6)return;
+        if(on&&Native.MessageBox(IntPtr.Zero,"Der Agent darf dann auf Zuruf deinen Computer bedienen: Fenster per Windows-Bedienungshilfen und Chrome über dessen Debug-Port. Ohne Rückfragen, auf allen Seiten und in allen Programmen. Strg+Win+Umschalt+X stoppt sofort.\r\n\r\nHinweis zu Chrome: Die Fernsteuerung in Chrome schaltest du selbst ein (chrome://inspect/#remote-debugging). Solange sie an ist, kann jedes Programm deines Benutzers mit einem Klick auf „Zulassen“ auf deinen Browser zugreifen.\r\n\r\nErlauben?","Screen Agent · Computer-Steuerung",0x4|0x20|0x10000|0x40000)!=6)return;
         try{ScreenConfig.SetComputerUse(on);}catch(Exception e){telemetry.Event("computer.scope.failed",new(){["status"]=-1,["type"]=e.GetType().Name});Notice("Einstellung konnte nicht gespeichert werden",Level.Warn,"computer-config",e);return;}
         config.ComputerUse=on;computerItem.Checked=on;telemetry.Event("computer.scope",new(){["enabled"]=on});
         if(!on)computer.Stop("off");

@@ -129,7 +129,7 @@ internal sealed class ComputerAgent:IDisposable
     {
         if(r.Revoked||r.IsClosed){Send(w,Reply(false,r.Revoked?ComputerCodes.Killed:ComputerCodes.NoRun,null,"closed",null,null,r.StateName));return;}
         r.Resume();handsOnNoted=false;pendingExec=null;pendingPlan=null;pendingWork=null;uia?.Windows();cdp?.ClearRefs();
-        ui.BeginInvoke(()=>{overlay.ClearAsk();overlay.Update("läuft",r.Actions,150);});
+        ui.BeginInvoke(()=>{overlay.ClearAsk();overlay.Update("läuft",r.Actions,MaxShown);});
         Log("computer.resume",new(){["run"]=r.Id});
         Send(w,Reply(true,ComputerCodes.Done,null,"resume",null,null,r.StateName));
     }
@@ -141,6 +141,7 @@ internal sealed class ComputerAgent:IDisposable
         Send(w,Reply(true,ComputerCodes.Done,null,had?"void":"no-pending",null,null,r.StateName));
     }
     // A start whose scope can act (non-empty) asks first, like any R2: a speaker in a video must not open a run, and neither may one widen it. An empty scope can only read, focus and scroll.
+    int MaxShown=>policy.Unrestricted?ComputerCaps.UnrestrictedActions:150;
     bool KillPathLive()
     {
         if(hook is null)return false;
@@ -161,7 +162,7 @@ internal sealed class ComputerAgent:IDisposable
         string goal=new string(cmd.Goal.Where(c=>!char.IsControl(c)).ToArray()).Trim();
         if(goal.Length==0){Send(w,Reply(false,ComputerCodes.Refused,null,"goal",null,null,null));return;}
         var more=ComputerScope.From(goal,null,boardHost);
-        bool mentionsHere=ComputerScope.MentionsHere(goal);
+        bool mentionsHere=!policy.Unrestricted&&ComputerScope.MentionsHere(goal);
         var front=mentionsHere?Front():((string,string,string)?)null;   // what was in front when he said "hier"
         ComputerRun? cur;
         lock(sync)
@@ -176,8 +177,9 @@ internal sealed class ComputerAgent:IDisposable
         }
         if(cur is not null){Extend(w,cur,goal,more,front);return;}
         // ---- a new run (unarmed while "hier" is still to be resolved)
-        bool asks=!more.Empty||mentionsHere;
-        var nr=new ComputerRun(cmd.Run,goal,more,null,null,armed:!asks);
+        bool asks=!policy.Unrestricted&&(!more.Empty||mentionsHere);
+        more.All=policy.Unrestricted;
+        var nr=new ComputerRun(cmd.Run,goal,more,null,policy.Unrestricted?ComputerCaps.Unrestricted:null,armed:!asks);
         lock(sync)
         {
             run=nr;runSid=w.Sid;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;try{cdp?.Dispose();}catch{ }cdp=null;   /* disposing the socket of a closed run: nothing to report */cdpFailure=null;pendingExec=null;pendingPlan=null;pendingWork=null;lastGatewayGoal=goal;
@@ -195,40 +197,40 @@ internal sealed class ComputerAgent:IDisposable
         // N3: "hier" is resolved before the ask is built; with no host found it adds nothing, and a start with nothing named only reads (no ask, armed).
         if(mentionsHere&&ResolveHere(goal,front) is {} hereHost){nr.Scope.Hosts.Add(hereHost);Log("computer.run.here",new(){["run"]=cmd.Run,["resolved"]=true});}
         else if(mentionsHere)Log("computer.run.here",new(){["run"]=cmd.Run,["resolved"]=false,["reason"]=cdpFailure??"no-tab"});
-        asks=!nr.Scope.Empty;
+        asks=!policy.Unrestricted&&!nr.Scope.Empty;
         if(!asks)nr.Arm();
-        ui.Invoke(()=>{overlay.Show(goal);overlay.Update(asks?"wartet auf deine Bestätigung":"läuft",0,150);});
+        ui.Invoke(()=>{overlay.Show(goal);overlay.Update(asks?"wartet auf deine Bestätigung":"läuft",0,MaxShown);});
         bool logged=Log("computer.run.start",new(){["run"]=cmd.Run,["goal"]=ComputerRedact.Goal(goal),["hosts"]=nr.Scope.Hosts.Count,["apps"]=nr.Scope.Apps.Count,["hotkey"]=hook?.ComputerHotkeyOk??false,["hook"]=hook?.Healthy??false,["scope_empty"]=nr.Scope.Empty,["asks"]=asks});
         notice?.Invoke("Computer-Steuerung läuft · Strg+Win+Umschalt+X stoppt");
         _=Beat(w.Sid,nr);
         if(!asks){Send(w,Reply(true,ComputerCodes.Done,null,"start",ScopeText(nr.Scope),null,nr.StateName));return;}
         if(!logged){Send(w,Reply(false,ComputerCodes.Refused,ActionClass.R3,"no-trace",null,null,nr.StateName));EndRun("no-trace");return;}
         var plan=new Plan(new ActionContext("start"),()=>new ActionBinding().Set("tool","start").Set("goal",ActionBinding.Digest([goal])).Set("scope",string.Join(",",nr.Scope.Hosts.OrderBy(x=>x))+"|"+string.Join(",",nr.Scope.Apps.OrderBy(x=>x))),
-            _=>{nr.Arm();ui.BeginInvoke(()=>overlay.Update("läuft",nr.Actions,150));return "gestartet";},
+            _=>{nr.Arm();ui.BeginInvoke(()=>overlay.Update("läuft",nr.Actions,MaxShown));return "gestartet";},
             ()=>(AskText("Computer-Steuerung starten.",goal,nr.Scope),"Start "+ComputerRedact.Goal(goal)),"",false,false,Counts:false);
         Propose(w,nr,plan,Verdict.Of(ActionClass.R2,"run-start"),new(){["run"]=nr.Id,["seq"]=cmd.Seq,["tool"]="start",["class"]="R2",["rule"]="run-start"});
     }
     // An extension: the goal and the scope grow, so he confirms with the code or the chord (one ask) and the overlay shows the new goal. An empty result scope needs no ask.
     void Extend(Work w,ComputerRun cur,string goal,ComputerScope more,(string Process,string Title,string Class)? front)
     {
-        if(ResolveHere(goal,front) is {} hereHost)more.Hosts.Add(hereHost);   // N3: "hier" in an extension is resolved before the ask too
+        if(!policy.Unrestricted&&ResolveHere(goal,front) is {} hereHost)more.Hosts.Add(hereHost);   // N3: "hier" in an extension is resolved before the ask too
         var merged=ComputerScope.From("");foreach(var h in cur.Scope.Hosts.Concat(more.Hosts))merged.Hosts.Add(h);foreach(var a in cur.Scope.Apps.Concat(more.Apps))merged.Apps.Add(a);
         string added=goal.StartsWith(lastGatewayGoal,StringComparison.Ordinal)&&goal.Length>lastGatewayGoal.Length?goal[lastGatewayGoal.Length..].Trim():goal;
         Func<ActionBinding?,string> apply=_=>
         {
             cur.Extend(goal,more);lastGatewayGoal=goal;handsOnNoted=false;uia?.Windows();cdp?.ClearRefs();
             Log("computer.run.extend",new(){["run"]=cur.Id,["goal"]=ComputerRedact.Goal(goal),["hosts"]=cur.Scope.Hosts.Count});
-            ui.BeginInvoke(()=>{overlay.SetGoal(cur.Goal);overlay.Update("läuft",cur.Actions,150);});
+            ui.BeginInvoke(()=>{overlay.SetGoal(cur.Goal);overlay.Update("läuft",cur.Actions,MaxShown);});
             return "erweitert";
         };
-        if(merged.Empty){apply(null);Send(w,Reply(true,ComputerCodes.Done,null,"extend",ScopeText(cur.Scope),null,cur.StateName));return;}
+        if(merged.Empty||policy.Unrestricted){apply(null);Send(w,Reply(true,ComputerCodes.Done,null,"extend",ScopeText(cur.Scope),null,cur.StateName));return;}
         if(!Log("computer.run.extend.ask",new(){["run"]=cur.Id,["goal"]=ComputerRedact.Goal(added)})){Send(w,Reply(false,ComputerCodes.Refused,ActionClass.R3,"no-trace",null,null,cur.StateName));return;}
         var plan=new Plan(new ActionContext("extend"),()=>new ActionBinding().Set("tool","extend").Set("goal",ActionBinding.Digest([goal])).Set("scope",string.Join(",",merged.Hosts.OrderBy(x=>x))+"|"+string.Join(",",merged.Apps.OrderBy(x=>x))),
             exp=>apply(exp),
             ()=>("Computer-Steuerung erweitern. Neu dazu: "+ComputerSpeech.Quote(added,60)+". "+ScopeText(merged)+".","Erweiterung "+ComputerRedact.Goal(added)),"",false,false,Counts:false);
         Propose(w,cur,plan,Verdict.Of(ActionClass.R2,"run-extend"),new(){["run"]=cur.Id,["seq"]=w.Cmd.Seq,["tool"]="extend",["class"]="R2",["rule"]="run-extend"});
     }
-    static string ScopeText(ComputerScope s)=>"Bereich: "+(s.Hosts.Count==0?"keine Seite":string.Join(", ",s.Hosts))+"; Programme: "+(s.Apps.Count==0?"keine":string.Join(", ",s.Apps));
+    static string ScopeText(ComputerScope s)=>s.All?"Bereich: alles":"Bereich: "+(s.Hosts.Count==0?"keine Seite":string.Join(", ",s.Hosts))+"; Programme: "+(s.Apps.Count==0?"keine":string.Join(", ",s.Apps));
     // ---- end of a run (once): log, overlay, hooks, socket
     void EndRun(string why)
     {
@@ -270,7 +272,7 @@ internal sealed class ComputerAgent:IDisposable
         if(r.IsHandsOn&&!handsOnNoted)
         {
             handsOnNoted=true;Log("computer.handson",new(){["run"]=r.Id});
-            ui.BeginInvoke(()=>overlay.Update("Du bist dran, sag z. B. „mach weiter“",r.Actions,150));notice?.Invoke("Du bist dran, sag z. B. „mach weiter“");_=Beat(sid,r);
+            ui.BeginInvoke(()=>overlay.Update("Du bist dran, sag z. B. „mach weiter“",r.Actions,MaxShown));notice?.Invoke("Du bist dran, sag z. B. „mach weiter“");_=Beat(sid,r);
         }
         // The chord was pressed on the keyboard: the app runs the confirm itself and posts the result as a SECOND result to the action's own command id (the gateway accepts it once, within 120 s).
         if(r.PhysicalConfirmed&&r.Pending is {} pend&&pendingWork is {} pw&&!confirmKeyNoted){confirmKeyNoted=true;try{queue.Add(new(pw.Sid,pw.Cmd with{Op="confirm",Hash=pend.Hash,Digits=""}));}catch(InvalidOperationException){ }}   // the queue was completed by a stop
@@ -426,7 +428,7 @@ internal sealed class ComputerAgent:IDisposable
                 int lost=cd.Revalidate(r.Scope,CancellationToken.None).GetAwaiter().GetResult();
                 if(lost>0)Log("computer.tab.left_scope",new(){["run"]=r.Id,["tabs"]=lost});
             }
-            if(plan.Counts){r.Counted();ui.BeginInvoke(()=>overlay.Update("läuft",r.Actions,150,w.Cmd.Tool));}
+            if(plan.Counts){r.Counted();ui.BeginInvoke(()=>overlay.Update("läuft",r.Actions,MaxShown,w.Cmd.Tool));}
             Log("computer.action",new(data){["ok"]=true,["ms"]=sw.ElapsedMilliseconds,["phase"]="done"});
             Send(w,Reply(true,ComputerCodes.Done,v.Class,v.Rule,plan.Data&&jpeg is null?Data(result):result,null,r.StateName,Meta(data,jpeg)));
         }

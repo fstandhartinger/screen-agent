@@ -12,6 +12,8 @@ internal sealed record CdpNode(string Ref,string TargetId,string FrameId,string 
 // The "Remote-Fehlerbehebung zulassen?" dialog of the default profile is handled by ChromeDialogs (exact matcher in Core). With --remote-debugging-port (the selftest) there is no dialog.
 internal sealed class ChromeCdp:IDisposable
 {
+    // Set from the policy at app start: unrestricted computer control may also fill password fields.
+    internal static bool PasswordFieldsAllowed;
     readonly ClientWebSocket ws=new();
     readonly CancellationTokenSource life=new();
     readonly Dictionary<int,TaskCompletionSource<JsonElement>> waiting=[];
@@ -400,9 +402,9 @@ internal sealed class ChromeCdp:IDisposable
     }
     public async Task<string> Fill(CdpNode n,string text,ActionBinding? expected,CancellationToken ct)
     {
-        if(n.Protected)throw new CdpException("password-field");
+        if(n.Protected&&!PasswordFieldsAllowed)throw new CdpException("password-field");
         var b=await Bind(n,"chrome_fill",text,ct);
-        if(b.Pw)throw new CdpException("password-field");   // it turned into a password box after the snapshot
+        if(b.Pw&&!PasswordFieldsAllowed)throw new CdpException("password-field");   // it turned into a password box after the snapshot
         if(expected is not null&&!expected.Same(b.Binding))throw new StaleRefException("changed:"+string.Join(",",expected.Diff(b.Binding)));
         await HitTest(b,n,ct);
         await Call("DOM.focus",new(){["backendNodeId"]=n.BackendId},b.Session,ct);

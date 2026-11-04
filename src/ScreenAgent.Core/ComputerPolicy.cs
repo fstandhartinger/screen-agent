@@ -62,6 +62,8 @@ public sealed class ComputerScope
     public HashSet<string> Hosts {get;}=new(StringComparer.Ordinal);
     public HashSet<string> Apps {get;}=new(StringComparer.Ordinal);
     public bool Empty=>Hosts.Count==0&&Apps.Count==0;
+    // Unrestricted mode (Florian, 4 Nov 2026): every host and program is in the scope.
+    public bool All {get;set;}
     // Hosts he approved to open by a confirmed R2 (an out-of-scope navigation), exactly as approved. They are visible to reads, but NOT in the scope: every click there stays R2.
     public HashSet<string> Opened {get;}=new(StringComparer.Ordinal);
     // Word table: what a spoken name stands for. Only the verbatim goal is looked at, never a list of words the gateway made up.
@@ -101,8 +103,8 @@ public sealed class ComputerScope
         }
         if(hereHost is not null&&MentionsHere(g))Hosts.Add(hereHost);
     }
-    public bool ContainsHost(string host)=>Hosts.Any(h=>Domains.Within(host,h));
-    public bool ContainsApp(string process)=>Apps.Contains(process);
+    public bool ContainsHost(string host)=>All||Hosts.Any(h=>Domains.Within(host,h));
+    public bool ContainsApp(string process)=>All||Apps.Contains(process);
     // Opened hosts count exactly: approving "google.com" does not make mail.google.com readable.
     public bool Reaches(string host)=>ContainsHost(host)||Opened.Contains(host);
     /// <summary>"hier": the host of the browser tab that was in front when he said it, only when the goal says "hier" as a whole word, the window is a browser, the tab resolves by its exact title and the page may be read. null adds nothing.</summary>
@@ -263,6 +265,8 @@ public sealed class ComputerPolicy
     readonly PrivacyPolicy privacy;
     readonly string deskHost;
     readonly string[] extraSensitive,extraComposer;
+    // Unrestricted (config ComputerUnrestricted, default true; Florian, 4 Nov 2026: "volle, ungeschränkte Computersteuerung", he supervises in real time): no class above R1, nothing hidden, no confirmation. The kill chord and hands-on stay: they are how he steps in.
+    public bool Unrestricted {get;init;}
     public ComputerPolicy(PrivacyPolicy? privacy=null,string deskHost="desk.app.mintapis.com",IEnumerable<string>? extraSensitive=null,IEnumerable<string>? extraComposer=null)
     {
         this.privacy=privacy??new PrivacyPolicy();this.deskHost=deskHost.ToLowerInvariant();
@@ -281,6 +285,7 @@ public sealed class ComputerPolicy
     // Reading this puts the run under taint: from then on every outward action asks (the page content could be sent on).
     public bool SensitiveRead(string process,string? title,string? url)
     {
+        if(Unrestricted)return false;
         string p=ProcessName(process);string? host=Domains.HostOf(url);
         if(host is not null&&(Sensitive(host)||Composer(host)||PasswordHost(host)))return true;
         return SensitiveApps.Contains(p)||ComposerApps.Contains(p)||PasswordApps.Contains(p);
@@ -293,6 +298,7 @@ public sealed class ComputerPolicy
     // Built-in read deny, not configurable, plus his own block lists: password managers, money domains, secret files by title or path. The caller answers "ausgeblendet".
     public bool ReadDenied(string process,string? title,string? url)
     {
+        if(Unrestricted)return false;
         string p=ProcessName(process);
         if(PasswordApps.Contains(p))return true;
         string? host=Domains.HostOf(url);
@@ -304,6 +310,7 @@ public sealed class ComputerPolicy
     // The class of one proposed action in the run's scope. Order matters: refusals first, then the page-independent raisers, then the scope.
     public Verdict Classify(ActionContext c,ComputerScope scope)
     {
+        if(Unrestricted)return Verdict.Of(ReadTools.Contains(c.Tool)?ActionClass.R0:ActionClass.R1,"unrestricted");
         var v=ClassifyCore(c,scope);
         // What he confirms is read to him and shown on the overlay: 200 characters. Longer typing under an ask is refused, not cut (200 harmless characters, then 1800 hostile ones).
         if(v.Class==ActionClass.R2&&c.Tool is "ui_type" or "chrome_fill"&&(c.Text?.Length??0)>MaxConfirmedText)return Verdict.Of(ActionClass.R3,"r2-text-long");
