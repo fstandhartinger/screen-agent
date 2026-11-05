@@ -8,8 +8,8 @@ namespace ScreenAgent;
 internal sealed class Telemetry : IDisposable
 {
     internal static readonly string Folder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","logs");
-    readonly TraceQueue queue=new(Path.Combine(Folder,"trace-queue.jsonl"));
-    readonly RollingLog log=new(Folder);
+    readonly TraceQueue queue;
+    readonly RollingLog log;
     readonly DeviceClient client;
     readonly bool upload;
     readonly Func<string?> sid;
@@ -17,11 +17,13 @@ internal sealed class Telemetry : IDisposable
     int flushing;
     long deviceRetryAt,flushFailLogged;
     long batchNo;
-    public Telemetry(AppConfig config,DeviceClient client,Func<string?> sid)
+    public Telemetry(AppConfig config,DeviceClient client,Func<string?> sid,string? folder=null,TimeSpan? flushInterval=null)
     {
+        string storage=folder??Folder;queue=new(Path.Combine(storage,"trace-queue.jsonl"));log=new(storage);
         this.client=client;this.sid=sid;upload=config.TraceUpload;
         queue.Load();Diag.Attach(this);
-        timer=new(_=>_=Flush(sid()),null,5000,5000);
+        var interval=flushInterval??TimeSpan.FromSeconds(5);
+        timer=new(_=>_=Flush(sid()),null,interval,interval);
     }
     public void Event(string type,Dictionary<string,object?>? data=null)
     {
@@ -48,11 +50,12 @@ internal sealed class Telemetry : IDisposable
         {
             for(int round=0;round<10;round++)
             {
-                var batch=queue.Peek(100);
+                var batch=queue.Peek(99); // the client.batch header is the hundredth event
                 if(batch.Count==0)break;
                 // Every batch says which app and session it came from (first event, and as fields the gateway may ignore).
                 var head=new{ts=batch[0].ts,type="client.batch",data=new Dictionary<string,object?>{["app"]=AppInfo.Version,["commit"]=AppInfo.Commit,["session"]=session??"",["n"]=++batchNo,["dropped"]=queue.Dropped}};
-                var body=new{app=AppInfo.Version,commit=AppInfo.Commit,session=session??"",events=batch.Select(e=>new{ts=e.ts,type=e.type,data=e.data}).Prepend(head).ToArray()};
+                // main.* remains readable in the local log; upload it under the gateway's accepted client namespace, including queued older events.
+                var body=new{app=AppInfo.Version,commit=AppInfo.Commit,session=session??"",events=batch.Select(e=>new{ts=e.ts,type=e.type.StartsWith("main.",StringComparison.Ordinal)?"client."+e.type:e.type,data=e.data}).Prepend(head).ToArray()};
                 var clock=System.Diagnostics.Stopwatch.StartNew();
                 try
                 {

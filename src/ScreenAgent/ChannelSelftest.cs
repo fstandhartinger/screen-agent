@@ -10,10 +10,20 @@ internal static class ChannelSelftest
     sealed class Desk : HttpMessageHandler
     {
         public readonly List<(string Path,string Body)> Posts=[];
+        public bool StrictTrace;
+        public readonly List<string> AcceptedTraceTypes=[];
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
         {
             string body=request.Content is null?"":await request.Content.ReadAsStringAsync(ct);
             lock(Posts)Posts.Add((request.RequestUri!.AbsolutePath,body));
+            if(StrictTrace)
+            {
+                using var doc=JsonDocument.Parse(body);var batch=doc.RootElement.GetProperty("events").EnumerateArray().ToArray();
+                // Contract of gateway devices.js: <=100 events, main.* is not an accepted namespace.
+                if(batch.Length>100||batch.Any(e=>!System.Text.RegularExpressions.Regex.IsMatch(e.GetProperty("type").GetString()!,@"^client\.[a-z][a-z0-9_.]{0,40}$")))
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest){Content=new StringContent("{}")};
+                AcceptedTraceTypes.AddRange(batch.Select(e=>e.GetProperty("type").GetString()!));
+            }
             return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("{}",System.Text.Encoding.UTF8,"application/json")};
         }
     }
@@ -61,6 +71,17 @@ internal static class ChannelSelftest
             Case("a-throwing-log-never-blocks-later-prompts",afterLog.Length==2&&afterLog[1].Contains("\"state\":\"done\""),new{afterLog});
             Case("the-prompt-text-is-in-no-report",!desk.Posts.Any(p=>p.Body.Contains("GEHEIMER")||p.Body.Contains("abc123")||p.Path.Contains("GEHEIMER")));
             Case("telemetry-events-carry-no-text",events.All(e=>e.StartsWith("main.prompt.")));
+            var traceDesk=new Desk{StrictTrace=true};using var traceClient=new DeviceClient(config,traceDesk,Path.Combine(temp,"trace-device.bin"));
+            traceClient.Pair(new(new string('t',43),Guid.NewGuid().ToString(),DateTimeOffset.UtcNow.AddDays(1)));
+            string traceFolder=Path.Combine(temp,"trace-log");
+            using(var telemetry=new Telemetry(config,traceClient,()=>"sid1",traceFolder,Timeout.InfiniteTimeSpan))
+            {
+                for(int i=0;i<105;i++)telemetry.Event("main.prompt.palette",new(){["attempt"]=i,["queryMatch"]=true,["text"]=secret});
+                telemetry.Flush("sid1").GetAwaiter().GetResult();
+            }
+            Case("all-prompt-traces-reach-gateway-contract-with-bounded-batches",traceDesk.AcceptedTraceTypes.Count(t=>t=="client.main.prompt.palette")==105,new{accepted=traceDesk.AcceptedTraceTypes.Count});
+            Case("prompt-trace-upload-contains-no-words",traceDesk.Posts.All(p=>!p.Body.Contains("GEHEIMER")));
+            Case("local-prompt-trace-names-stay-readable",File.ReadAllText(Path.Combine(traceFolder,"screenagent.log")).Contains("main.prompt.palette"));
             Directory.Delete(temp,true);
         }
         catch(Exception e){Case("selftest-crashed",false,e.ToString());}

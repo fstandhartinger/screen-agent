@@ -54,7 +54,7 @@ internal static class MainAgentSelftests
         var log=new Action<string,Dictionary<string,object?>>((t,d)=>{string e=t+" "+JsonSerializer.Serialize(TraceSanitizer.Clean(d));events.Add(e);Step("  telemetry "+e);});
         var scenariosToRun=new (string Name,Func<Scn,Task> Body)[]
         {
-            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G),("I-existing-draft-is-kept",I),("J-palette-entry-not-proven",J)
+            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("C2-lost-palette-query",C2),("C3-panel-not-open-repeat",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G),("I-existing-draft-is-kept",I),("J-palette-entry-not-proven",J),("J2-correct-query-unrelated-selection",J2)
         };
         string only=Environment.GetEnvironmentVariable("SA_E2E_ONLY")??"";
         foreach(var (name,body) in scenariosToRun)
@@ -122,15 +122,22 @@ internal static class MainAgentSelftests
         }
         async Task C(Scn s)
         {
-            var w=await Start(s,"ws-C",openClaude:false);if(w==IntPtr.Zero)return;
+            string tag=s.Name;
+            var w=await Start(s,"ws-"+tag,openClaude:false);if(w==IntPtr.Zero)return;
             s.Facts["extensionOpenedPanelOnItsOwn"]=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,2500) is not null;
             if(!await CloseClaude(w)){s.Status="precondition-failed";s.Why="could not close the Claude panel (secondary side bar)";return;}
-            s.Facts["claudePanelOpenBefore"]=false;TryDump("C-panel-closed");
+            s.Facts["claudePanelOpenBefore"]=false;TryDump(tag+"-panel-closed");
             await NotepadInFront(s);
             long entersBefore=Interlocked.Read(ref MainAgentPrompt.PaletteEnters);
-            await RunAndProve(s,w,"C",expectRoute:"palette");
+            await RunAndProve(s,w,tag,expectRoute:"palette");
             long enters=Interlocked.Read(ref MainAgentPrompt.PaletteEnters)-entersBefore;s.Facts["paletteEnters"]=enters;
             if(s.Status=="passed"&&enters!=1){s.Status="failed";s.Why="the palette Enter was sent "+enters+" times (expected once, after the highlighted entry was proven)";}
+        }
+        async Task C2(Scn s)
+        {
+            MainAgentPrompt.LoseFirstPaletteQueryForTests=true;
+            s.Facts["firstQueryBatchLost"]=true;
+            try{await C(s);}finally{MainAgentPrompt.LoseFirstPaletteQueryForTests=false;}
         }
         async Task D(Scn s)
         {
@@ -233,13 +240,13 @@ internal static class MainAgentSelftests
         // or an unrelated fuzzy match). The proof against the highlighted entry must fail: no Enter, nothing typed, nothing run, palette closed.
         async Task J(Scn s)
         {
-            var w=await Start(s,"ws-J",openClaude:false);if(w==IntPtr.Zero)return;
+            var w=await Start(s,"ws-"+s.Name,openClaude:false);if(w==IntPtr.Zero)return;
             if(!await CloseClaude(w)){s.Status="precondition-failed";s.Why="could not close the Claude panel (secondary side bar)";return;}
             await NotepadInFront(s);
             string titleBefore=TitleOf(w);uint clip=Native.GetClipboardSequenceNumber();
             long entersBefore=Interlocked.Read(ref MainAgentPrompt.PaletteEnters);
             PromptResult r;
-            MainAgentPrompt.PaletteLabelForTests="Zq nonsense label";
+            MainAgentPrompt.PaletteLabelForTests=MainAgentPrompt.PaletteWrongSelectionForTests?null:"Zq nonsense label";
             try{r=await new MainAgentPrompt(Names,log).Run(Prompt,CancellationToken.None);}
             finally{MainAgentPrompt.PaletteLabelForTests=null;}
             long enters=Interlocked.Read(ref MainAgentPrompt.PaletteEnters)-entersBefore;
@@ -255,6 +262,13 @@ internal static class MainAgentSelftests
             bool ok=r.Code==PromptCodes.NoField&&r.Chars==0&&enters==0&&!paletteOpen&&title==titleBefore&&!title.Contains('●')
                 &&(editor is null||(!editor.Contains(Marker)&&!editor.Contains("nonsense")))&&(boxNow is null||!boxNow.Contains(Marker))&&clipOk;
             s.Status=ok?"passed":"failed";if(!ok)s.Why="see facts";
+        }
+        async Task J2(Scn s)
+        {
+            MainAgentPrompt.PaletteWrongSelectionReadsForTests=0;MainAgentPrompt.PaletteWrongSelectionForTests=true;
+            try{await J(s);}finally{MainAgentPrompt.PaletteWrongSelectionForTests=false;}
+            int reads=MainAgentPrompt.PaletteWrongSelectionReadsForTests;s.Facts["forcedUnrelatedSelectionReads"]=reads;
+            if(reads==0){s.Status="precondition-failed";s.Why="controlled unrelated-selection state was not observed";}
         }
         // ---- helpers
         async Task<IntPtr> Start(Scn s,string ws,bool openClaude)

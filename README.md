@@ -1,4 +1,17 @@
-# Screen Agent v0.1.8 preview
+# Screen Agent v0.1.11 preview
+
+Version 0.1.11 repairs the Main Agent command-palette path. It waits for a unique
+editable query, verifies the full query and selected `Claude Code: Focus input`
+command, and retries a lost query write once within the existing deadline. An
+unrelated command still receives no Enter. Prompt diagnostics upload under the
+accepted `client.main.prompt.*` namespace; trace batches reserve space for their
+header. Local logs keep the original event names. Query and prompt words are not
+included in these diagnostics.
+
+The Windows Main Agent workflow pins the VS Code revision from the reported
+failure by default, records dependency versions, and includes repeated
+closed-panel checks plus a controlled lost-first-query test. A manual workflow
+run can set `vscode_revision=latest` to check current Insiders as well.
 
 Unsigned .NET 8 WPF companion for Windows 10 2004+ / Windows 11 x64. This prerelease wires device pairing, confirmed screen IDs, draw highlights, dictation and correction learning to Agent Desk. Windows desktop behavior and the live Desk integration still require the manual checks below.
 

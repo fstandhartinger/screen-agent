@@ -106,10 +106,19 @@ public class MainAgentTests
         Assert.True(PaletteRules.IsFocusInput("claude code: focus INPUT, recently used"));
         Assert.False(PaletteRules.IsFocusInput("Claude Code: Focus Input Elsewhere".Replace("Focus Input","Open")));
         Assert.False(PaletteRules.IsFocusInput("Claude Code: Open in New Tab"));
+        Assert.False(PaletteRules.IsFocusInput("Claude Code: Focus input Elsewhere"));
+        Assert.False(PaletteRules.IsFocusInput("Other Claude Code: Focus input"));
         Assert.False(PaletteRules.IsFocusInput("")); Assert.False(PaletteRules.IsFocusInput(null));
         // typed as one SendInput batch; a longer label would silently become two batches
         Assert.Single(PromptText.Steps(PaletteRules.Label));
     }
+    [Theory]
+    [InlineData(">Claude Code: Focus input","Claude Code: Focus input, Control+Shift+Alt+F9",true)]
+    [InlineData(">","Claude Code: Focus input",false)]
+    [InlineData(">Claude Code: Focus inpu","Claude Code: Focus input",false)]
+    [InlineData(">Zq nonsense label","Claude Code: Focus input",false)]
+    [InlineData(">Claude Code: Focus input","Accounts: Manage Accounts",false)]
+    public void PaletteRequiresQueryReadbackAndTheExactCommand(string query,string selected,bool expected)=>Assert.Equal(expected,PaletteRules.MayRun(query,selected));
     [Fact] public void DeadlineCountsFromReceiptAndKeepsEightSecondsForTyping()
     {
         var d=new PromptDeadline(1000);
