@@ -54,7 +54,7 @@ internal static class MainAgentSelftests
         var log=new Action<string,Dictionary<string,object?>>((t,d)=>{string e=t+" "+JsonSerializer.Serialize(TraceSanitizer.Clean(d));events.Add(e);Step("  telemetry "+e);});
         var scenariosToRun=new (string Name,Func<Scn,Task> Body)[]
         {
-            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G),("I-existing-draft-is-kept",I),("J-palette-entry-not-proven",J)
+            ("A-background-behind-notepad",A),("B-minimized",B),("C-panel-not-open-palette",C),("C2-lost-palette-query",C2),("C3-panel-not-open-repeat",C),("D-focus-in-editor",D),("E-focus-in-terminal",E),("F-two-windows",F),("G-fails-closed",G),("I-existing-draft-is-kept",I),("J-palette-entry-not-proven",J)
         };
         string only=Environment.GetEnvironmentVariable("SA_E2E_ONLY")??"";
         foreach(var (name,body) in scenariosToRun)
@@ -122,15 +122,22 @@ internal static class MainAgentSelftests
         }
         async Task C(Scn s)
         {
-            var w=await Start(s,"ws-C",openClaude:false);if(w==IntPtr.Zero)return;
+            string tag=s.Name;
+            var w=await Start(s,"ws-"+tag,openClaude:false);if(w==IntPtr.Zero)return;
             s.Facts["extensionOpenedPanelOnItsOwn"]=new MainAgentPrompt(Names,(_,_)=>{}).FindInput(w,2500) is not null;
             if(!await CloseClaude(w)){s.Status="precondition-failed";s.Why="could not close the Claude panel (secondary side bar)";return;}
-            s.Facts["claudePanelOpenBefore"]=false;TryDump("C-panel-closed");
+            s.Facts["claudePanelOpenBefore"]=false;TryDump(tag+"-panel-closed");
             await NotepadInFront(s);
             long entersBefore=Interlocked.Read(ref MainAgentPrompt.PaletteEnters);
-            await RunAndProve(s,w,"C",expectRoute:"palette");
+            await RunAndProve(s,w,tag,expectRoute:"palette");
             long enters=Interlocked.Read(ref MainAgentPrompt.PaletteEnters)-entersBefore;s.Facts["paletteEnters"]=enters;
             if(s.Status=="passed"&&enters!=1){s.Status="failed";s.Why="the palette Enter was sent "+enters+" times (expected once, after the highlighted entry was proven)";}
+        }
+        async Task C2(Scn s)
+        {
+            MainAgentPrompt.LoseFirstPaletteQueryForTests=true;
+            s.Facts["firstQueryBatchLost"]=true;
+            try{await C(s);}finally{MainAgentPrompt.LoseFirstPaletteQueryForTests=false;}
         }
         async Task D(Scn s)
         {

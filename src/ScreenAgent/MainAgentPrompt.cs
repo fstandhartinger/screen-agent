@@ -15,6 +15,8 @@ internal sealed class MainAgentPrompt
     public static volatile bool PaletteDisabledForTests;
     // Selftest hook: what is typed into the palette instead of the real label (the proof against the highlighted entry still uses the real one).
     public static volatile string? PaletteLabelForTests;
+    // Simulate the first palette SendInput batch being lost during Electron startup.
+    public static volatile bool LoseFirstPaletteQueryForTests;
     public static long KeysSent,PaletteEnters;
     public static Action<string>? Debug;
     readonly string[] names;
@@ -244,7 +246,8 @@ internal sealed class MainAgentPrompt
         if(!open){stop=PromptCodes.NoField;return false;}   // nothing sent: Esc here could land in a terminal
         PaletteProbe("opened",pid,hwnd);
         int n=0;
-        if(!Type(PaletteLabelForTests??PaletteRules.Label,hwnd,pid,ct,null,true,ref n,out string? failed)){EscIfPalette(pid,hwnd);stop=failed;return false;}
+        if(LoseFirstPaletteQueryForTests)Debug?.Invoke("selftest: first palette query batch lost");
+        else if(!Type(PaletteLabelForTests??PaletteRules.Label,hwnd,pid,ct,null,true,ref n,out string? failed)){EscIfPalette(pid,hwnd);stop=failed;return false;}
         PaletteProbe("typed",pid,hwnd);
         Thread.Sleep(400);
         // Proof of the highlighted entry: the palette runs whatever is on top, so Enter goes out only when UIA shows "Claude Code: Focus input" selected.
