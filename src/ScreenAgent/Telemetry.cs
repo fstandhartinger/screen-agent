@@ -8,8 +8,8 @@ namespace ScreenAgent;
 internal sealed class Telemetry : IDisposable
 {
     internal static readonly string Folder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","logs");
-    readonly TraceQueue queue=new(Path.Combine(Folder,"trace-queue.jsonl"));
-    readonly RollingLog log=new(Folder);
+    readonly TraceQueue queue;
+    readonly RollingLog log;
     readonly DeviceClient client;
     readonly bool upload;
     readonly Func<string?> sid;
@@ -17,11 +17,13 @@ internal sealed class Telemetry : IDisposable
     int flushing;
     long deviceRetryAt,flushFailLogged;
     long batchNo;
-    public Telemetry(AppConfig config,DeviceClient client,Func<string?> sid)
+    public Telemetry(AppConfig config,DeviceClient client,Func<string?> sid,string? folder=null,TimeSpan? flushInterval=null)
     {
+        string storage=folder??Folder;queue=new(Path.Combine(storage,"trace-queue.jsonl"));log=new(storage);
         this.client=client;this.sid=sid;upload=config.TraceUpload;
         queue.Load();Diag.Attach(this);
-        timer=new(_=>_=Flush(sid()),null,5000,5000);
+        var interval=flushInterval??TimeSpan.FromSeconds(5);
+        timer=new(_=>_=Flush(sid()),null,interval,interval);
     }
     public void Event(string type,Dictionary<string,object?>? data=null)
     {
