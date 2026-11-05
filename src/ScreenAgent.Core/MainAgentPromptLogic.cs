@@ -67,7 +67,8 @@ public sealed class InputGate
 public static class PaletteRules
 {
     public const string Label="Claude Code: Focus input";
-    public static bool IsFocusInput(string? highlightedName)=>highlightedName is not null&&highlightedName.Contains(Label,StringComparison.OrdinalIgnoreCase);
+    public static bool IsFocusInput(string? highlightedName)=>highlightedName is not null&&(highlightedName.Equals(Label,StringComparison.OrdinalIgnoreCase)||highlightedName.StartsWith(Label+",",StringComparison.OrdinalIgnoreCase));
+    public static bool MayRun(string? query,string? selected)=>query==">"+Label&&IsFocusInput(selected);
 }
 public sealed record PromptRequest(string Id,string Text);
 public static class PromptCommand

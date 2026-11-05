@@ -15,7 +15,7 @@ internal sealed class MainAgentPrompt
     public static volatile bool PaletteDisabledForTests;
     // Selftest hook: what is typed into the palette instead of the real label (the proof against the highlighted entry still uses the real one).
     public static volatile string? PaletteLabelForTests;
-    // Simulate the first palette SendInput batch being lost during Electron startup.
+    // Simulate the first palette query write being lost during Electron startup.
     public static volatile bool LoseFirstPaletteQueryForTests;
     public static long KeysSent,PaletteEnters;
     public static Action<string>? Debug;
@@ -241,60 +241,80 @@ internal sealed class MainAgentPrompt
         if(!deadline.MayStartTyping(Now)){stop=PromptCodes.Interrupted;return false;}
         if(!WaitModifiersUp(1000,ct)){stop=PromptCodes.Busy;return false;}
         Chord(Ctrl,Shift,P);
-        bool open=false;
-        for(long until=Environment.TickCount64+2000;Environment.TickCount64<until&&!open;Thread.Sleep(100)){ct.ThrowIfCancellationRequested();open=InQuickInput(pid);}
-        if(!open){stop=PromptCodes.NoField;return false;}   // nothing sent: Esc here could land in a terminal
-        PaletteProbe("opened",pid,hwnd);
-        int n=0;
-        if(LoseFirstPaletteQueryForTests)Debug?.Invoke("selftest: first palette query batch lost");
-        else if(!Type(PaletteLabelForTests??PaletteRules.Label,hwnd,pid,ct,null,true,ref n,out string? failed)){EscIfPalette(pid,hwnd);stop=failed;return false;}
-        PaletteProbe("typed",pid,hwnd);
-        Thread.Sleep(400);
-        // Proof of the highlighted entry: the palette runs whatever is on top, so Enter goes out only when UIA shows "Claude Code: Focus input" selected.
-        string seen="";bool match=false;
-        for(long until=Environment.TickCount64+1500;;Thread.Sleep(100))
+        string wanted=">"+(PaletteLabelForTests??PaletteRules.Label);
+        PaletteState? state=null;
+        for(long until=Now+2000;Now<until;Thread.Sleep(100))
         {
             ct.ThrowIfCancellationRequested();
-            var f=Focus();
-            if(f is null||f.Pid!=pid||!FocusRules.InQuickInput(f.Classes)||Native.GetForegroundWindow()!=hwnd)break;
-            seen=HighlightedEntry(f.Element);
-            PaletteProbe("selection",pid,hwnd);
-            if(PaletteRules.IsFocusInput(seen)){match=true;break;}
-            if(Environment.TickCount64>=until)break;
+            if(!deadline.MayStartTyping(Now))break;
+            if(ReadPalette(pid,hwnd) is {} ready&&ready.Query.StartsWith(">",StringComparison.Ordinal)){state=ready;break;}
         }
-        Debug?.Invoke($"palette highlighted: match={match} entry='{seen}'");
-        if(!match){EscIfPalette(pid,hwnd);stop=PromptCodes.NoField;return false;}
-        // The only unshifted Enter of the whole feature: while the palette has the focus and shows the right entry, checked right before.
-        if(!InQuickInput(pid)||Native.GetForegroundWindow()!=hwnd){EscIfPalette(pid,hwnd);stop=PromptCodes.NoField;return false;}
-        Interlocked.Increment(ref PaletteEnters);
-        Tap(Return);
-        return true;
+        PaletteNote("ready",0,state,wanted);
+        for(int attempt=1;state is not null&&attempt<=2;attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if(!deadline.MayStartTyping(Now)||!WaitModifiersUp(1000,ct))break;
+            // UIA's focused element is often an active-descendant result row. Write only the unique visible editable query in that same widget.
+            state=ReadPalette(pid,hwnd);
+            if(state is null||!state.Query.StartsWith(">",StringComparison.Ordinal))break;
+            if(attempt==1&&LoseFirstPaletteQueryForTests)Debug?.Invoke("selftest: first palette query write lost");
+            else state.Value.SetValue(wanted);
+            long until=Now+1500;
+            while(true)
+            {
+                ct.ThrowIfCancellationRequested();
+                if(!deadline.MayStartTyping(Now)){state=null;break;}
+                state=ReadPalette(pid,hwnd);
+                if(state is null||PaletteRules.MayRun(state.Query,state.Selected)||Now>=until)break;
+                Thread.Sleep(100);
+            }
+            PaletteNote("readback",attempt,state,wanted);
+            if(state is null)break;
+            if(PaletteRules.MayRun(state.Query,state.Selected))
+            {
+                if(!WaitModifiersUp(1000,ct))break;
+                ct.ThrowIfCancellationRequested();
+                state=ReadPalette(pid,hwnd); // fresh query AND selected-command proof immediately before the only unshifted Enter
+                if(state is null||!PaletteRules.MayRun(state.Query,state.Selected)||!deadline.MayStartTyping(Now))break;
+                PaletteNote("enter",attempt,state,wanted);
+                Interlocked.Increment(ref PaletteEnters);Tap(Return);return true;
+            }
+            // An accepted query with an unrelated command is a refusal, never a reason to run the selected command or broaden the search.
+            if(state.Query==wanted)break;
+        }
+        EscIfPalette(pid,hwnd);stop=deadline.MayStartTyping(Now)?PromptCodes.NoField:PromptCodes.Interrupted;return false;
     }
-    void PaletteProbe(string stage,int pid,IntPtr hwnd)
+    sealed record PaletteState(ValuePattern Value,string Query,string Selected);
+    static PaletteState? ReadPalette(int pid,IntPtr hwnd)
     {
-        var f=Focus();string? query=null;
         try
         {
-            if(f?.Pid==pid&&FocusRules.InQuickInput(f.Classes))
+            var f=Focus();
+            if(Native.GetForegroundWindow()!=hwnd||f?.Pid!=pid||!FocusRules.InQuickInput(f.Classes))return null;
+            var p=f.Element;var walker=TreeWalker.RawViewWalker;
+            for(int i=0;p is not null&&i<80;i++,p=walker.GetParent(p))
             {
-                var p=f.Element;var walker=TreeWalker.RawViewWalker;
-                for(int i=0;p is not null&&i<80;i++,p=walker.GetParent(p))
+                if(!(p.Current.ClassName??"").Contains("quick-input-widget",StringComparison.OrdinalIgnoreCase))continue;
+                var inputs=p.FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Edit));
+                ValuePattern? value=null;
+                foreach(AutomationElement input in inputs)
                 {
-                    if(!(p.Current.ClassName??"").Contains("quick-input-widget",StringComparison.OrdinalIgnoreCase))continue;
-                    var inputs=p.FindAll(TreeScope.Descendants,new OrCondition(new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Edit),new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.ComboBox)));
-                    foreach(AutomationElement input in inputs)
+                    var c=input.Current;
+                    if(c.ProcessId==pid&&!c.IsOffscreen&&c.IsEnabled&&input.TryGetCurrentPattern(ValuePattern.Pattern,out var v)&&!((ValuePattern)v).Current.IsReadOnly)
                     {
-                        Debug?.Invoke("palette input: "+Describe(input)+" type="+input.Current.ControlType.ProgrammaticName+" offscreen="+input.Current.IsOffscreen);
-                        if(!input.Current.IsOffscreen&&input.TryGetCurrentPattern(ValuePattern.Pattern,out var v))query=((ValuePattern)v).Current.Value;
+                        if(value is not null)return null; // ambiguous editable controls: do nothing
+                        value=(ValuePattern)v;
                     }
-                    break;
                 }
+                return value is null?null:new(value,value.Current.Value,HighlightedEntry(f.Element));
             }
         }
-        catch(Exception ex){Diag.Fail("prompt-palette-query",ex);}
-        bool queryMatch=query==">"+(PaletteLabelForTests??PaletteRules.Label);
-        log("main.prompt.palette",new(){["stage"]=stage,["foreground"]=Native.GetForegroundWindow()==hwnd,["quickInput"]=f?.Pid==pid&&FocusRules.InQuickInput(f.Classes),["queryChars"]=query?.Length,["queryMatch"]=queryMatch,["selectedMatch"]=f?.Pid==pid&&PaletteRules.IsFocusInput(HighlightedEntry(f.Element))});
-        Debug?.Invoke($"palette {stage}: query='{query}' focused='{f?.Name}' type='{f?.Element.Current.ControlType.ProgrammaticName}' selected='{(f is null?"":HighlightedEntry(f.Element))}'");
+        catch(Exception ex){Diag.Fail("prompt-palette-query",ex);} // unreadable palette refuses the operation
+        return null;
+    }
+    void PaletteNote(string stage,int attempt,PaletteState? state,string wanted)
+    {
+        log("main.prompt.palette",new(){["stage"]=stage,["attempt"]=attempt,["ready"]=state is not null,["queryChars"]=state?.Query.Length,["queryMatch"]=state?.Query==wanted,["selectedMatch"]=PaletteRules.IsFocusInput(state?.Selected)});
     }
     // Name of the selected row of the quick input list that contains `focused` ("" when no row is selected, "?" + names when several are). A row's text may sit in its children.
     internal static string HighlightedEntry(AutomationElement focused)

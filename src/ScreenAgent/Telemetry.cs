@@ -50,11 +50,12 @@ internal sealed class Telemetry : IDisposable
         {
             for(int round=0;round<10;round++)
             {
-                var batch=queue.Peek(100);
+                var batch=queue.Peek(99); // the client.batch header is the hundredth event
                 if(batch.Count==0)break;
                 // Every batch says which app and session it came from (first event, and as fields the gateway may ignore).
                 var head=new{ts=batch[0].ts,type="client.batch",data=new Dictionary<string,object?>{["app"]=AppInfo.Version,["commit"]=AppInfo.Commit,["session"]=session??"",["n"]=++batchNo,["dropped"]=queue.Dropped}};
-                var body=new{app=AppInfo.Version,commit=AppInfo.Commit,session=session??"",events=batch.Select(e=>new{ts=e.ts,type=e.type,data=e.data}).Prepend(head).ToArray()};
+                // main.* remains readable in the local log; upload it under the gateway's accepted client namespace, including queued older events.
+                var body=new{app=AppInfo.Version,commit=AppInfo.Commit,session=session??"",events=batch.Select(e=>new{ts=e.ts,type=e.type.StartsWith("main.",StringComparison.Ordinal)?"client."+e.type:e.type,data=e.data}).Prepend(head).ToArray()};
                 var clock=System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
