@@ -8,7 +8,7 @@ $code = Join-Path $Root 'vscode'
 if (-not (Test-Path (Join-Path $code 'Code - Insiders.exe'))) {
   $zip = Join-Path $Root 'vscode-insiders.zip'
   Write-Host 'Downloading VS Code Insiders (win32-x64 archive)'
-  $version = if ($env:SA_VSCODE_REVISION) { $env:SA_VSCODE_REVISION } else { 'latest' }
+  $version = if ($env:SA_VSCODE_REVISION) { 'commit:' + $env:SA_VSCODE_REVISION } else { 'latest' }
   Invoke-WebRequest -Uri "https://update.code.visualstudio.com/$version/win32-x64-archive/insider" -OutFile $zip -UseBasicParsing
   Write-Host ("zip bytes: {0}" -f (Get-Item $zip).Length)
   New-Item -ItemType Directory -Force $code | Out-Null
