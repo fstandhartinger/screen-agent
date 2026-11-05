@@ -51,6 +51,8 @@ jobs:
   main-agent:
     runs-on: windows-latest
     timeout-minutes: 25
+    env:
+      SA_VSCODE_REVISION: e576c7bbeb39772a1d1ebe472545def0d93e6d8b
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

@@ -270,7 +270,25 @@ internal sealed class MainAgentPrompt
     void PaletteProbe(string stage,int pid,IntPtr hwnd)
     {
         var f=Focus();string? query=null;
-        try{if(f?.Pid==pid&&FocusRules.InQuickInput(f.Classes)&&f.Element.TryGetCurrentPattern(ValuePattern.Pattern,out var v))query=((ValuePattern)v).Current.Value;}catch(Exception ex){Diag.Fail("prompt-palette-query",ex);}
+        try
+        {
+            if(f?.Pid==pid&&FocusRules.InQuickInput(f.Classes))
+            {
+                var p=f.Element;var walker=TreeWalker.RawViewWalker;
+                for(int i=0;p is not null&&i<80;i++,p=walker.GetParent(p))
+                {
+                    if(!(p.Current.ClassName??"").Contains("quick-input-widget",StringComparison.OrdinalIgnoreCase))continue;
+                    var inputs=p.FindAll(TreeScope.Descendants,new OrCondition(new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Edit),new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.ComboBox)));
+                    foreach(AutomationElement input in inputs)
+                    {
+                        Debug?.Invoke("palette input: "+Describe(input)+" type="+input.Current.ControlType.ProgrammaticName+" offscreen="+input.Current.IsOffscreen);
+                        if(!input.Current.IsOffscreen&&input.TryGetCurrentPattern(ValuePattern.Pattern,out var v))query=((ValuePattern)v).Current.Value;
+                    }
+                    break;
+                }
+            }
+        }
+        catch(Exception ex){Diag.Fail("prompt-palette-query",ex);}
         bool queryMatch=query==">"+(PaletteLabelForTests??PaletteRules.Label);
         log("main.prompt.palette",new(){["stage"]=stage,["foreground"]=Native.GetForegroundWindow()==hwnd,["quickInput"]=f?.Pid==pid&&FocusRules.InQuickInput(f.Classes),["queryChars"]=query?.Length,["queryMatch"]=queryMatch,["selectedMatch"]=f?.Pid==pid&&PaletteRules.IsFocusInput(HighlightedEntry(f.Element))});
         Debug?.Invoke($"palette {stage}: query='{query}' focused='{f?.Name}' type='{f?.Element.Current.ControlType.ProgrammaticName}' selected='{(f is null?"":HighlightedEntry(f.Element))}'");
