@@ -15,6 +15,10 @@ on:
         description: 'Scenario prefixes, comma separated (A,B,C,D,E,F,G,I,J); empty = all'
         required: false
         default: ''
+      vscode_revision:
+        description: 'VS Code commit hash, or latest (default reproduces the original palette failure environment)'
+        required: false
+        default: 'e576c7bbeb39772a1d1ebe472545def0d93e6d8b'
 permissions:
   contents: read
 jobs:
@@ -52,7 +56,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     env:
-      SA_VSCODE_REVISION: e576c7bbeb39772a1d1ebe472545def0d93e6d8b
+      SA_VSCODE_REVISION: ${{ github.event.inputs.vscode_revision || 'e576c7bbeb39772a1d1ebe472545def0d93e6d8b' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
