@@ -242,8 +242,10 @@ internal sealed class MainAgentPrompt
         bool open=false;
         for(long until=Environment.TickCount64+2000;Environment.TickCount64<until&&!open;Thread.Sleep(100)){ct.ThrowIfCancellationRequested();open=InQuickInput(pid);}
         if(!open){stop=PromptCodes.NoField;return false;}   // nothing sent: Esc here could land in a terminal
+        PaletteProbe("opened",pid,hwnd);
         int n=0;
         if(!Type(PaletteLabelForTests??PaletteRules.Label,hwnd,pid,ct,null,true,ref n,out string? failed)){EscIfPalette(pid,hwnd);stop=failed;return false;}
+        PaletteProbe("typed",pid,hwnd);
         Thread.Sleep(400);
         // Proof of the highlighted entry: the palette runs whatever is on top, so Enter goes out only when UIA shows "Claude Code: Focus input" selected.
         string seen="";bool match=false;
@@ -253,6 +255,7 @@ internal sealed class MainAgentPrompt
             var f=Focus();
             if(f is null||f.Pid!=pid||!FocusRules.InQuickInput(f.Classes)||Native.GetForegroundWindow()!=hwnd)break;
             seen=HighlightedEntry(f.Element);
+            PaletteProbe("selection",pid,hwnd);
             if(PaletteRules.IsFocusInput(seen)){match=true;break;}
             if(Environment.TickCount64>=until)break;
         }
@@ -263,6 +266,14 @@ internal sealed class MainAgentPrompt
         Interlocked.Increment(ref PaletteEnters);
         Tap(Return);
         return true;
+    }
+    void PaletteProbe(string stage,int pid,IntPtr hwnd)
+    {
+        var f=Focus();string? query=null;
+        try{if(f?.Pid==pid&&FocusRules.InQuickInput(f.Classes)&&f.Element.TryGetCurrentPattern(ValuePattern.Pattern,out var v))query=((ValuePattern)v).Current.Value;}catch(Exception ex){Diag.Fail("prompt-palette-query",ex);}
+        bool queryMatch=query==">"+(PaletteLabelForTests??PaletteRules.Label);
+        log("main.prompt.palette",new(){["stage"]=stage,["foreground"]=Native.GetForegroundWindow()==hwnd,["quickInput"]=f?.Pid==pid&&FocusRules.InQuickInput(f.Classes),["queryChars"]=query?.Length,["queryMatch"]=queryMatch,["selectedMatch"]=f?.Pid==pid&&PaletteRules.IsFocusInput(HighlightedEntry(f.Element))});
+        Debug?.Invoke($"palette {stage}: query='{query}' focused='{f?.Name}' type='{f?.Element.Current.ControlType.ProgrammaticName}' selected='{(f is null?"":HighlightedEntry(f.Element))}'");
     }
     // Name of the selected row of the quick input list that contains `focused` ("" when no row is selected, "?" + names when several are). A row's text may sit in its children.
     internal static string HighlightedEntry(AutomationElement focused)
