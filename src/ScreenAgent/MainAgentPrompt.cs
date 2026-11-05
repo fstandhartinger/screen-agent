@@ -17,6 +17,8 @@ internal sealed class MainAgentPrompt
     public static volatile string? PaletteLabelForTests;
     // Simulate the first palette query write being lost during Electron startup.
     public static volatile bool LoseFirstPaletteQueryForTests;
+    public static volatile bool PaletteWrongSelectionForTests;
+    public static int PaletteWrongSelectionReadsForTests;
     public static long KeysSent,PaletteEnters;
     public static Action<string>? Debug;
     readonly string[] names;
@@ -240,6 +242,9 @@ internal sealed class MainAgentPrompt
         if(PaletteDisabledForTests){stop=PromptCodes.NoField;return false;}
         if(!deadline.MayStartTyping(Now)){stop=PromptCodes.Interrupted;return false;}
         if(!WaitModifiersUp(1000,ct)){stop=PromptCodes.Busy;return false;}
+        bool entered=false;
+        try
+        {
         Chord(Ctrl,Shift,P);
         string wanted=">"+(PaletteLabelForTests??PaletteRules.Label);
         PaletteState? state=null;
@@ -258,31 +263,45 @@ internal sealed class MainAgentPrompt
             state=ReadPalette(pid,hwnd);
             if(state is null||!state.Query.StartsWith(">",StringComparison.Ordinal))break;
             if(attempt==1&&LoseFirstPaletteQueryForTests)Debug?.Invoke("selftest: first palette query write lost");
-            else state.Value.SetValue(wanted);
+            else
+            {
+                try{state.Value.SetValue(wanted);}
+                catch(Exception ex){Diag.Fail("prompt-palette-write",ex,new(){["attempt"]=attempt});continue;}
+            }
             long until=Now+1500;
+            long matchedSince=0;
             while(true)
             {
                 ct.ThrowIfCancellationRequested();
                 if(!deadline.MayStartTyping(Now)){state=null;break;}
                 state=ReadPalette(pid,hwnd);
-                if(state is null||PaletteRules.MayRun(state.Query,state.Selected)||Now>=until)break;
+                if(state is not null&&PaletteRules.MayRun(state.Query,state.Selected))
+                {
+                    if(matchedSince==0)matchedSince=Now;
+                    if(Now-matchedSince>=250)break; // query value can arrive before the accessibility selection; require settled matching samples
+                }
+                else matchedSince=0;
+                if(Now>=until||Native.GetForegroundWindow()!=hwnd||!InQuickInput(pid))break;
                 Thread.Sleep(100);
             }
             PaletteNote("readback",attempt,state,wanted);
             if(state is null)break;
-            if(PaletteRules.MayRun(state.Query,state.Selected))
+            if(matchedSince!=0&&Now-matchedSince>=250&&PaletteRules.MayRun(state.Query,state.Selected))
             {
                 if(!WaitModifiersUp(1000,ct))break;
-                ct.ThrowIfCancellationRequested();
+                PaletteNote("verified",attempt,state,wanted);
                 state=ReadPalette(pid,hwnd); // fresh query AND selected-command proof immediately before the only unshifted Enter
                 if(state is null||!PaletteRules.MayRun(state.Query,state.Selected)||!deadline.MayStartTyping(Now))break;
-                PaletteNote("enter",attempt,state,wanted);
-                Interlocked.Increment(ref PaletteEnters);Tap(Return);return true;
+                ct.ThrowIfCancellationRequested();
+                if(Native.GetForegroundWindow()!=hwnd)break;
+                Interlocked.Increment(ref PaletteEnters);Tap(Return);entered=true;return true;
             }
             // An accepted query with an unrelated command is a refusal, never a reason to run the selected command or broaden the search.
             if(state.Query==wanted)break;
         }
-        EscIfPalette(pid,hwnd);stop=deadline.MayStartTyping(Now)?PromptCodes.NoField:PromptCodes.Interrupted;return false;
+        stop=deadline.MayStartTyping(Now)?PromptCodes.NoField:PromptCodes.Interrupted;return false;
+        }
+        finally{if(!entered)EscIfPalette(pid,hwnd);}
     }
     sealed record PaletteState(ValuePattern Value,string Query,string Selected);
     static PaletteState? ReadPalette(int pid,IntPtr hwnd)
@@ -306,7 +325,10 @@ internal sealed class MainAgentPrompt
                         value=(ValuePattern)v;
                     }
                 }
-                return value is null?null:new(value,value.Current.Value,HighlightedEntry(f.Element));
+                if(value is null)return null;
+                string selected=HighlightedEntry(f.Element);
+                if(PaletteWrongSelectionForTests){selected="Accounts: Manage Accounts";Interlocked.Increment(ref PaletteWrongSelectionReadsForTests);}
+                return new(value,value.Current.Value,selected);
             }
         }
         catch(Exception ex){Diag.Fail("prompt-palette-query",ex);} // unreadable palette refuses the operation

@@ -20,7 +20,7 @@ internal static class ChannelSelftest
             {
                 using var doc=JsonDocument.Parse(body);var batch=doc.RootElement.GetProperty("events").EnumerateArray().ToArray();
                 // Contract of gateway devices.js: <=100 events, main.* is not an accepted namespace.
-                if(batch.Length>100||batch.Any(e=>!e.GetProperty("type").GetString()!.StartsWith("client.",StringComparison.Ordinal)))
+                if(batch.Length>100||batch.Any(e=>!System.Text.RegularExpressions.Regex.IsMatch(e.GetProperty("type").GetString()!,@"^client\.[a-z][a-z0-9_.]{0,40}$")))
                     return new HttpResponseMessage(HttpStatusCode.BadRequest){Content=new StringContent("{}")};
                 AcceptedTraceTypes.AddRange(batch.Select(e=>e.GetProperty("type").GetString()!));
             }
