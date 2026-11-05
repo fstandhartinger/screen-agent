@@ -281,10 +281,12 @@ internal sealed class MainAgentPrompt
                     if(Now-matchedSince>=250)break; // query value can arrive before the accessibility selection; require settled matching samples
                 }
                 else matchedSince=0;
-                if(Now>=until||Native.GetForegroundWindow()!=hwnd||!InQuickInput(pid))break;
+                // Electron can rebuild its active-descendant between two UIA focus reads. ReadPalette already scopes each sample;
+                // a transient null is allowed to recover within this read-only wait, never permission to write or press Enter.
+                if(Now>=until||Native.GetForegroundWindow()!=hwnd)break;
                 Thread.Sleep(100);
             }
-            PaletteNote("readback",attempt,state,wanted);
+            PaletteNote("readback",attempt,state,wanted,Now-(until-1500));
             if(state is null)break;
             if(matchedSince!=0&&Now-matchedSince>=250&&PaletteRules.MayRun(state.Query,state.Selected))
             {
@@ -334,9 +336,9 @@ internal sealed class MainAgentPrompt
         catch(Exception ex){Diag.Fail("prompt-palette-query",ex);} // unreadable palette refuses the operation
         return null;
     }
-    void PaletteNote(string stage,int attempt,PaletteState? state,string wanted)
+    void PaletteNote(string stage,int attempt,PaletteState? state,string wanted,long ms=0)
     {
-        log("main.prompt.palette",new(){["stage"]=stage,["attempt"]=attempt,["ready"]=state is not null,["queryChars"]=state?.Query.Length,["queryMatch"]=state?.Query==wanted,["selectedMatch"]=PaletteRules.IsFocusInput(state?.Selected)});
+        log("main.prompt.palette",new(){["stage"]=stage,["attempt"]=attempt,["ready"]=state is not null,["queryChars"]=state?.Query.Length,["queryMatch"]=state?.Query==wanted,["selectedMatch"]=PaletteRules.IsFocusInput(state?.Selected),["ms"]=ms});
     }
     // Name of the selected row of the quick input list that contains `focused` ("" when no row is selected, "?" + names when several are). A row's text may sit in its children.
     internal static string HighlightedEntry(AutomationElement focused)
