@@ -83,7 +83,7 @@ internal static class ScreenTextSelftest
                 scenarios.Add(new("ocr-small-enrichment",true,watch.ElapsedMilliseconds));pending=listener.GetContextAsync();
                 int failures=0;var oldGatewaySender=new ScreenTextSender(source,client,()=>true,(_,_)=>failures++);
                 watch.Restart();await Accept(oldGatewaySender.Send(result,"dictation",CancellationToken.None),pending,404);pending=listener.GetContextAsync();
-                await oldGatewaySender.Send(result,"dictation",CancellationToken.None);await Task.Delay(120);
+                await oldGatewaySender.Send(result,"dictation",CancellationToken.None);await oldGatewaySender.Send(enriched,"dictation",CancellationToken.None);await Task.Delay(120);
                 scenarios.Add(new("old-gateway-no-retry",!pending.IsCompleted&&failures==1,watch.ElapsedMilliseconds));
                 var blockedSource=new ScreenTextSource(new PrivacyPolicy{ExtraTitlePatterns=["Screen text test cards"]},()=>true);
                 var blockedSender=new ScreenTextSender(blockedSource,client,()=>true,(_,_)=>{});
