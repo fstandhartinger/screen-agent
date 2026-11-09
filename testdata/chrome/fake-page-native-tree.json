@@ -1,0 +1,375 @@
+{
+  "owner": "",
+  "clicked": -1,
+  "nodes": [
+    {
+      "role": "Window",
+      "name": "Fake - Google Chrome",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 0,
+      "parent": -1
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 1,
+      "parent": 0
+    },
+    {
+      "role": "Pane",
+      "name": "Fake - Google Chrome",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 1,
+      "parent": 0
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 2,
+      "parent": 2
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 3,
+      "parent": 3
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 4,
+      "parent": 4
+    },
+    {
+      "role": "Button",
+      "name": "Minimize",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 5,
+      "parent": 5
+    },
+    {
+      "role": "Button",
+      "name": "Maximize",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 5,
+      "parent": 5
+    },
+    {
+      "role": "Button",
+      "name": "Close",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 5,
+      "parent": 5
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 4,
+      "parent": 4
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 5,
+      "parent": 9
+    },
+    {
+      "role": "ToolBar",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 6,
+      "parent": 10
+    },
+    {
+      "role": "Button",
+      "name": "Back",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 11
+    },
+    {
+      "role": "Button",
+      "name": "Forward",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 11
+    },
+    {
+      "role": "Button",
+      "name": "Reload",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 11
+    },
+    {
+      "role": "Group",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 11
+    },
+    {
+      "role": "Button",
+      "name": "View site information",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 8,
+      "parent": 15
+    },
+    {
+      "role": "Edit",
+      "name": "Address and search bar",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 8,
+      "parent": 15
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 8,
+      "parent": 15
+    },
+    {
+      "role": "Button",
+      "name": "Translate",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 9,
+      "parent": 18
+    },
+    {
+      "role": "Button",
+      "name": "Bookmark this tab",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 9,
+      "parent": 18
+    },
+    {
+      "role": "Button",
+      "name": "You",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 11
+    },
+    {
+      "role": "Button",
+      "name": "Chrome",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 11
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 5,
+      "parent": 9
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 6,
+      "parent": 23
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 24
+    },
+    {
+      "role": "Document",
+      "name": "Fake",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 24
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 6,
+      "parent": 23
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 5,
+      "parent": 9
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 6,
+      "parent": 28
+    },
+    {
+      "role": "Button",
+      "name": "Tab search",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 29
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 6,
+      "parent": 28
+    },
+    {
+      "role": "Tab",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 31
+    },
+    {
+      "role": "TabItem",
+      "name": "about:blank",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 8,
+      "parent": 32
+    },
+    {
+      "role": "Button",
+      "name": "Close",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 9,
+      "parent": 33
+    },
+    {
+      "role": "TabItem",
+      "name": "Fake - Memory usage - 72.1 MB",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 8,
+      "parent": 32
+    },
+    {
+      "role": "Button",
+      "name": "Close",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 9,
+      "parent": 35
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 7,
+      "parent": 31
+    },
+    {
+      "role": "Button",
+      "name": "New Tab",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 6,
+      "parent": 28
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 6,
+      "parent": 28
+    },
+    {
+      "role": "Pane",
+      "name": "",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 5,
+      "parent": 9
+    }
+  ]
+}
