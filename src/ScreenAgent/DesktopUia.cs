@@ -87,6 +87,7 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
     public FreeResult Click(string reference,string button,bool twice)=>Bounded(()=>
     {
         var h=Get(reference);Check();if(!h.Element.Current.IsEnabled)return FreeResult.Fail("disabled","Element ist deaktiviert.");
+        Check();if(host.Frame.Kind==FrameKind.None)DesktopWindows.Focus(h.Window);
         object? p;
         if(button=="left"&&!twice)
         {

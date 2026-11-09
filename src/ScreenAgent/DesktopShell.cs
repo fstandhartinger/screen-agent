@@ -48,21 +48,25 @@ internal sealed class DesktopShell(FreeHost host)
         string? temporary=null;
         try
         {
+            if(tool=="run_python")
+            {
+                string code=FreeArgs.Str(args,"code")??throw new ArgumentException("code fehlt.");temporary=Path.Combine(Path.GetTempPath(),"sa-python-"+Guid.NewGuid().ToString("N")+".py");File.WriteAllText(temporary,code,new UTF8Encoding(false));
+            }
             (int Exit,long Ms,string Out,string Error) result;
-            if(tool=="run_powershell")result=Execute("powershell.exe",["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-Command","-"],seconds,cwd,"[Console]::OutputEncoding=[Text.Encoding]::UTF8;\n"+command+"\n");
+            // Windows PowerShell 5 decodes redirected stdin in the OEM code page. Keep the transport UTF-8/ASCII and decode the UTF-8 script explicitly.
+            if(tool=="run_powershell")result=Execute("powershell.exe",["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-Command","-"],seconds,cwd,"[Console]::OutputEncoding=[Text.Encoding]::UTF8;\n& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+Convert.ToBase64String(Encoding.UTF8.GetBytes(command))+"'))))\n");
             else if(tool=="run_cmd")result=Execute("cmd.exe",["/d","/s","/c",command],seconds,cwd);
             else if(tool=="run_wsl"||tool=="run_python"&&(FreeArgs.Str(args,"where")=="wsl"||Find("py.exe") is null&&Find("python.exe") is null))
             {
                 string? wsl=Find("wsl.exe");if(wsl is null)return FreeResult.Fail("no-wsl","WSL ist nicht installiert; run_powershell verwenden.");
                 var check=Execute(wsl,["--list","--quiet"],Math.Min(seconds,3),cwd);if(check.Exit!=0||string.IsNullOrWhiteSpace(check.Out))return FreeResult.Fail("no-wsl","Keine WSL-Distribution installiert; run_powershell verwenden.");
                 var parameters=new List<string>();if(FreeArgs.Str(args,"distro") is {} distro){parameters.Add("-d");parameters.Add(distro);}parameters.AddRange(["--","bash","-lc"]);
-                // Python receives UTF-8 source on stdin; no temporary Windows path must be translated into a distro path.
-                parameters.Add(tool=="run_python"?"python3 -":command);result=Execute(wsl,parameters,seconds,cwd,tool=="run_python"?FreeArgs.Str(args,"code"):null);
+                // wslpath respects a distro's configured mount root. The Windows-owned temporary file is deleted even on kill.
+                parameters.Add(tool=="run_python"?"python3 \"$(wslpath -a '"+temporary!.Replace("'","'\\''")+"')\"":command);result=Execute(wsl,parameters,seconds,cwd);
             }
             else
             {
-                string code=FreeArgs.Str(args,"code")??throw new ArgumentException("code fehlt.");temporary=Path.Combine(Path.GetTempPath(),"sa-python-"+Guid.NewGuid().ToString("N")+".py");File.WriteAllText(temporary,code,new UTF8Encoding(false));
-                string? py=Find("py.exe");string python=py??Find("python.exe")??throw new ArgumentException("Python fehlt.");result=Execute(python,py is null?[temporary]:["-3",temporary],seconds,cwd);
+                string? py=Find("py.exe");string python=py??Find("python.exe")??throw new ArgumentException("Python fehlt.");result=Execute(python,py is null?[temporary!]:["-3",temporary!],seconds,cwd);
             }
             return new(true,$"exit={result.Exit} ({result.Ms} ms)\n--- stdout ---\n{result.Out}\n--- stderr ---\n{result.Error}");
         }
