@@ -35,6 +35,7 @@ internal sealed class DictationManager : IDisposable
     readonly HashSet<string> retrying=[];
     readonly Dictionary<string,DictationFlow> held=[];   // memory-only audio (the disk refused) of a failed dictation, kept for the retry of this run
     DictationFlow? live;
+    public event Action? Started;
     public DictationStore Store {get;}
     public DictationManager(AppConfig config,DeviceClient client,Telemetry tel,CaptionHost captions,System.Windows.Threading.Dispatcher ui,Action<string,Level> notice,Action<string> balloon,
         Func<string,string,DictationContext> context,Func<string,Task<bool>> insertHere,string? folder=null)
@@ -125,6 +126,7 @@ internal sealed class DictationManager : IDisposable
         capture.Lost+=(type,at)=>OnLost(flow,type,at);
         live=flow;
         Log("dictation.start",new(){["id"]=rec.Meta.Id,["process"]=process,["session"]=inSession,["disk"]=rec.DiskOk,["path"]=Store.Folder});
+        Started?.Invoke();
         if(rec.StartWarning is {} w0)notice(w0,Level.Warn);
         return flow;
     }

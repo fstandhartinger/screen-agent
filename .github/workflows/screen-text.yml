@@ -1,0 +1,38 @@
+name: Screen text speech context
+on:
+  push:
+    branches: [main, computer-control-v2]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  screen-text:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
+      - name: Bundled OCR languages
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force publish/tessdata | Out-Null
+          foreach ($lang in @('eng','deu')) {
+            Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/$lang.traineddata" -OutFile "publish/tessdata/$lang.traineddata"
+          }
+      - name: Screen text selftest
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Invoke-SA --selftest-screentext | Tee-Object artifacts/screentext-stdout.json
+          if ($LASTEXITCODE -ne 0) { throw 'Screen text selftest failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screen-text
+          path: artifacts/

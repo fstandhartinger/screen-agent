@@ -1,0 +1,57 @@
+name: E2E computer control (debug serve behind a tunnel)
+# A real Windows desktop for the gateway's end-to-end harness (agent-desk gateway/scripts/computer-e2e.mjs): the app runs in --computer-serve mode
+# behind a throwaway tunnel; the harness on the agents' server drives it with the gateway's loop. Bearer token from a repository secret; the VM is discarded.
+on:
+  push:
+    branches: ['cc-e2e/**']
+permissions:
+  contents: read
+  checks: write
+jobs:
+  serve:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
+      - name: Desktop like a laptop (1920x1080), test page in a normally started Chrome (default profile, remote debugging off, as on his laptop)
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Host "resolution unchanged: $_" }
+          New-Item -ItemType Directory -Force artifacts/e2e | Out-Null
+          $chrome = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
+          $page = (Resolve-Path ci/e2e/cards.html).Path
+          Start-Process $chrome -ArgumentList @('--no-first-run', '--no-default-browser-check', '--disable-search-engine-choice-screen', '--start-maximized', "file:///$($page -replace '\\','/')")
+          Start-Sleep 4
+      - name: Serve behind the tunnel until the harness calls /stop (at most 30 minutes)
+        # One step on purpose: the runner ends every process a step started when the step ends. The tunnel address leaves the step as a check run.
+        shell: pwsh
+        env:
+          SA_SERVE_TOKEN: ${{ secrets.SA_E2E_SERVE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (-not $env:SA_SERVE_TOKEN) { throw 'secret SA_E2E_SERVE_TOKEN missing' }
+          $env:SA_SERVE_TOKEN = $env:SA_SERVE_TOKEN.Trim()
+          Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
+          $serve = Start-Process ./publish/ScreenAgent.exe -ArgumentList @('--computer-serve', '8765') -PassThru -RedirectStandardOutput artifacts/e2e/serve.log -RedirectStandardError artifacts/e2e/serve.err
+          $tunnel = Start-Process ./cloudflared.exe -ArgumentList @('tunnel', '--no-autoupdate', '--url', 'http://127.0.0.1:8765') -PassThru -RedirectStandardError artifacts/e2e/tunnel.log -RedirectStandardOutput artifacts/e2e/tunnel.out
+          $url = $null
+          for ($i = 0; $i -lt 60 -and -not $url; $i++) { Start-Sleep 1; $m = Select-String -Path artifacts/e2e/tunnel.log -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
+          if (-not $url) { Get-Content artifacts/e2e/tunnel.log -Tail 30; throw 'no tunnel url' }
+          $h = Invoke-RestMethod http://127.0.0.1:8765/health -Headers @{ Authorization = "Bearer $env:SA_SERVE_TOKEN" }
+          if (-not $h.ok) { throw 'serve not healthy' }
+          $body = @{ name = 'e2e-serve-url'; head_sha = $env:GITHUB_SHA; status = 'in_progress'; output = @{ title = 'e2e serve'; summary = $url } } | ConvertTo-Json -Depth 5
+          Invoke-RestMethod "https://api.github.com/repos/$env:GITHUB_REPOSITORY/check-runs" -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -ContentType application/json -Body $body | Out-Null
+          Write-Host "serving at $url"
+          $serve.WaitForExit(30 * 60 * 1000) | Out-Null
+          if (-not $tunnel.HasExited) { $tunnel.Kill() }
+          if (-not $serve.HasExited) { $serve.Kill($true) }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-serve
+          path: artifacts/
+          retention-days: 7

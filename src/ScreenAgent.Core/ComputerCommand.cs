@@ -7,13 +7,34 @@ public sealed record ComputerCommand(string Id,string Run,int Seq,string Op,stri
 public static class ComputerWire
 {
     public static readonly string[] Ops=["start","stop","action","confirm","beat","resume","taint","void"];
-    public const int MaxResultBytes=512*1024;
+    public const int MaxResultBytes=2*1024*1024;
     // The arguments each tool takes. A known tool with any other argument is malformed and never executed (closed by default); an unknown tool is refused by the app as unknown-tool.
     public static readonly Dictionary<string,string[]> ToolArgs=new()
     {
         ["ui_windows"]=[],["ui_tree"]=["window"],["ui_click"]=["ref"],["ui_type"]=["ref","text"],["key"]=["key"],["scroll"]=["dy","window","tab"],["window_focus"]=["window"],["screenshot"]=["window"],
         ["chrome_tabs"]=[],["chrome_open"]=["url"],["chrome_snapshot"]=["tab"],["chrome_read"]=["tab"],["chrome_click"]=["ref"],["chrome_fill"]=["ref","text"]
     };
+    // v2 (general computer control, unrestricted mode): the same check with the wider argument lists of CONTRACT-V2. A v2-only tool is unknown to the guarded mode and refused there as unknown-tool.
+    public static readonly Dictionary<string,string[]> ToolArgsV2=new()
+    {
+        ["screenshot"]=["window","monitor","all","region","grid","max"],["click"]=["x","y","button","count","mods","observe","settle_ms"],["move"]=["x","y","observe","settle_ms"],
+        ["drag"]=["x","y","x2","y2","button","ms","observe","settle_ms"],["wheel"]=["dy","dx","x","y","observe","settle_ms"],["type"]=["text","enter","paste","observe","settle_ms"],
+        ["key"]=["key","times","observe","settle_ms"],["wait"]=["ms","observe"],["ui_windows"]=[],["window_focus"]=["window","observe","settle_ms"],["window_state"]=["window","state","observe","settle_ms"],
+        ["open"]=["target","args","observe","settle_ms"],["ui_tree"]=["window","depth","filter","max"],["ui_find"]=["name","role","window"],["ui_click"]=["ref","button","double","observe","settle_ms"],
+        ["ui_type"]=["ref","text","clear","enter","observe","settle_ms"],["ui_read"]=["ref"],["clipboard_read"]=[],["clipboard_write"]=["text"],
+        ["run_powershell"]=["command","timeout_s","cwd"],["run_cmd"]=["command","timeout_s","cwd"],["run_wsl"]=["command","distro","timeout_s"],["run_python"]=["code","timeout_s","where"],
+        ["file_read"]=["path","max","tail"],["file_write"]=["path","content","append"],
+        ["chrome_tabs"]=[],["chrome_open"]=["url","background","observe","settle_ms"],["chrome_navigate"]=["tab","url","observe","settle_ms"],["chrome_activate"]=["tab","observe","settle_ms"],["chrome_close"]=["tab","force"],
+        ["chrome_snapshot"]=["tab","all","filter"],["chrome_click"]=["ref","double","button","observe","settle_ms"],["chrome_fill"]=["ref","text","clear","enter","observe","settle_ms"],["chrome_key"]=["tab","key","observe","settle_ms"],
+        ["chrome_read"]=["tab","max"],["chrome_eval"]=["tab","js","timeout_s"],["chrome_screenshot"]=["tab","full"],["scroll"]=["dy","window","tab","observe","settle_ms"]
+    };
+    public static bool ArgsKnown(string tool,JsonElement args)
+    {
+        if(args.ValueKind!=JsonValueKind.Object)return true;
+        bool v1=ToolArgs.TryGetValue(tool,out var a1),v2=ToolArgsV2.TryGetValue(tool,out var a2);
+        if(!v1&&!v2)return true;   // an unknown tool is refused later as unknown-tool
+        return args.EnumerateObject().All(p=>(v1&&Array.IndexOf(a1!,p.Name)>=0)||(v2&&Array.IndexOf(a2!,p.Name)>=0));
+    }
     static readonly Regex CommandId=new("^c[0-9a-f]{16}$",RegexOptions.Compiled),RunId=new("^r[0-9a-f]{16}$",RegexOptions.Compiled),HashRx=new("^[0-9a-f]{8,64}$",RegexOptions.Compiled);
     static string Str(JsonElement m,string key,int max)
     {
@@ -39,7 +60,7 @@ public static class ComputerWire
         if(op is "confirm" or "void"&&!HashRx.IsMatch(hash)){why="hash";return null;}
         string tool=Str(m,"tool",32);
         if(op=="action"&&(tool.Length==0||!tool.All(c=>char.IsAsciiLetterOrDigit(c)||c=='_'))){why="tool";return null;}
-        if(op=="action"&&ToolArgs.TryGetValue(tool,out var known)&&args.ValueKind==JsonValueKind.Object&&args.EnumerateObject().Any(p=>Array.IndexOf(known,p.Name)<0)){why="args";return null;}
+        if(op=="action"&&!ArgsKnown(tool,args)){why="args";return null;}
         return new(id,run,seq,op,m.TryGetProperty("sid",out _)?Str(m,"sid",80):null,Str(m,"goal",2000),words,tool,args,hash,Str(m,"digits",80),Str(m,"state",16),m.TryGetProperty("extend",out var ex)&&ex.ValueKind==JsonValueKind.True,CleanReason(Str(m,"reason",40)));
     }
     static string CleanReason(string s)=>new string(s.Where(c=>char.IsAsciiLetterOrDigit(c)||c is '-' or '_' or ':').ToArray());
@@ -53,7 +74,7 @@ public static class ComputerWire
     public static int? ArgInt(JsonElement args,string name)=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.Number&&v.TryGetInt32(out var i)?i:null;
     public static bool ArgBool(JsonElement args,string name)=>args.ValueKind==JsonValueKind.Object&&args.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.True;
     public sealed record NeedsConfirm(string hash,string spoken);
-    public const int MaxJpegChars=300*1024,MaxSpoken=1100;
+    public const int MaxJpegChars=1_400_000,MaxSpoken=1100;
     // Facts about the action for the gateway's activity line and trace: the label (letters and digits, cut), the domain (eTLD+1) and the process. A screenshot travels as `jpeg` (plain base64).
     public sealed record ResultMeta(string? Target=null,string? Domain=null,string? Process=null,string? Jpeg=null);
     // {ok,code,class?,rule?,result?:{text?,target?,domain?,process?,jpeg?},needs_confirm?:{hash,spoken},run_state?}. Empty class and rule are left out. The text is cut so the whole JSON stays within 512 kB.
@@ -81,8 +102,8 @@ public static class ComputerWire
     public static string Fit(string result,int reserved=0)
     {
         int budget=MaxResultBytes-2048-reserved;
-        if(System.Text.Encoding.UTF8.GetByteCount(result)<=budget)return result;
-        // JSON escaping can double the size: cut by characters until the escaped form fits.
+        if(System.Text.Encoding.UTF8.GetByteCount(result)<=budget/6||JsonSerializer.SerializeToUtf8Bytes(result).Length<=budget)return result;   // escaping can take up to 6 bytes per character
+        // Cut by characters until the escaped form fits.
         int n=Math.Min(result.Length,budget/2);
         while(n>0&&JsonSerializer.SerializeToUtf8Bytes(result[..n]).Length>budget)n/=2;
         if(n>0&&char.IsHighSurrogate(result[n-1]))n--;
@@ -108,6 +129,13 @@ public static class CdpMethods
         "Target.exposeDevToolsProtocol","DOM.setFileInputFiles","Page.setInterceptFileChooserDialog","Fetch.fulfillRequest","Debugger.enable","Browser.close","Target.setAutoAttach","Emulation.setUserAgentOverride","IndexedDB.requestData","DOMStorage.getDOMStorageItems"
     ];
     public static bool Ok(string method)=>Allowed.Contains(method);
+    // General computer control (unrestricted mode, the free Chrome toolset ChromeFree) may call these as well; the guarded client never sees this list (Ok above is its only check).
+    // Runtime.evaluate is here on purpose: chrome_eval runs the model's script in the page, which the guarded mode must never do. Cookies, storage, downloads, permissions and Emulation stay out in both modes.
+    public static readonly HashSet<string> Free=new(StringComparer.Ordinal)
+    {
+        "Runtime.evaluate","Page.reload","Page.getNavigationHistory","Page.navigateToHistoryEntry","Browser.getWindowForTarget"
+    };
+    public static bool OkFree(string method)=>Allowed.Contains(method)||Free.Contains(method);
 }
 // One element of the UI tree as the dialog matcher sees it (UIA or a fake tree in the tests).
 public sealed record DialogNode(string Role,string Name,bool InDocument,string Process,string ImagePath,int Depth,int Parent);

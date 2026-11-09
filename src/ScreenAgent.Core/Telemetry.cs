@@ -12,7 +12,7 @@ public static class TraceSanitizer
         Dictionary<string,object?> result=[];
         foreach(var (key,value) in data)
         {
-            if(result.Count>=16||Banned.Any(b=>key.Contains(b,StringComparison.OrdinalIgnoreCase)))continue;
+            if(result.Count>=16||Banned.Any(b=>key.Contains(b,StringComparison.OrdinalIgnoreCase))&&!(key=="ocrMs"&&value is long or int))continue;
             result[key]=value switch{null=>null,bool or int or long or double or float or uint or ulong=>value,string s=>Short(s),string[] a=>a.Take(20).Select(Short).ToArray(),_=>Short(value.ToString()??"")};
         }
         return result;

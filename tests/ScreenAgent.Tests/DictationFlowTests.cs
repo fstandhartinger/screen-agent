@@ -56,7 +56,10 @@ public class DictationFlowTests
     [Fact] public async Task ALostConnectionWaitsAndContinuesWithoutUsingRetries()
     {
         var s=new Script((_,_)=>new ChunkReply(0,Failure:"HttpRequestException"),(_,_)=>new ChunkReply(0),(_,_)=>new ChunkReply(0),(_,_)=>new ChunkReply(0),(_,_)=>new ChunkReply(0),(_,_)=>Ok("wieder da"));
-        var o=await Job(s).Complete(C(0,2,final:true));
+        // Five lost calls must fit into the patience. With the 50 ms of Job() this failed on a loaded CI runner (9 Nov: 3 of 12 runs, 250-520 ms for the test);
+        // the test is about "waits and continues", not about speed, so it gets a patience no runner exceeds.
+        var job=new DictationJob("abc","",s.Send,(_,_)=>{},CancellationToken.None,NoWait){LivePatience=TimeSpan.FromSeconds(20),StopPatience=TimeSpan.FromSeconds(20)};
+        var o=await job.Complete(C(0,2,final:true));
         Assert.Equal("wieder da",o.Text);Assert.Equal(6,s.Calls.Count);
     }
     [Fact] public async Task ALostConnectionGivesUpAfterThePatienceAndKeepsGoing()

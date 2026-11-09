@@ -1,4 +1,73 @@
-# Screen Agent v0.1.13 preview
+# Screen Agent v0.1.14 preview
+
+Version 0.1.14 is about computer control that really works, and about speech that knows what
+is on the screen. It answers the session of 9 Nov 2026: "verwende den Computer, um auf Senden zu
+klicken" failed twice in 15 seconds, because Chrome's "allow remote debugging" prompt was not
+recognised, a browser window could neither be read nor photographed, and there was no click by
+coordinates at all. And the recognisers wrote a well-known company name although a different,
+similar-sounding one was on the screen.
+
+**General computer control (unrestricted mode, the default).** The agent now has the whole
+desktop, not only a Chrome mode; the gateway's loop uses it whenever a request needs something
+done on the computer:
+
+- **Look:** `screenshot` of the monitor in front, one window, all monitors, or a zoomed `region`,
+  optionally with a coordinate `grid`. Every picture defines the frame: `x`,`y` of the next mouse
+  call are pixels in the last picture, and the app maps them to physical pixels (PerMonitorV2,
+  several monitors, negative origins). After every action a fresh picture comes back by itself.
+- **Mouse:** `click` (left, right, middle, double, with held keys), `move`, `drag` (drag and
+  drop along a smooth path), `wheel`.
+- **Keyboard:** `type` (Unicode, line breaks, long texts by paste with the clipboard restored),
+  `key` with chords, German or English names: `ctrl+shift+t`, `alt+tab`, `win+r`, `strg+a entf`.
+- **Windows and programs:** `ui_windows`, `window_focus`, `window_state`, `open`.
+- **UI Automation:** `ui_tree`, `ui_find`, `ui_click`, `ui_type`, `ui_read` on every window,
+  browsers included; lines carry the element's position in the current picture.
+- **Commands and files:** `run_powershell`, `run_cmd`, `run_wsl` (bash), `run_python`,
+  `file_read`, `file_write`; a time limit ends the whole process tree, and so does the stop chord.
+- **Clipboard:** `clipboard_read`, `clipboard_write` (the loop is told to use them only on request).
+
+**Chrome like the `real-chrome` skill.** `chrome_tabs`, `chrome_open` (own tab), `chrome_navigate`,
+`chrome_activate`, `chrome_close` (own tabs; his only with `force`), `chrome_snapshot` (an outline in
+reading order with refs, so a button can be told apart by the text around it), `chrome_click`,
+`chrome_fill`, `chrome_key`, `chrome_read`, `chrome_eval`, `chrome_screenshot` (then the mouse tools
+work on that tab through CDP, also when Chrome is not in front). The app attaches to the RUNNING
+signed-in Chrome through `DevToolsActivePort`, switches remote debugging on itself when it is off
+(chrome://inspect by keyboard and UI Automation, once per run), and presses Chrome's "Allow remote
+debugging?" / "Remote-Fehlerbehebung zulassen?" prompt, only while its own connect is in flight
+(a prompt at any other moment belongs to another program and stays for you). When CDP is not to
+be had, every `chrome_*` tool answers at once with the reason and "take the desktop tools", and
+the run goes on with screenshots, UI Automation and clicks.
+Safety of the Chrome tools (independent review, 9 Nov): before every key the enable step sends it
+checks that Chrome is still in front and the tab and address bar are its own, and aborts otherwise;
+`chrome_fill` refuses a disabled or read-only field and types nothing without proven focus on the
+field it was given, and never presses Enter when the text did not arrive as sent; a stop, your own
+mouse or a pause ends a pending Chrome call within about 100 ms and releases a held mouse button.
+
+**Stop and supervision are unchanged:** the purple frame, Ctrl+Win+Shift+X stops at once (also a
+running command), your own mouse or keyboard pauses the run. In unrestricted mode the app no
+longer ends a live run after 60 s without an action (a slow model turn, your answer to a
+question); the gateway's heartbeat decides.
+
+**Screen text for speech.** When a dictation starts, and when the picture changes in a voice
+session, the app sends the visible text of the window in front (UI Automation first, OCR of the
+monitor added) to the gateway: `POST /api/device/screen-text`, redacted, at most 6,000 characters,
+kept there in memory for three minutes. The gateway turns it into name hints for the recognisers
+and the clean-up, and tells the voice model which names are on screen. Capture obeys the same
+privacy rules as the frames (paused, locked, blocked windows: nothing is sent).
+`ScreenTextForSpeech: false` in `config.json` turns it off. Log event `screen.text` (counts only).
+
+**For testing:** `--selftest-desktop`, `--selftest-chrome`, `--selftest-screentext`, and
+`--computer-serve <port>`: a local debug HTTP endpoint (`/start`, `/act`, `/stop`; it refuses to start
+without a bearer token of at least 16 characters in `SA_SERVE_TOKEN`, listens on 127.0.0.1 only and wants
+`Content-Type: application/json`) that drives the same `ComputerAgent` without a voice session; the gateway's
+`scripts/computer-e2e.mjs` runs its real loop against it. The tool contract is
+`docs/computer-contract-v2.md` in agent-desk.
+
+Not proven on the laptop yet (see RESULT of job screen-agent-computer-control-20261109): scaling
+125-150 % and several monitors with real windows, the physical stop chord during a long action,
+his Chrome with dozens of tabs and several profiles.
+
+## v0.1.13
 
 Version 0.1.13 is about the dictated text (Alt+Win). The gateway now listens with better
 recognisers and guards the clean-up word by word (agent-desk PR #21, #22); the app does three
