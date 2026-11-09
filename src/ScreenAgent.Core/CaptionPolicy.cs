@@ -48,9 +48,12 @@ public sealed class CaptionStats
     public long TotalMs;
     public bool HasCost;
     public void Ok(double seconds,long ms,double? cost){Calls++;AudioSeconds+=seconds;TotalMs+=ms;if(cost is {} c){CostUsd+=c;HasCost=true;}}
+    public int PolishCalls,PolishOk;public long PolishMs;
+    public void Polish(bool ok,long ms){PolishCalls++;if(ok){PolishOk++;PolishMs+=ms;}}
     public Dictionary<string,object?> Snapshot(CaptionPolicy p)=>new()
     {
         ["calls"]=Calls,["failures"]=p.Failed,["dropped"]=p.Dropped,["sentSec"]=Math.Round(AudioSeconds,1),["speechSec"]=Math.Round(SpeechSeconds,1),
-        ["avgMs"]=Calls==0?0:TotalMs/Calls,["costUsd"]=HasCost?Math.Round(CostUsd,4):null,["usdPerSpeechHour"]=HasCost&&SpeechSeconds>=60?Math.Round(CostUsd/(SpeechSeconds/3600),3):null,["disabled"]=p.DisabledWhy
+        ["avgMs"]=Calls==0?0:TotalMs/Calls,["costUsd"]=HasCost?Math.Round(CostUsd,4):null,["usdPerSpeechHour"]=HasCost&&SpeechSeconds>=60?Math.Round(CostUsd/(SpeechSeconds/3600),3):null,["disabled"]=p.DisabledWhy,
+        ["polishCalls"]=PolishCalls,["polishOk"]=PolishOk,["polishAvgMs"]=PolishOk==0?0:PolishMs/PolishOk
     };
 }

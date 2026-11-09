@@ -7,6 +7,7 @@ internal sealed class DictationFlow
     public required DictationJob Job {get;init;}
     public required CancellationTokenSource Cts {get;init;}
     public required string Process {get;init;}
+    public string FieldBefore {get;init;}="";   // the text before the caret when he started: context for the clean-up
     public readonly List<int> Marks=[0];
     public required DictationCaptions Captions {get;init;}   // the live text of this dictation only
     public Task<DictationOutcome>? Outcome;
@@ -111,7 +112,7 @@ internal sealed class DictationManager : IDisposable
             cts.Cancel();rec.Dispose();Store.Delete(rec.Meta);cts.Dispose();throw;
         }
         var caps=captions.BeginDictation();
-        var flow=new DictationFlow{Capture=capture,Job=job,Cts=cts,Process=process,Captions=caps};
+        var flow=new DictationFlow{Capture=capture,Job=job,Cts=cts,Process=process,Captions=caps,FieldBefore=fieldBefore};
         rec.Warning+=w=>ui.BeginInvoke(new System.Action(()=>notice(w,Level.Warn)));
         rec.ChunkReady+=chunk=>
         {
@@ -128,6 +129,23 @@ internal sealed class DictationManager : IDisposable
         return flow;
     }
 
+    // v0.1.12: the whole dictation once more through the clean-up (several chunks: seams, corrections across chunks). Never holds the text back for long and
+    // never loses it: a refusal, a timeout or an answer that dropped his words leaves the text as the chunks gave it. The text itself is never logged.
+    async Task<DictationOutcome> Polished(Task<DictationOutcome> job,string id,string process,string fieldBefore)
+    {
+        var o=await job;
+        if(!config.DictationPolish||!DictationPolish.Wanted(o))return o;
+        var clock=System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            using var cts=CancellationTokenSource.CreateLinkedTokenSource(life.Token);cts.CancelAfter(DictationPolish.Budget(o.Text));
+            var r=await client.Polish(o.Text,"final",process,fieldBefore.Length>500?fieldBefore[^500..]:fieldBefore,cts.Token);
+            bool ok=r.Status is >=200 and <300&&DictationPolish.Accept(o.Text,r.Text);
+            Log("dictation.polish",new(){["id"]=id,["status"]=r.Status,["code"]=r.Code??"",["ok"]=ok,["changed"]=r.Changed,["ms"]=clock.ElapsedMilliseconds,["chars"]=o.Text.Length});
+            return ok?o with{Text=r.Text.Trim()}:o;
+        }
+        catch(Exception ex){Log("dictation.polish",Redact.Of(ex,new(){["id"]=id,["ok"]=false,["ms"]=clock.ElapsedMilliseconds,["chars"]=o.Text.Length}));return o;}
+    }
     static string Clock(double seconds){var t=TimeSpan.FromSeconds(seconds);return $"{(int)t.TotalMinutes}:{t.Seconds:00}";}
     // The microphone went away while he talks (unplugged, switched, driver reset). He is told at once and stays told; the default device is opened again into the same recording.
     void OnLost(DictationFlow flow,string type,double at)
@@ -179,7 +197,7 @@ internal sealed class DictationManager : IDisposable
         if(last is not null&&flow.Job.Enqueued>0&&DictationGate.Reject(last.Samples.Length-last.OverlapSamples,AudioLevel.Peak(last.Samples)) is {} lw)
         {Log("dictation.skip",new(){["id"]=rec.Meta.Id,["why"]="last-"+lw,["index"]=last.Index,["seconds"]=Math.Round(last.Seconds-last.OverlapSamples/(double)Wav.Rate,2),["peak"]=AudioLevel.Peak(last.Samples)});last=null;}
         int from=flow.Marks[^1];
-        flow.Outcome=flow.Job.Complete(last,()=>flow.Captions.Slice(from,int.MaxValue));
+        flow.Outcome=Polished(flow.Job.Complete(last,()=>flow.Captions.Slice(from,int.MaxValue)),rec.Meta.Id,flow.Process,flow.FieldBefore);
         lock(active)active.Add(flow);
         return flow;
     }
@@ -361,7 +379,7 @@ internal sealed class DictationManager : IDisposable
             var last=await Task.Run(()=>Feed(m,job,state));
             if(state.Missing||state.Samples==0){Fail(m,state.Missing?"Die Aufnahmedatei fehlt":"Die Aufnahmedatei ist leer","retry",0,"",m.PartialText,true);return;}
             if(job.Enqueued==0&&DictationGate.Reject(state.Samples,state.Peak) is {} why){m.State="discarded";m.Reason=why;m.Ended=DateTimeOffset.UtcNow;Save(m);notice(why=="silent"?"Diktat · nichts aufgenommen (stumm)":"Diktat zu kurz",Level.Warn);return;}
-            var o=await job.Complete(last);
+            var o=await Polished(job.Complete(last),m.Id,m.Process,"");
             await Finish(m,o,m.Process,m.PartialText??"",null,true);
             if(m.State=="done")Release(m.Id);
         }
