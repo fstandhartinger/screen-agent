@@ -56,14 +56,13 @@ internal sealed class ChromeTools:IFreeToolset
     {
         Drop();
         lock(sync){state=new();memory=new();enableTried=false;enablePid=0;runId=run.Id;}
-
     }
-    // His tabs are never closed, and neither are the run's own: he may want to see the result. How many own tabs stay open is logged.
+    // His tabs and the run's own tabs stay open. Log the last known own-tab count without delaying revocation for network work.
     public void RunEnded(ComputerRun run)
     {
         int opened=state.Own.Count;
         Drop(); // Revoke attempts before any reporting or provider/network work.
-        if(opened>0)host.Log("computer.chrome.own_tabs",new(){["run"]=run.Id,["open"]=opened});
+        if(opened>0)host.Log("computer.chrome.own_tabs",new(){["run"]=run.Id,["open"]=opened,["count_kind"]="last-known"});
     }
 
     void Drop()
@@ -117,17 +116,16 @@ internal sealed class ChromeTools:IFreeToolset
     }
     ChromeFree Connect()
     {
-        long epoch;CancellationTokenSource attemptLife;ChromeRunState attemptState;
-        lock(sync){epoch=generation;connecting?.Cancel();connecting?.Dispose();attemptLife=new();connecting=attemptLife;attemptState=state;}
-        var token=attemptLife.Token;
+        long epoch;CancellationTokenSource attemptLife;CancellationToken token;ChromeRunState attemptState;
+        lock(sync){epoch=generation;connecting?.Cancel();connecting?.Dispose();attemptLife=new();connecting=attemptLife;attemptState=state;token=attemptLife.Token;}
         bool Stopped()=>host.Stopped()||token.IsCancellationRequested||Interlocked.Read(ref generation)!=epoch;
-        try{return ConnectAttempt(epoch,attemptState,Stopped,token);}
+        try{return ConnectAttempt(attemptState,Stopped,token);}
         finally
         {
             lock(sync)if(ReferenceEquals(connecting,attemptLife)&&conn is null){connecting=null;attemptLife.Dispose();}
         }
     }
-    ChromeFree ConnectAttempt(long epoch,ChromeRunState attemptState,Func<bool> Stopped,CancellationToken token)
+    ChromeFree ConnectAttempt(ChromeRunState attemptState,Func<bool> Stopped,CancellationToken token)
     {
         long t0=Environment.TickCount64;var o=host.Chrome;string dir=o.UserDataDir??ChromeCdp.DefaultUserData;
         for(int attempt=0;;attempt++)
@@ -197,7 +195,6 @@ internal sealed class ChromeTools:IFreeToolset
                     // The published socket still uses the attempt token; Drop cancels it on run end.
                 }
                 LastConnectClicks=ck?.Clicks??0;
-                ck?.Hot(0);   // connected: the clicker goes quiet (it presses nothing and scans nothing until the next connect of ours makes it hot again)
                 host.Log("computer.chrome.connected",new(){["run"]=runId,["port"]=port.Value.Port,["version"]=free.BrowserVersion,["ms"]=Environment.TickCount64-t0,["prompt"]=(ck?.Clicks??0)>0,["free"]=true});
                 ck=null;
                 return free;

@@ -39,7 +39,7 @@ internal static class ComputerServe
     }
     static async Task Reply(NetworkStream stream,int status,object result)
     {
-        byte[] body=JsonSerializer.SerializeToUtf8Bytes(result);string reason=status switch{200=>"OK",401=>"Unauthorized",404=>"Not Found",405=>"Method Not Allowed",_=>"Bad Request"};
+        byte[] body=JsonSerializer.SerializeToUtf8Bytes(result);string reason=status switch{200=>"OK",401=>"Unauthorized",404=>"Not Found",405=>"Method Not Allowed",415=>"Unsupported Media Type",_=>"Bad Request"};
         byte[] head=Encoding.ASCII.GetBytes($"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");await stream.WriteAsync(head);await stream.WriteAsync(body);
     }
     static async Task Serve(Application app,int port,string token)

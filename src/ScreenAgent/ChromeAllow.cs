@@ -93,14 +93,11 @@ internal static class ChromeUi
     public static object Dump(UiScan s,string owner,int clicked=-1)
         =>new{owner,clicked,nodes=s.Nodes.Select(n=>new{role=n.Role,name=n.Name,inDocument=n.InDocument,process=n.Process,image=n.ImagePath,depth=n.Depth,parent=n.Parent}).ToArray()};
 }
-// Answers Chrome's allow prompt. One background thread per connection attempt, alive until the connection is disposed: every 300 ms the native UI of the browser windows is matched
-// (AllowPrompt.Find) and every prompt's own button is pressed. The prompt is a top-level window of its own, named like its heading (proven on Chrome 156, English and German), so
-// the pass that runs every 300 ms reads the window titles and walks only a window titled like the prompt: with no prompt open it makes no UI Automation call at all.
-// The full walk of every browser window (a prompt of another shape, e.g. inside the browser window) runs every 300 ms only while a connect is in flight and every 10 s afterwards:
-// each walk is answered by Chrome's UI thread (60-120 ms for one window on the runner, more with many tabs), and walking it three times a second slowed the browser measurably.
+// Only an in-flight connection attempt grants authority. Every scan/dispatch carries its generation;
+// revocation discards late results. All provider calls share one bounded lane with the enable path.
 internal sealed class ChromeAllowClicker:IDisposable
 {
-    public const int IntervalMs=300,IdleFullMs=10000;
+    public const int IntervalMs=300;
     readonly string owner;
     readonly Action<string,Dictionary<string,object?>> log;
     readonly Thread thread;
@@ -144,7 +141,7 @@ internal sealed class ChromeAllowClicker:IDisposable
         // Lead decision (9 Nov 2026): the prompt is pressed only while OUR OWN connect is in flight (ChromeTools makes the clicker hot for that time, also on a reconnect).
         // A prompt that appears at any other moment was caused by another program; that one is his to answer, and Chrome's window is not walked for nothing.
         if(!hot)return;
-        bool full=now-lastFull>=(hot?IntervalMs:IdleFullMs);
+        bool full=now-lastFull>=IntervalMs;
         var scan=ChromeUiLane.Run(_=>ChromeUi.Scan(titledOnly:!full),()=>!Allowed(),1200);
         if(!Allowed())return;
         Interlocked.Increment(ref scans);
@@ -247,6 +244,8 @@ internal static class ChromeEnable
         bool Page()
         {
             Tab();var address=Address(root);bool ok=address is not null&&Value(address)==Url;
+            if(ok)ok=root.FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Document)).Cast<AutomationElement>()
+                .Any(d=>!d.Current.IsOffscreen&&d.Current.Name.StartsWith(PageTitle,StringComparison.Ordinal));
             Check();return ok;
         }
         bool FocusedAddress(string expected)

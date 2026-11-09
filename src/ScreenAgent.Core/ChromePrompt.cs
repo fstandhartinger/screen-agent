@@ -1,15 +1,7 @@
 namespace ScreenAgent.Core;
-// Chrome asks "Remote-Fehlerbehebung zulassen?" / "Allow remote debugging?" for every new debugging connection to the default profile. General computer control (unrestricted mode) clicks it
-// by itself. This is the matcher: a pure function over the UI tree of all Chrome windows (UIA on Windows, fake or recorded trees in the tests).
-// What went wrong on 9 Nov 2026: the old matcher (AllowDialog.Find) wanted exactly ONE node with the heading text; the real prompt carries it twice (the dialog window/pane AND a text inside),
-// so it answered "several" and never clicked. Here one OR MORE heading nodes mark a window as holding the prompt.
-// A button is pressed only when ALL of this holds:
-//  - it is a Button named exactly Zulassen / Allow (or Abbrechen / Cancel when clearing stale prompts),
-//  - it is native browser UI: not inside a Document (page content lives in chrome.exe too; a web page that paints the same words is never clicked),
-//  - its top-level window belongs to the browser (chrome.exe; when the owner of the debugging port is known: exactly that image),
-//  - the same top-level window has the heading text in its native UI.
-// Several prompts (stacked, or one per window): every one is returned. When a window holds other native "Allow" buttons too (a permission bubble), only the buttons that share a container
-// with a heading are taken.
+// Native remote-debugging dialog matcher. Chrome repeats the heading on Window/Pane/Text nodes;
+// require an inner Text heading and both Allow/Cancel buttons in the same native container.
+// Window titles alone and anything below a Document never grant authority. The guarded matcher is unchanged.
 public static class AllowPrompt
 {
     public static readonly string[] Headings=AllowDialog.Headings;
