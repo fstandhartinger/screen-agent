@@ -1,0 +1,35 @@
+name: Chrome control (free toolset)
+# Slice client-chrome of computer control v2: builds the app and runs only --selftest-chrome on a real Windows desktop with a real Chrome
+# (debug-port Chrome with local test pages, CDP away, and the REAL flow: chrome://inspect toggle + the "Allow remote debugging?" prompt).
+on:
+  push:
+    branches: ['fusion/screen-agent-computer-control-20261109-client-chrome']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chrome:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish unpackaged single exe
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
+      - name: Chrome control selftest
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts/chrome | Out-Null
+          (Get-Item "$env:ProgramFiles\Google\Chrome\Application\chrome.exe").VersionInfo.FileVersion | Set-Content artifacts/chrome/chrome-version.txt
+          Invoke-SA --selftest-chrome | Tee-Object artifacts/chrome/chrome.json
+          if ($LASTEXITCODE -ne 0) { throw 'Chrome control selftest failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chrome-control
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14

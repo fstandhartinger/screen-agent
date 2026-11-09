@@ -129,6 +129,13 @@ public static class CdpMethods
         "Target.exposeDevToolsProtocol","DOM.setFileInputFiles","Page.setInterceptFileChooserDialog","Fetch.fulfillRequest","Debugger.enable","Browser.close","Target.setAutoAttach","Emulation.setUserAgentOverride","IndexedDB.requestData","DOMStorage.getDOMStorageItems"
     ];
     public static bool Ok(string method)=>Allowed.Contains(method);
+    // General computer control (unrestricted mode, the free Chrome toolset ChromeFree) may call these as well; the guarded client never sees this list (Ok above is its only check).
+    // Runtime.evaluate is here on purpose: chrome_eval runs the model's script in the page, which the guarded mode must never do. Cookies, storage, downloads, permissions and Emulation stay out in both modes.
+    public static readonly HashSet<string> Free=new(StringComparer.Ordinal)
+    {
+        "Runtime.evaluate","Page.reload","Page.getNavigationHistory","Page.navigateToHistoryEntry","Browser.getWindowForTarget"
+    };
+    public static bool OkFree(string method)=>Allowed.Contains(method)||Free.Contains(method);
 }
 // One element of the UI tree as the dialog matcher sees it (UIA or a fake tree in the tests).
 public sealed record DialogNode(string Role,string Name,bool InDocument,string Process,string ImagePath,int Depth,int Parent);
