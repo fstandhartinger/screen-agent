@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><title>Karten</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;background:#9fbf8a;margin:0;padding:24px}
+.card{background:#fff;border-radius:12px;padding:14px 18px;margin:0 0 6px 0;max-width:640px;font-size:15px;line-height:1.45}
+.card b{display:block}.id{font-style:italic;color:#444}
+button{display:block;width:640px;max-width:100%;margin:0 0 6px 0;padding:9px;border:0;border-radius:8px;background:#5b9a50;color:#fff;font-weight:600;font-size:14px;cursor:pointer}
+.gap{height:18px}
+</style></head><body>
+<!-- Test page for the Screen Agent's computer control: three cards, each with the same three buttons (fictional names). The title records every click. -->
+<script>
+const cards=[["nordgatan","Nordgatan (Lund) unser Angebot schicken?","Senden = Mail über ihr Formular: EU-Option plus Gratis-Test."],
+             ["opnar","Opnar AI (Lund) ein Angebot schicken?","Senden = Mail an ihre Adresse: wir als EU-Option im Katalog."],
+             ["outwing","Outwing ein Angebot als Zweitquelle schicken?","Senden = Mail über ihr Formular: Fallback-Quelle, Gratis-Test."]];
+const clicks=[];
+for(const [key,head,line] of cards){
+  const c=document.createElement("div");c.className="card";c.innerHTML="DU BIST DRAN<b>"+head+"</b>"+line+"<br>Ändern = ich passe den Text an.<br>Nicht jetzt = keine Mail.<div class=id>Karte "+key+"</div>";document.body.append(c);
+  for(const [b,label] of [["senden","Senden (empfohlen)"],["aendern","Ändern"],["nichtjetzt","Nicht jetzt"]]){
+    const btn=document.createElement("button");btn.textContent=label;btn.onclick=()=>{clicks.push(key+":"+b);document.title="clicked="+clicks.join(",");btn.style.background="#2d5fa8";btn.textContent=label+" ✓";};document.body.append(btn);
+  }
+  const g=document.createElement("div");g.className="gap";document.body.append(g);
+}
+</script></body></html>

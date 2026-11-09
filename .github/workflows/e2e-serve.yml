@@ -1,0 +1,60 @@
+name: E2E computer control (debug serve behind a tunnel)
+# A real Windows desktop for the gateway's end-to-end harness (agent-desk gateway/scripts/computer-e2e.mjs): the app runs in --computer-serve mode
+# behind a throwaway tunnel; the harness on the agents' server drives it with the gateway's loop. Bearer token from a repository secret; the VM is discarded.
+on:
+  push:
+    branches: ['e2e/**']
+permissions:
+  contents: read
+jobs:
+  serve:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
+      - name: Desktop like a laptop (1920x1080), test page in Chrome without a debugging port
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Host "resolution unchanged: $_" }
+          New-Item -ItemType Directory -Force artifacts/e2e | Out-Null
+          $chrome = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
+          $page = (Resolve-Path ci/e2e/cards.html).Path
+          Start-Process $chrome -ArgumentList @("--user-data-dir=$env:RUNNER_TEMP\e2e-chrome", '--no-first-run', '--no-default-browser-check', '--disable-search-engine-choice-screen', '--start-maximized', "file:///$($page -replace '\\','/')")
+          Start-Sleep 4
+      - name: Start the app in debug-serve mode and the tunnel
+        shell: pwsh
+        env:
+          SA_SERVE_TOKEN: ${{ secrets.SA_E2E_SERVE_TOKEN }}
+        run: |
+          if (-not $env:SA_SERVE_TOKEN) { throw 'secret SA_E2E_SERVE_TOKEN missing' }
+          Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
+          $serve = Start-Process ./publish/ScreenAgent.exe -ArgumentList @('--computer-serve', '8765') -PassThru -RedirectStandardOutput artifacts/e2e/serve.log -RedirectStandardError artifacts/e2e/serve.err
+          $serve.Id | Set-Content serve.pid
+          Start-Process ./cloudflared.exe -ArgumentList @('tunnel', '--no-autoupdate', '--url', 'http://127.0.0.1:8765') -RedirectStandardError artifacts/e2e/tunnel.log -RedirectStandardOutput artifacts/e2e/tunnel.out
+          $url = $null
+          for ($i = 0; $i -lt 60 -and -not $url; $i++) { Start-Sleep 1; $m = Select-String -Path artifacts/e2e/tunnel.log -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
+          if (-not $url) { Get-Content artifacts/e2e/tunnel.log -Tail 30; throw 'no tunnel url' }
+          $url | Set-Content url.txt
+          $h = Invoke-RestMethod http://127.0.0.1:8765/health -Headers @{ Authorization = "Bearer $env:SA_SERVE_TOKEN" }
+          if (-not $h.ok) { throw 'serve not healthy' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-url
+          path: url.txt
+          retention-days: 1
+      - name: Serve until the harness calls /stop (at most 30 minutes)
+        shell: pwsh
+        run: |
+          $serve = Get-Process -Id (Get-Content serve.pid) -ErrorAction SilentlyContinue
+          if ($serve) { $serve.WaitForExit(32 * 60 * 1000) | Out-Null }
+          Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-serve
+          path: artifacts/
+          retention-days: 7
