@@ -111,6 +111,15 @@ public class ChromeCancellationTests
         var r=await c.Run("chrome_fill",J(new{@ref="r1",text="supplied",enter=true}));
         Assert.False(r.Ok);Assert.Equal(rule,r.Rule);Assert.Equal(inserted,p.Saw("Input.insertText"));Assert.False(p.Saw("Input.dispatchKeyEvent"));
     }
+    [Fact] public async Task AppendCannotVerifyAnUnchangedFieldThatAlreadyContainsTheText()
+    {
+        using var p=new Peer{Reply=q=>q.GetProperty("method").GetString()=="Runtime.callFunctionOn"&&q.GetProperty("params").GetProperty("functionDeclaration").GetString()==ChromePageJs.FocusSelect
+            ?new{result=new{value=new{a=true,len=9}}}:Protocol(q)};await p.Start();
+        var state=new ChromeRunState();state.Alias("target");using var c=new ChromeFree(p.Socket,state,()=>p.Stop,(_,_)=>{});
+        await c.Run("chrome_snapshot",J(new{tab="t1"}));
+        var r=await c.Run("chrome_fill",J(new{@ref="r1",text="unchanged",clear=false,enter=true}));
+        Assert.False(r.Ok);Assert.Equal("verify-failed",r.Rule);Assert.True(p.Saw("Input.insertText"));Assert.False(p.Saw("Input.dispatchKeyEvent"));
+    }
     [Theory,InlineData(true),InlineData(false)]
     public async Task StoppedDragReleasesOrAborts(bool releaseAnswers)
     {

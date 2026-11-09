@@ -198,7 +198,8 @@ internal static class ChromeEnable
         for(int i=0;i<40&&e is not null;i++,e=TreeWalker.ControlViewWalker.GetParent(e))if(e.Current.ControlType==ControlType.Document)return true;
         return false;
     }
-    static List<AutomationElement> Tabs(AutomationElement root)=>root.FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.TabItem)).Cast<AutomationElement>().ToList();
+    // Web pages (including inspect itself) also expose selected TabItems. Only the native strip identifies our tab.
+    static List<AutomationElement> Tabs(AutomationElement root)=>root.FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.TabItem)).Cast<AutomationElement>().Where(t=>!InDocument(t)).ToList();
     static AutomationElement? Selected(AutomationElement root)=>Tabs(root).FirstOrDefault(t=>t.TryGetCurrentPattern(SelectionItemPattern.Pattern,out var p)&&((SelectionItemPattern)p).Current.IsSelected);
     static bool Omnibox(AutomationElement e)=>e.Current.ControlType==ControlType.Edit&&!InDocument(e)&&
         (e.Current.AutomationId=="omnibox"||e.Current.Name is "Address and search bar" or "Adress- und Suchleiste");
@@ -238,7 +239,8 @@ internal static class ChromeEnable
         void Tab()
         {
             Check();var selected=Selected(root);
-            if(own is null||selected is null||Id(selected)!=own){lost=true;throw new InvalidOperationException("tab-left");}
+            if(selected is null)throw new InvalidOperationException("tab-unavailable");
+            if(own is null||Id(selected)!=own){lost=true;throw new InvalidOperationException("tab-left");}
             Check();
         }
         bool Page()

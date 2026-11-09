@@ -618,7 +618,7 @@ public sealed class ChromeFree:IDisposable
         else
         {
             bool pw=B(back,"pw");int len=(int)D(back,"len");string now=pw?"":Norm(S(back,"v"));string want=Norm(text);
-            bool same=pw?(clear?len==text.Length:len>=text.Length):(clear?now==want:now.Contains(want,StringComparison.Ordinal));
+            bool same=pw?(len==(clear?text.Length:had+text.Length)):(clear?now==want:len==had+text.Length&&now.EndsWith(want,StringComparison.Ordinal));
             if(!same&&clear&&kind is "input" or "textarea")
             {   // typed text did not land (a date or range field, or the page dropped it): set the value directly, with the events a framework listens to
                 var setterProof=await InWorld(tab,ChromePageJs.FocusProof,[n,gen],ct);
