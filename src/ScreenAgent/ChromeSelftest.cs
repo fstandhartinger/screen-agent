@@ -361,6 +361,20 @@ internal static class ChromeSelftest
                 finally{ChromeTools.Now=()=>Environment.TickCount64;}
             });
             if(runD.Length>0)await End(runD);
+            await Step("D3 Chrome runs but its debugging cannot be switched on for this profile: debugging-off with the one click Florian needs, then at once from memory",async()=>
+            {
+                // an empty profile folder: no port file will ever appear there, whatever our automation does in the running Chrome
+                string empty=Path.Combine(tmp,"profile-none");Directory.CreateDirectory(empty);
+                NewAgent(new ChromeCdp.ConnectOptions(empty,true));
+                string r3=await Start("Chrome-Selbsttest D3");
+                var first=await Tool(r3,"chrome_tabs",new{},"debugging_off_first",waitS:40);
+                Must(!Ok(first)&&Rule(first)=="debugging-off"&&Text(first).Contains("chrome://inspect/#remote-debugging öffnen und den Haken setzen")&&Text(first).Contains("Desktop-Werkzeuge"),Brief(first));
+                Facts["debugging_off_enable_step"]=ChromeTools.Current!.LastEnable;
+                var sw=Stopwatch.StartNew();var again=await Tool(r3,"chrome_snapshot",new{tab="t1"});
+                Must(!Ok(again)&&Rule(again)=="debugging-off"&&sw.ElapsedMilliseconds<1000,Brief(again)+" after "+sw.ElapsedMilliseconds+" ms");
+                Must(!ChromeUi.Windows().Any(w=>w.Title.StartsWith("Inspect with Chrome",StringComparison.Ordinal)),"our chrome://inspect tab was left open");
+                await End(r3);
+            });
             Kill(chromeA);chromeA=null;
             await WaitFor(()=>!ChromeUi.Running(),10000);
             // ===== B, C: the real flow =====
@@ -435,7 +449,9 @@ internal static class ChromeSelftest
                         var r=await Tool(runB,"chrome_tabs",new{},"connect_after_stale",waitS:30);
                         Must(Ok(r),"connect with a stale prompt open: "+Brief(r));
                         Must(LogCount("computer.chrome.stale")==stale+1,"the stale prompt was not handled (no computer.chrome.stale)");
+                        await Task.Delay(300);
                         Facts["stale_orphan_state"]=orphan.Status.ToString();
+                        Must(orphan.Status!=TaskStatus.RanToCompletion,"the stale prompt was allowed instead of cancelled (the dead connection got in)");
                         dead.Cancel();
                         try{(await orphan).Dispose();}catch(Exception e) when(e is OperationCanceledException or System.Net.WebSockets.WebSocketException){ }   // the orphan was refused or cancelled: that is the point
                     });

@@ -94,8 +94,9 @@ internal static class ChromeUi
         =>new{owner,clicked,nodes=s.Nodes.Select(n=>new{role=n.Role,name=n.Name,inDocument=n.InDocument,process=n.Process,image=n.ImagePath,depth=n.Depth,parent=n.Parent}).ToArray()};
 }
 // Answers Chrome's allow prompt. One background thread per connection attempt, alive until the connection is disposed: every 300 ms the native UI of the browser windows is matched
-// (AllowPrompt.Find) and every prompt's own button is pressed. While a connect is in flight every pass is a full scan; later a full scan runs every pass only while it stays cheap
-// (<= 40 ms), otherwise every 3 s, with a title-only pass in between (the prompt is a window of its own, named like its heading).
+// (AllowPrompt.Find) and every prompt's own button is pressed. While a connect is in flight: a full scan every 300 ms and a title-only pass every 100 ms (the prompt is a window of
+// its own, named like its heading: proven on Chrome 156, English and German). Later a full scan runs every pass only while it stays cheap (<= 40 ms), otherwise every 3 s, with the
+// title-only pass in between.
 internal sealed class ChromeAllowClicker:IDisposable
 {
     public const int IntervalMs=300;
@@ -128,13 +129,16 @@ internal sealed class ChromeAllowClicker:IDisposable
         {
             try{Tick();}
             catch(Exception e){if(Interlocked.Increment(ref errors)<=3)log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name});}
-            for(int i=0;i<IntervalMs/50&&!stop;i++)Thread.Sleep(50);
+            // while a connect is in flight the prompt is looked for every 100 ms (title pass): the sooner it is seen, the sooner Chrome accepts the press
+            int wait=Environment.TickCount64<Interlocked.Read(ref hotUntil)?100:IntervalMs;
+            for(int i=0;i<wait/50&&!stop;i++)Thread.Sleep(50);
         }
     }
     void Tick()
     {
         long now=Environment.TickCount64;
-        bool full=now<Interlocked.Read(ref hotUntil)||lastFullMs<=40||now-lastFull>=3000;
+        bool hot=now<Interlocked.Read(ref hotUntil);
+        bool full=hot?now-lastFull>=IntervalMs:lastFullMs<=40||now-lastFull>=3000;
         var scan=ChromeUi.Scan(titledOnly:!full);
         Interlocked.Increment(ref scans);
         if(full){lastFull=now;lastFullMs=scan.Ms;LastWindows=scan.Windows;LastNodes=scan.Nodes.Count;if(scan.Ms>MaxScanMs)MaxScanMs=scan.Ms;}

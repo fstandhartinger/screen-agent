@@ -51,6 +51,8 @@ internal sealed class ChromeTools:IFreeToolset
     {
         Drop();
         lock(sync){state=new();memory=new();enableTried=false;runId=run.Id;}
+        // The first UI Automation call of a process takes about a second (measured on the runner): made here in the background, so the first chrome_* call does not wait for it.
+        if(host.Chrome.AllowDialog)Task.Run(()=>{try{_=System.Windows.Automation.AutomationElement.RootElement.Current.ProcessId;}catch(Exception e){host.Log("computer.chrome.uia_warmup",new(){["type"]=e.GetType().Name});}});
     }
     // His tabs are never closed, and neither are the run's own: he may want to see the result. How many own tabs stay open is logged.
     public void RunEnded(ComputerRun run)
@@ -136,10 +138,13 @@ internal sealed class ChromeTools:IFreeToolset
                 {
                     // Prompts left over from dead connections block a new one. They are cancelled only when no other program is connected to the port: another agent's attach may be in flight,
                     // and then its prompt is left alone (ours gets its own Allow click).
-                    var scan=ChromeUi.Scan();var cancel=AllowPrompt.Find(scan.Nodes,owner,AllowPrompt.Cancel);
+                    // (The prompt is a top-level window named like its heading, so the cheap title pass finds it; with no prompt open this costs no UI Automation call.)
+                    var scan=ChromeUi.Scan(titledOnly:true);var cancel=AllowPrompt.Find(scan.Nodes,owner,AllowPrompt.Cancel);
                     if(cancel.Count>0)
                     {
                         bool others=clients.Any(c=>c!=(uint)Environment.ProcessId);
+                        // Chrome ignores a press on a prompt younger than the double-click time (how old this one is, nobody knows): wait that long first, or the Cancel is lost.
+                        if(!others){for(long end=Environment.TickCount64+ChromeUi.PressGapMs;Environment.TickCount64<end;Thread.Sleep(50))host.ThrowIfStopped();}
                         if(!others){foreach(int i in cancel){try{ChromeUi.Press(scan.Elements[i]);}catch(Exception e) when(e is InvalidOperationException or System.Windows.Automation.ElementNotAvailableException or System.Runtime.InteropServices.COMException){host.Log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="cancel"});}}Thread.Sleep(350);}
                         host.Log("computer.chrome.stale",new(){["prompts"]=cancel.Count,["cancelled"]=!others});
                     }

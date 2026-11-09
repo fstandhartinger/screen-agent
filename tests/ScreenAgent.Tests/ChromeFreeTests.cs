@@ -113,6 +113,28 @@ public class AllowPromptTests
         int end=nodes.FindIndex(1,n=>n.Parent==-1);
         Assert.Single(AllowPrompt.Find(nodes.Take(end).ToList(),Chrome));
     }
+    // The trees the selftest recorded on the Windows runner at the moment the clicker pressed (run 42704833452, Chrome 156.0.8078.80): the scan as it is now (a mirrored dialog is listed
+    // once), with the index of the button that was pressed. That press opened the connection (Browser.getVersion answered).
+    [Theory,InlineData("allow-dialog-tree-en.json","Allow","Cancel"),InlineData("allow-dialog-tree-de.json","Zulassen","Abbrechen")]
+    public void TheRecordedPromptGivesExactlyTheButtonThatWasPressedOnTheRunner(string file,string allow,string cancel)
+    {
+        var (nodes,owner,clicked)=Load(file);
+        Assert.EndsWith(@"\chrome.exe",owner);
+        var hit=Assert.Single(AllowPrompt.Find(nodes,owner));
+        Assert.Equal(clicked,hit);Assert.Equal(allow,nodes[hit].Name);
+        Assert.Equal(cancel,nodes[Assert.Single(AllowPrompt.Find(nodes,owner,AllowPrompt.Cancel))].Name);
+        Assert.Equal(hit,Assert.Single(AllowPrompt.Find(nodes,"")));
+        Assert.Equal("several",AllowDialog.Find(nodes,owner).Reason);   // the old matcher on the same tree: the 9 Nov failure
+        Assert.Single(AllowPrompt.Windows(nodes,owner));
+    }
+    // The hostile page (it paints both headings and Zulassen / Allow buttons) as the native scan sees it on the runner: one Document node, nothing of the page.
+    [Fact] public void TheRecordedFakePromptPageHasNothingToPress()
+    {
+        var (nodes,_,_)=Load("fake-page-native-tree.json");
+        Assert.Contains(nodes,n=>n.Role=="Document");
+        Assert.DoesNotContain(nodes,n=>n.Name is "Zulassen" or "Allow"||AllowPrompt.Headings.Contains(n.Name));
+        Assert.Empty(AllowPrompt.Find(nodes,""));Assert.Empty(AllowPrompt.Find(nodes,"",AllowPrompt.Cancel));
+    }
 }
 public class ChromeFreeLogicTests
 {
