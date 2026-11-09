@@ -6,6 +6,7 @@ on:
     branches: ['cc-e2e/**']
 permissions:
   contents: read
+  checks: write
 jobs:
   serve:
     runs-on: windows-latest
@@ -25,33 +26,29 @@ jobs:
           $page = (Resolve-Path ci/e2e/cards.html).Path
           Start-Process $chrome -ArgumentList @("--user-data-dir=$env:RUNNER_TEMP\e2e-chrome", '--no-first-run', '--no-default-browser-check', '--disable-search-engine-choice-screen', '--start-maximized', "file:///$($page -replace '\\','/')")
           Start-Sleep 4
-      - name: Start the app in debug-serve mode and the tunnel
+      - name: Serve behind the tunnel until the harness calls /stop (at most 30 minutes)
+        # One step on purpose: the runner ends every process a step started when the step ends. The tunnel address leaves the step as a check run.
         shell: pwsh
         env:
           SA_SERVE_TOKEN: ${{ secrets.SA_E2E_SERVE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if (-not $env:SA_SERVE_TOKEN) { throw 'secret SA_E2E_SERVE_TOKEN missing' }
+          $env:SA_SERVE_TOKEN = $env:SA_SERVE_TOKEN.Trim()
           Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
           $serve = Start-Process ./publish/ScreenAgent.exe -ArgumentList @('--computer-serve', '8765') -PassThru -RedirectStandardOutput artifacts/e2e/serve.log -RedirectStandardError artifacts/e2e/serve.err
-          $serve.Id | Set-Content serve.pid
-          Start-Process ./cloudflared.exe -ArgumentList @('tunnel', '--no-autoupdate', '--url', 'http://127.0.0.1:8765') -RedirectStandardError artifacts/e2e/tunnel.log -RedirectStandardOutput artifacts/e2e/tunnel.out
+          $tunnel = Start-Process ./cloudflared.exe -ArgumentList @('tunnel', '--no-autoupdate', '--url', 'http://127.0.0.1:8765') -PassThru -RedirectStandardError artifacts/e2e/tunnel.log -RedirectStandardOutput artifacts/e2e/tunnel.out
           $url = $null
           for ($i = 0; $i -lt 60 -and -not $url; $i++) { Start-Sleep 1; $m = Select-String -Path artifacts/e2e/tunnel.log -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $url = $m.Matches[0].Value } }
           if (-not $url) { Get-Content artifacts/e2e/tunnel.log -Tail 30; throw 'no tunnel url' }
-          $url | Set-Content url.txt
-          $h = Invoke-RestMethod http://127.0.0.1:8765/health -Headers @{ Authorization = "Bearer $($env:SA_SERVE_TOKEN.Trim())" }
+          $h = Invoke-RestMethod http://127.0.0.1:8765/health -Headers @{ Authorization = "Bearer $env:SA_SERVE_TOKEN" }
           if (-not $h.ok) { throw 'serve not healthy' }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: e2e-url
-          path: url.txt
-          retention-days: 1
-      - name: Serve until the harness calls /stop (at most 30 minutes)
-        shell: pwsh
-        run: |
-          $serve = Get-Process -Id (Get-Content serve.pid) -ErrorAction SilentlyContinue
-          if ($serve) { $serve.WaitForExit(32 * 60 * 1000) | Out-Null }
-          Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force
+          $body = @{ name = 'e2e-serve-url'; head_sha = $env:GITHUB_SHA; status = 'in_progress'; output = @{ title = 'e2e serve'; summary = $url } } | ConvertTo-Json -Depth 5
+          Invoke-RestMethod "https://api.github.com/repos/$env:GITHUB_REPOSITORY/check-runs" -Method Post -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -ContentType application/json -Body $body | Out-Null
+          Write-Host "serving at $url"
+          $serve.WaitForExit(30 * 60 * 1000) | Out-Null
+          if (-not $tunnel.HasExited) { $tunnel.Kill() }
+          if (-not $serve.HasExited) { $serve.Kill($true) }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
