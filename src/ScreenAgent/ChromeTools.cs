@@ -14,6 +14,9 @@ internal sealed class ChromeTools:IFreeToolset
     // Selftest only: the toolset of the agent that was built last, and a picture hook for the steps of switching debugging on.
     internal static ChromeTools? Current;
     internal static Action<string>? EnableSnap;
+    internal static Action? BeforePublishForTest;
+    internal bool ConnectedForTest {get{lock(sync)return conn is not null;}}
+    internal void EndConnectionForTest()=>Drop();
     readonly FreeHost host;
     readonly object sync=new();
     ChromeFree? conn;
@@ -186,6 +189,7 @@ internal sealed class ChromeTools:IFreeToolset
                 try{free.Version(default,3000).GetAwaiter().GetResult();}
                 catch(Exception e) when(e is TimeoutException or CdpError){ck?.Hot(0);throw new CdpError("no-answer",e.GetType().Name);}
                 ck?.Hot(0);
+                BeforePublishForTest?.Invoke();
                 lock(sync)
                 {
                     if(Stopped())throw new OperationCanceledException("connect revoked");

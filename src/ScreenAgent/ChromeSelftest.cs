@@ -336,6 +336,19 @@ internal static class ChromeSelftest
                 Must(Ok(r)&&LogCount("computer.chrome.connected")==connects+1&&LogCount("computer.chrome.dropped")>=1,Brief(r)+" connects "+LogCount("computer.chrome.connected"));
                 Must(Regex.IsMatch(Text(r),@"\["+tab+@"\] (aktiv )?eigen "),"the own tab is still known as own after the reconnect: "+Text(r));
             });
+            await Step("A12b an ended connection attempt cannot publish its late socket",async()=>
+            {
+                var tools=ChromeTools.Current!;tools.DropSocketForTest();
+                int before=LogCount("computer.chrome.connected");bool revoked=false;
+                ChromeTools.BeforePublishForTest=()=>{revoked=true;tools.EndConnectionForTest();};
+                try
+                {
+                    var r=await Tool(run,"chrome_tabs",new{});
+                    Must(revoked&&!Ok(r)&&!tools.ConnectedForTest&&LogCount("computer.chrome.connected")==before,"late connection was published after Drop");
+                }
+                finally{ChromeTools.BeforePublishForTest=null;}
+                Must(Ok(await Tool(run,"chrome_tabs",new{})),"next connection after revoked attempt");
+            });
             await End(run);
             await Step("A13 at the end of the run own tabs stay open and are counted in the log",async()=>
             {

@@ -13,6 +13,7 @@ foreach ($badToken in @('', 'short')) {
   $refused = Start-Process ./publish/ScreenAgent.exe -ArgumentList @('--computer-serve', $port) -PassThru -NoNewWindow -RedirectStandardError artifacts/desktop/serve-refused.log
   if (!$refused.WaitForExit(5000)) { $refused.Kill($true); throw 'server started without a strong token' }
   if ($refused.ExitCode -eq 0) { throw 'missing/short token returned success' }
+  if (!(Get-Content artifacts/desktop/serve-refused.log -Raw).Contains('SA_SERVE_TOKEN')) { throw 'missing clear token error' }
 }
 $env:SA_SERVE_TOKEN = 'desktop-ci-local-token' 
 try {

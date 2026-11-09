@@ -25,6 +25,8 @@ public static class ChromeUiLane
                 if(Environment.TickCount64>=end)throw new TimeoutException("Chrome UI Automation antwortet nicht.");
                 Thread.Sleep(25);
             }
+            if(stopped())throw new OperationCanceledException("run stopped");
+            if(Environment.TickCount64>=end)throw new TimeoutException("Chrome UI Automation antwortet nicht.");
             return task.GetAwaiter().GetResult();
         }
         finally{Interlocked.Exchange(ref revoked,1);}
