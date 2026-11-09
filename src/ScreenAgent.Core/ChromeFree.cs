@@ -25,6 +25,7 @@ public sealed class CdpSocket:IDisposable
     public static async Task<CdpSocket> Connect(Uri uri,Func<bool> stopped,Action<string,Dictionary<string,object?>> log,CancellationToken ct)
     {
         var s=new CdpSocket(stopped,log);
+        s.ws.Options.Proxy=null;   // loopback: without this the first connect waits about a second for the system's proxy auto-detection
         try{await s.ws.ConnectAsync(uri,ct);}
         catch{s.Dispose();throw;}
         _=Task.Run(s.ReadLoop);
@@ -140,7 +141,7 @@ public sealed class ChromeFree:IDisposable
     readonly Action<string,Dictionary<string,object?>> log;
     readonly ConcurrentDictionary<string,string> sessions=new(StringComparer.Ordinal);       // targetId -> sessionId
     readonly ConcurrentDictionary<string,bool> pageEnabled=new(StringComparer.Ordinal);    // targetId -> Page.enable sent (dialog events)
-    readonly ConcurrentDictionary<string,int> worlds=new(StringComparer.Ordinal);            // targetId -> isolated world context
+    readonly ConcurrentDictionary<string,(string Loader,int Id)> worlds=new(StringComparer.Ordinal);   // targetId -> isolated world context of the document with that loader id
     readonly Dictionary<string,(int Gen,int Base,int Count)> snaps=new(StringComparer.Ordinal);   // the one live snapshot per tab
     readonly Dictionary<string,double> shotFactor=new(StringComparer.Ordinal);               // picture pixels per CSS pixel at scale 1, measured
     readonly ConcurrentQueue<string> dialogs=new();
@@ -221,11 +222,13 @@ public sealed class ChromeFree:IDisposable
     }
     async Task<int> World(string tab,CancellationToken ct)
     {
-        if(worlds.TryGetValue(tab,out int w))return w;
-        var ft=await On(tab,"Page.getFrameTree",null,ct,4000);
-        string frame=ft.GetProperty("frameTree").GetProperty("frame").GetProperty("id").GetString()!;
+        // The world is only trusted for the very document it was made in (the main frame's loader id is read each time): context ids are small numbers per renderer process, and after
+        // a navigation into another process a remembered id can be the id of a live context of ANOTHER frame (seen on the Windows runner: the snapshot came from an iframe).
+        var ft=await On(tab,"Page.getFrameTree",null,ct,4000);var f=ft.GetProperty("frameTree").GetProperty("frame");
+        string frame=S(f,"id"),loader=S(f,"loaderId");
+        if(worlds.TryGetValue(tab,out var w)&&w.Loader==loader)return w.Id;
         var r=await On(tab,"Page.createIsolatedWorld",new{frameId=frame,worldName="screen-agent"},ct,4000);
-        w=r.GetProperty("executionContextId").GetInt32();worlds[tab]=w;return w;
+        int id=r.GetProperty("executionContextId").GetInt32();worlds[tab]=(loader,id);return id;
     }
     // One compiled function in the tab's isolated world, result by value.
     async Task<JsonElement> InWorld(string tab,string fn,object?[] args,CancellationToken ct,int timeoutMs=8000)
@@ -543,13 +546,15 @@ public sealed class ChromeFree:IDisposable
         // a link with target=_blank or window.open: say which tab appeared; it is the run's own when it came from an own tab
         await Sleep(120,ct);
         var info=await Targets(ct);
+        string see=tab;
         foreach(var t in info.Where(t=>!before.Contains(t.Id)))
         {
             if(state.Own.Contains(tab)&&t.Opener==tab)state.Own.Add(t.Id);
             sb.Append(" · neuer Tab ").Append(Name(t.Id)).Append(' ').Append(Cap(t.Url,120));
+            if(t.Opener==tab)see=t.Id;   // the new tab is in front now: it is the one to picture (picturing the old one would pull it back to the front)
         }
         string url=info.FirstOrDefault(t=>t.Id==tab).Url??"";
-        return new(true,sb.ToString(),Target:name,Domain:DomainOf(url),ObserveTab:tab);
+        return new(true,sb.ToString(),Target:name,Domain:DomainOf(url),ObserveTab:see);
     }
     static string Norm(string s)=>s.Replace("\r\n","\n").Replace('\r','\n').Replace(' ',' ').TrimEnd('\n');
     async Task<ChromeResult> FillTool(JsonElement a,CancellationToken ct)

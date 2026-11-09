@@ -9,6 +9,10 @@ internal sealed record UiScan(List<DialogNode> Nodes,List<AutomationElement> Ele
 internal static class ChromeUi
 {
     [DllImport("user32.dll")] static extern bool GetCursorPos(out Native.Point p);
+    [DllImport("user32.dll")] static extern uint GetDoubleClickTime();
+    // Chrome ignores a press on a dialog button that comes within the double-click time after the dialog appeared, and every press that follows another one within that time
+    // (its guard against unintended clicks; seen on the runner: an Invoke every 400 ms was ignored for 8 s). So: wait this long after a prompt is first seen, and between presses.
+    public static int PressGapMs=>(int)Math.Clamp(GetDoubleClickTime(),200,5000)+150;
     const int MaxNodes=1500,MaxDepth=30;
     static string Leaf(string image)=>image[(image.LastIndexOfAny(['\\','/'])+1)..];
     public static bool IsBrowser(string image)=>AllowPrompt.Browsers.Any(b=>Leaf(image).Equals(b,StringComparison.OrdinalIgnoreCase));
@@ -38,27 +42,30 @@ internal static class ChromeUi
     {
         var sw=Stopwatch.StartNew();var s=new UiScan([],[],[],0,0);int windows=0;
         var cache=new CacheRequest{AutomationElementMode=AutomationElementMode.Full,TreeScope=TreeScope.Element};
-        cache.Add(AutomationElement.ControlTypeProperty);cache.Add(AutomationElement.NameProperty);
+        cache.Add(AutomationElement.ControlTypeProperty);cache.Add(AutomationElement.NameProperty);cache.Add(AutomationElement.NativeWindowHandleProperty);
+        var all=Windows();var tops=all.Select(w=>(int)w.Hwnd).ToHashSet();
         using(cache.Activate())
         {
-            foreach(var (h,image,title) in Windows())
+            foreach(var (h,image,title) in all)
             {
                 if(titledOnly&&Array.IndexOf(AllowPrompt.Headings,title)<0)continue;
                 windows++;
-                try{Walk(AutomationElement.FromHandle(h),image,Path.GetFileNameWithoutExtension(image),h,-1,0,s);}
+                try{Walk(AutomationElement.FromHandle(h),image,Path.GetFileNameWithoutExtension(image),h,-1,0,s,tops);}
                 catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException or ArgumentException){ }   // the window closed while it was read: it has no prompt any more
             }
         }
         return s with{Windows=windows,Ms=sw.ElapsedMilliseconds};
     }
-    static void Walk(AutomationElement e,string image,string process,IntPtr hwnd,int parent,int depth,UiScan s)
+    static void Walk(AutomationElement e,string image,string process,IntPtr hwnd,int parent,int depth,UiScan s,HashSet<int> tops)
     {
         if(s.Nodes.Count>=MaxNodes||depth>MaxDepth)return;
         ControlType type=e.Cached.ControlType;string name=e.Cached.Name??"";
+        // A dialog is a top-level window of its own AND shows up again inside its browser window's tree: it is listed once, under its own window (else its button would be pressed twice).
+        if(depth>0&&e.Cached.NativeWindowHandle is int own&&own!=0&&own!=(int)hwnd&&tops.Contains(own))return;
         s.Nodes.Add(new(type.ProgrammaticName.Replace("ControlType.",""),name.Length>200?name[..200]:name,false,process,image,depth,parent));s.Elements.Add(e);s.Hwnds.Add(hwnd);
         int me=s.Nodes.Count-1;
         if(type==ControlType.Document)return;
-        foreach(AutomationElement k in e.FindAll(TreeScope.Children,Automation.ControlViewCondition))Walk(k,image,process,hwnd,me,depth+1,s);
+        foreach(AutomationElement k in e.FindAll(TreeScope.Children,Automation.ControlViewCondition))Walk(k,image,process,hwnd,me,depth+1,s,tops);
     }
     // InvokePattern first; a button without it gets one real click at its centre (the cursor goes back where it was). Returns how.
     public static string Press(AutomationElement el)
@@ -95,7 +102,7 @@ internal sealed class ChromeAllowClicker:IDisposable
     readonly string owner;
     readonly Action<string,Dictionary<string,object?>> log;
     readonly Thread thread;
-    readonly Dictionary<IntPtr,long> pressedAt=[];
+    readonly Dictionary<IntPtr,long> pressedAt=[],firstSeen=[];
     readonly long started=Environment.TickCount64;
     volatile bool stop;
     long hotUntil,lastFull,lastFullMs;
@@ -131,17 +138,25 @@ internal sealed class ChromeAllowClicker:IDisposable
         var scan=ChromeUi.Scan(titledOnly:!full);
         Interlocked.Increment(ref scans);
         if(full){lastFull=now;lastFullMs=scan.Ms;LastWindows=scan.Windows;LastNodes=scan.Nodes.Count;if(scan.Ms>MaxScanMs)MaxScanMs=scan.Ms;}
+        int gap=ChromeUi.PressGapMs;var done=new HashSet<string>();
         foreach(int b in AllowPrompt.Find(scan.Nodes,owner))
         {
             IntPtr hwnd=scan.Hwnds[b];
-            lock(pressedAt){if(pressedAt.TryGetValue(hwnd,out long at)&&now-at<700)continue;pressedAt[hwnd]=now;}   // a prompt that is still fading out is not pressed twice
-            Interlocked.Increment(ref prompts);
+            string id;try{id=string.Join(".",scan.Elements[b].GetRuntimeId());}catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException){continue;}   // the prompt closed while it was matched
+            if(!done.Add(id))continue;   // the same button reached by two paths
+            lock(pressedAt)
+            {
+                if(!firstSeen.TryGetValue(hwnd,out long seen)){firstSeen[hwnd]=now;Interlocked.Increment(ref prompts);continue;}   // seen now: pressed on a later pass, once Chrome accepts a press
+                if(now-seen<gap)continue;
+                if(pressedAt.TryGetValue(hwnd,out long at)&&now-at<gap+100)continue;
+                pressedAt[hwnd]=now;
+            }
             string how;
             try{how=ChromeUi.Press(scan.Elements[b]);}
             catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException){log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="press"});continue;}
             Interlocked.Increment(ref clicks);
             if(Record)LastTree=ChromeUi.Dump(scan,owner,b);
-            log("computer.chrome.allow",new(){["ms"]=Environment.TickCount64-started,["how"]=how,["scan_ms"]=scan.Ms});
+            log("computer.chrome.allow",new(){["ms"]=Environment.TickCount64-started,["how"]=how,["scan_ms"]=scan.Ms,["waited_ms"]=now-(firstSeen.TryGetValue(hwnd,out long fs)?fs:now)});
         }
     }
     public void Dispose(){stop=true;}

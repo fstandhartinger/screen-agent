@@ -82,6 +82,37 @@ public class AllowPromptTests
         var t=new List<DialogNode>{N("Window","x - Google Chrome",0,-1),N("Button","Allow remote debugging?",1,0),N("Button","Allow",1,0)};
         Assert.Empty(AllowPrompt.Find(t,Chrome));
     }
+    static string Root()
+    {
+        for(var d=new DirectoryInfo(AppContext.BaseDirectory);d is not null;d=d.Parent)if(Directory.Exists(Path.Combine(d.FullName,"testdata","chrome")))return d.FullName;
+        throw new DirectoryNotFoundException("testdata/chrome");
+    }
+    static (List<DialogNode> Nodes,string Owner,int Clicked) Load(string file)
+    {
+        using var doc=JsonDocument.Parse(File.ReadAllText(Path.Combine(Root(),"testdata","chrome",file)));
+        var root=doc.RootElement;
+        var nodes=root.GetProperty("nodes").EnumerateArray().Select(n=>new DialogNode(n.GetProperty("role").GetString()!,n.GetProperty("name").GetString()!,n.GetProperty("inDocument").GetBoolean(),n.GetProperty("process").GetString()!,n.GetProperty("image").GetString()!,n.GetProperty("depth").GetInt32(),n.GetProperty("parent").GetInt32())).ToList();
+        return (nodes,root.GetProperty("owner").GetString()??"",root.GetProperty("clicked").GetInt32());
+    }
+    // The REAL prompt of Chrome 156 on the Windows runner (run 42704040240), read while it was open, before the scan left out mirrored windows: the dialog is a top-level window named like
+    // its heading (Pane > Window > ... Text heading, Buttons "Turn off in settings" / "Allow" / "Cancel") and the same dialog shows up again inside the browser window's tree.
+    // Three or six heading nodes, not one: the shape the old matcher called "several".
+    [Theory,InlineData("prompt-mirrored-en.json","Allow","Cancel"),InlineData("prompt-mirrored-de.json","Zulassen","Abbrechen")]
+    public void TheRealPromptOfChrome156IsMatched(string file,string allow,string cancel)
+    {
+        var (nodes,_,_)=Load(file);
+        Assert.Equal("several",AllowDialog.Find(nodes,Chrome).Reason);
+        var hits=AllowPrompt.Find(nodes,Chrome);
+        Assert.Equal(2,hits.Count);   // the one button, reached through the dialog's own window and through the browser window (the clicker presses a button once, by its runtime id)
+        Assert.All(hits,i=>{Assert.Equal("Button",nodes[i].Role);Assert.Equal(allow,nodes[i].Name);});
+        Assert.All(AllowPrompt.Find(nodes,Chrome,AllowPrompt.Cancel),i=>Assert.Equal(cancel,nodes[i].Name));
+        Assert.DoesNotContain(hits,i=>nodes[i].Name.Contains("settings")||nodes[i].Name.Contains("Einstellungen"));
+        Assert.Equal(2,AllowPrompt.Windows(nodes,Chrome).Count);
+        Assert.Empty(AllowPrompt.Find(nodes,@"C:\Other\chrome.exe"));
+        // the dialog's own window alone (what the scan lists since the mirror is left out): exactly one button
+        int end=nodes.FindIndex(1,n=>n.Parent==-1);
+        Assert.Single(AllowPrompt.Find(nodes.Take(end).ToList(),Chrome));
+    }
 }
 public class ChromeFreeLogicTests
 {
