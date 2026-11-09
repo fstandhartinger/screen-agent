@@ -23,10 +23,10 @@ internal sealed class DesktopShell(FreeHost host)
         void Add(string s){lock(sync){tail.Append(s);if(tail.Length>12000){int cut=tail.Length-12000;tail.Remove(0,cut);removed+=cut;}}}
         public override string ToString(){lock(sync)return DesktopText.TailMarker(removed)+tail;}
     }
-    (int Exit,long Ms,string Out,string Error) Execute(string exe,IEnumerable<string> args,int seconds,string cwd,string? stdin=null)
+    (int Exit,long Ms,string Out,string Error) Execute(string exe,IEnumerable<string> args,int seconds,string cwd,string? stdin=null,string? rawArguments=null)
     {
         host.ThrowIfStopped();var start=new ProcessStartInfo(exe){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,RedirectStandardOutput=true,RedirectStandardError=true,RedirectStandardInput=true,StandardInputEncoding=new UTF8Encoding(false),WorkingDirectory=cwd};
-        foreach(var arg in args)start.ArgumentList.Add(arg);
+        if(rawArguments is not null)start.Arguments=rawArguments;else foreach(var arg in args)start.ArgumentList.Add(arg);
         using var process=new Process{StartInfo=start};var sw=Stopwatch.StartNew();process.Start();var stdout=new TailBuffer();var stderr=new TailBuffer();var output=stdout.Read(process.StandardOutput.BaseStream);var error=stderr.Read(process.StandardError.BaseStream);
         var writer=Task.Run(async()=>{try{if(stdin is not null)await process.StandardInput.WriteAsync(stdin);process.StandardInput.Close();}catch(IOException){ /* The child closed stdin early; its exit/stderr are returned. */ }});
         try
@@ -55,7 +55,7 @@ internal sealed class DesktopShell(FreeHost host)
             (int Exit,long Ms,string Out,string Error) result;
             // Windows PowerShell 5 decodes redirected stdin in the OEM code page. Keep the transport UTF-8/ASCII and decode the UTF-8 script explicitly.
             if(tool=="run_powershell")result=Execute("powershell.exe",["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-Command","-"],seconds,cwd,"[Console]::OutputEncoding=[Text.Encoding]::UTF8;\n& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+Convert.ToBase64String(Encoding.UTF8.GetBytes(command))+"'))))\n");
-            else if(tool=="run_cmd")result=Execute("cmd.exe",["/d","/s","/c",command],seconds,cwd);
+            else if(tool=="run_cmd")result=Execute("cmd.exe",[],seconds,cwd,rawArguments:"/d /s /c \""+command+"\"");
             else if(tool=="run_wsl"||tool=="run_python"&&(FreeArgs.Str(args,"where")=="wsl"||Find("py.exe") is null&&Find("python.exe") is null))
             {
                 string? wsl=Find("wsl.exe");if(wsl is null)return FreeResult.Fail("no-wsl","WSL ist nicht installiert; run_powershell verwenden.");
