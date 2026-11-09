@@ -1,0 +1,52 @@
+{
+  "synthetic": true,
+  "owner": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "clicked": -1,
+  "nodes": [
+    {
+      "role": "Window",
+      "name": "Allow remote debugging?",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 0,
+      "parent": -1
+    },
+    {
+      "role": "Document",
+      "name": "App page",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 1,
+      "parent": 0
+    },
+    {
+      "role": "Pane",
+      "name": "Notifications permission",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 1,
+      "parent": 0
+    },
+    {
+      "role": "Button",
+      "name": "Allow",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 2,
+      "parent": 2
+    },
+    {
+      "role": "Button",
+      "name": "Cancel",
+      "inDocument": false,
+      "process": "chrome",
+      "image": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "depth": 2,
+      "parent": 2
+    }
+  ]
+}

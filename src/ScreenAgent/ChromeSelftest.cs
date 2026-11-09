@@ -208,6 +208,20 @@ internal static class ChromeSelftest
                 var k=await Tool(run,"chrome_key",new{tab,key="ctrl+a x y"},"key_observe");Must(Ok(k),Brief(k));
                 Must(Text(await Tool(run,"chrome_eval",new{tab,js="document.getElementById('q').value"}))=="xy","ctrl+a then typing");
             });
+            await Step("A4b fill refuses disabled, readonly and lost focus; failed verification never submits",async()=>
+            {
+                await Tool(run,"chrome_eval",new{tab,js="document.body.innerHTML='<input id=other aria-label=Other><input id=blocked aria-label=Blocked disabled><input id=ro aria-label=Readonly readonly><input id=blur aria-label=Blur><input id=reject aria-label=Reject><input id=pw aria-label=Password type=password>'; window.submits=0;document.addEventListener('keydown',e=>{if(e.key===\"Enter\")submits++});document.getElementById('blur').addEventListener('focus',()=>document.getElementById('other').focus());document.getElementById('reject').addEventListener('input',e=>{e.target.value=\"rejected\"});document.getElementById('other').focus();true"});
+                string form=Text(await Tool(run,"chrome_snapshot",new{tab}));
+                foreach(var name in new[]{"Blocked","Readonly","Blur","Reject"})
+                {
+                    var r=await Tool(run,"chrome_fill",new{@ref=Ref(form,"textbox",name),text="test-value",enter=true,observe=false});
+                    Must(!Ok(r)&&Rule(r)==(name=="Blur"?"no-focus":name=="Reject"?"verify-failed":"not-editable"),name+": "+Brief(r));
+                }
+                Must(Text(await Tool(run,"chrome_eval",new{tab,js="document.getElementById('other').value+'|'+submits"}))=="|0","unexpected text or Enter in another field");
+                var pw=await Tool(run,"chrome_fill",new{@ref=Ref(form,"textbox","Password"),text="sample-password",observe=false});
+                Must(Ok(pw),"password fill in unrestricted mode: "+Brief(pw));
+                Must(Text(await Tool(run,"chrome_eval",new{tab,js="document.getElementById('pw').value.length"}))=="15","password length");
+            });
             await Step("A5 chrome_eval: expression, function body with return/await, error as text, timeout",async()=>
             {
                 Must(Text(await Tool(run,"chrome_eval",new{tab,js="1+2"}))=="3","expression");
@@ -322,6 +336,19 @@ internal static class ChromeSelftest
                 Must(Ok(r)&&LogCount("computer.chrome.connected")==connects+1&&LogCount("computer.chrome.dropped")>=1,Brief(r)+" connects "+LogCount("computer.chrome.connected"));
                 Must(Regex.IsMatch(Text(r),@"\["+tab+@"\] (aktiv )?eigen "),"the own tab is still known as own after the reconnect: "+Text(r));
             });
+            await Step("A12b an ended connection attempt cannot publish its late socket",async()=>
+            {
+                var tools=ChromeTools.Current!;tools.DropSocketForTest();
+                int before=LogCount("computer.chrome.connected");bool revoked=false;
+                ChromeTools.BeforePublishForTest=()=>{revoked=true;tools.EndConnectionForTest();};
+                try
+                {
+                    var r=await Tool(run,"chrome_tabs",new{});
+                    Must(revoked&&!Ok(r)&&!tools.ConnectedForTest&&LogCount("computer.chrome.connected")==before,"revoke="+revoked+", connected="+tools.ConnectedForTest+", logs="+(LogCount("computer.chrome.connected")-before)+", result="+Brief(r));
+                }
+                finally{ChromeTools.BeforePublishForTest=null;}
+                Must(Ok(await Tool(run,"chrome_tabs",new{})),"next connection after revoked attempt");
+            });
             await End(run);
             await Step("A13 at the end of the run own tabs stay open and are counted in the log",async()=>
             {
@@ -374,6 +401,50 @@ internal static class ChromeSelftest
                 Must(!Ok(again)&&Rule(again)=="debugging-off"&&sw.ElapsedMilliseconds<1000,Brief(again)+" after "+sw.ElapsedMilliseconds+" ms");
                 Must(!ChromeUi.Windows().Any(w=>w.Title.StartsWith("Inspect with Chrome",StringComparison.Ordinal)),"our chrome://inspect tab was left open");
                 await End(r3);
+            });
+            await Step("D4 native setup aborts if the user changes tabs immediately before Enter",async()=>
+            {
+                bool injected=false;
+                var host=new FreeHost{Policy=new ComputerPolicy(new PrivacyPolicy()){Unrestricted=true},Stopped=()=>false,Log=(t,d)=>Logs.Enqueue((t,JsonSerializer.Serialize(d))),Chrome=new ChromeCdp.ConnectOptions(profileA,true)};
+                ChromeEnable.BeforeInput=step=>
+                {
+                    if(step!="enter")return;injected=true;
+                    Native.Input V(ushort k,bool up)=>Native.Key(k,up,0,false,Native.Marker);
+                    Native.Send(V(0x11,false),V(0x10,false),V(0x09,false),V(0x09,true),V(0x10,true),V(0x11,true));Thread.Sleep(100);
+                };
+                try
+                {
+                    bool refused=false;
+                    try{ChromeEnable.Run(host,()=>true);}catch(InvalidOperationException e) when(e.Message=="tab-left"){refused=true;}
+                    Must(injected&&refused,"setup did not abort after selected tab changed");
+                    Desktop("setup-tab-race-aborted");
+                }
+                finally{ChromeEnable.BeforeInput=null;}
+                await Task.CompletedTask;
+            });
+            await Step("D5 native setup sends no Enter after another application takes foreground",async()=>
+            {
+                bool injected=false;int enters=0;Window? window=null;System.Windows.Controls.TextBox? box=null;IntPtr other=IntPtr.Zero;
+                app.Dispatcher.Invoke(()=>
+                {
+                    box=new System.Windows.Controls.TextBox{Text="unchanged"};
+                    window=new Window{Title="Setup focus fixture",Width=360,Height=160,Content=box};
+                    window.PreviewKeyDown+=(_,e)=>{if(e.Key==System.Windows.Input.Key.Enter)enters++;};
+                    window.Show();box.Focus();other=new System.Windows.Interop.WindowInteropHelper(window).Handle;
+                });
+                var host=new FreeHost{Policy=new ComputerPolicy(new PrivacyPolicy()){Unrestricted=true},Stopped=()=>false,Log=(t,d)=>Logs.Enqueue((t,JsonSerializer.Serialize(d))),Chrome=new ChromeCdp.ConnectOptions(profileA,true)};
+                ChromeEnable.BeforeInput=step=>{if(step!="enter")return;injected=true;app.Dispatcher.Invoke(()=>window!.Activate());Native.SetForegroundWindow(other);Thread.Sleep(100);};
+                try
+                {
+                    bool refused=false;
+                    try{ChromeEnable.Run(host,()=>true);}catch(InvalidOperationException e) when(e.Message=="focus-left"){refused=true;}
+                    Must(injected&&refused,"setup did not abort after foreground changed");
+                    app.Dispatcher.Invoke(()=>Must(box!.Text=="unchanged"&&enters==0,"foreign application received input"));
+                    Must(UiaDriver.Root(Native.GetForegroundWindow())==other,"setup stole foreground back after user changed it");
+                    Desktop("setup-foreground-race-aborted");
+                }
+                finally{ChromeEnable.BeforeInput=null;app.Dispatcher.Invoke(()=>window?.Close());}
+                await Task.CompletedTask;
             });
             Kill(chromeA);chromeA=null;
             await WaitFor(()=>!ChromeUi.Running(),10000);

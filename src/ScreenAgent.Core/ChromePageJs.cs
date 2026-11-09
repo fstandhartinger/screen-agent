@@ -9,7 +9,8 @@ public static class ChromePageJs
     // Visible = not display:none / visibility:hidden / opacity:0 / aria-hidden, non-zero box. Scope (unless all): the viewport plus 50 % above and below.
     public const string Snapshot=@"function(gen,base,all){
 const S=globalThis.__sa={g:gen,m:new Map()};
-const items=[];let n=base,cut=false;const MAX=4000;
+const items=[];let n=base,cut=false,reason='',visited=0;const MAX=4000,started=performance.now();
+const budget=(visit=false)=>{if(cut)return false;if(visit&&++visited>20000){cut=true;reason='nodes';}else if(performance.now()-started>=1500){cut=true;reason='time';}return !cut;};
 const vw=innerWidth,vh=innerHeight,top=all?-1e9:-vh*0.5,bot=all?1e9:vh*1.5;
 const CV={opacityProperty:true,visibilityProperty:true,checkOpacity:true,checkVisibilityCSS:true};
 const ROLES=new Set(['button','link','tab','menuitem','menuitemcheckbox','menuitemradio','option','checkbox','radio','switch','textbox','searchbox','combobox','slider','treeitem']);
@@ -17,7 +18,7 @@ const NATIVE='a[href],button,input:not([type=hidden]),textarea,select,summary,[r
 const SKIP=new Set(['script','style','noscript','template','head','meta','link','title','datalist','option','optgroup']);
 const HEAD=new Set(['h1','h2','h3','h4','h5','h6']);
 let buf='';
-const push=x=>{if(items.length>=MAX){cut=true;return;}items.push(x);};
+const push=x=>{if(items.length>=MAX){cut=true;reason='items';return;}items.push(x);};
 const flush=pre=>{const t=buf.replace(/\s+/g,' ').trim();buf='';if(t)push((pre||'')+(t.length>160?t.slice(0,159)+'…':t));};
 const sq=(s,m)=>{s=String(s||'').replace(/\s+/g,' ').trim();return s.length>m?s.slice(0,m-1)+'…':s;};
 const inScope=(r,ox,oy)=>r.bottom+oy>=top&&r.top+oy<=bot&&(all||(r.right+ox>=0&&r.left+ox<=vw));
@@ -25,8 +26,9 @@ const roleOf=(el,tag)=>{const r=el.getAttribute('role');if(r)return r;if(tag==='
  if(tag==='input'){const t=el.type;return t==='checkbox'?'checkbox':t==='radio'?'radio':(t==='submit'||t==='button'||t==='reset'||t==='image')?'button':t==='range'?'slider':t==='file'?'file':'textbox';}
  if(el.isContentEditable)return 'textbox';return 'clickable';};
 const editable=(el,tag,role)=>tag==='textarea'||tag==='select'||(tag==='input'&&!/^(checkbox|radio|submit|button|reset|image|file)$/.test(el.type))||el.isContentEditable||role==='textbox'||role==='searchbox'||role==='combobox';
-const ltxt=(lb,el)=>{let s='';const w=lb.ownerDocument.createTreeWalker(lb,4);for(let t=w.nextNode();t;t=w.nextNode()){if(!el.contains(t))s+=t.nodeValue+' ';}return s;};
+const ltxt=(lb,el)=>{let s='';const w=lb.ownerDocument.createTreeWalker(lb,4);for(let t=w.nextNode();t&&s.length<512&&budget(true);t=w.nextNode()){if(!el.contains(t))s+=t.nodeValue+' ';}return s;};
 const nameOf=(el,tag,ed,nested)=>{
+ if(!budget())return '';
  let s=el.getAttribute('aria-label')||'';
  if(!s){const lb=el.getAttribute('aria-labelledby');if(lb){const root=el.getRootNode();s=lb.split(/\s+/).map(i=>{const e=(root.getElementById&&root.getElementById(i))||el.ownerDocument.getElementById(i);return e?(e.innerText||e.textContent||''):'';}).join(' ');}}
  if(!s&&(tag==='input'||tag==='textarea'||tag==='select')){if(el.labels&&el.labels.length)s=ltxt(el.labels[0],el);if(!s)s=el.placeholder||'';if(!s&&tag==='input'&&/^(submit|button|reset)$/.test(el.type))s=el.value||'';if(!s)s=el.title||el.name||el.id||'';return sq(s,100);}
@@ -62,8 +64,8 @@ const interactive=(el,tag,cs)=>{
  return false;};
 const kids=el=>{if(el.shadowRoot)return el.shadowRoot.childNodes;if(el.localName==='slot'){const a=el.assignedNodes({flatten:true});if(a.length)return a;}return el.childNodes;};
 const rg=document.createRange();
-const walk=(el,ox,oy,shownUp)=>{
- if(cut)return;
+const walk=function*(el,ox,oy,shownUp){
+ if(!budget(true))return;
  const tag=el.localName;
  if(SKIP.has(tag))return;
  if(el.getAttribute('aria-hidden')==='true')return;
@@ -87,7 +89,7 @@ const walk=(el,ox,oy,shownUp)=>{
  if(tag==='iframe'||tag==='frame'){
   flush();const r=el.getBoundingClientRect();if(!shown||r.width<=0||r.height<=0||!inScope(r,ox,oy))return;
   let d=null;try{d=el.contentDocument;}catch(e){/* the page forbids or lacks it: the step is skipped, the caller reads the outcome */}
-  if(d&&d.body){push('[iframe '+sq(el.title||el.name||'',40)+']');walk(d.body,ox+r.left+el.clientLeft,oy+r.top+el.clientTop,true);flush();push('[/iframe]');}
+  if(d&&d.body){push('[iframe '+sq(el.title||el.name||'',40)+']');yield walk(d.body,ox+r.left+el.clientLeft,oy+r.top+el.clientTop,true);flush();push('[/iframe]');}
   else{let h='';try{h=new URL(el.src,el.ownerDocument.baseURI).host;}catch(e){/* the page forbids or lacks it: the step is skipped, the caller reads the outcome */}push('[iframe fremder Herkunft'+(h?' '+h:'')+': Inhalt nicht enthalten, mit screenshot und click bedienen]');}
   return;}
  const inter=interactive(el,tag,cs);
@@ -103,18 +105,26 @@ const walk=(el,ox,oy,shownUp)=>{
  for(const c of kids(el)){
   if(cut)break;
   if(c.nodeType===3){
+   if(!budget(true))break;
    if(!shown)continue;const t=c.nodeValue;if(!t||!/\S/.test(t))continue;
    rg.selectNodeContents(c);const r=rg.getBoundingClientRect();
    if((r.width>0||r.height>0)&&inScope(r,ox,oy))buf+=t;
-  }else if(c.nodeType===1)walk(c,ox,oy,shown);
+  }else if(c.nodeType===1)yield walk(c,ox,oy,shown);
+  else if(!budget(true))break;
  }
  if(block)flush(head);
 };
 const rootEl=document.body||document.documentElement;
-if(rootEl)walk(rootEl,0,0,true);
+if(rootEl){
+ const stack=[walk(rootEl,0,0,true)];
+ while(stack.length&&budget()){
+  const step=stack[stack.length-1].next();
+  if(step.done)stack.pop();else if(stack.length>=200){cut=true;reason='depth';break;}else stack.push(step.value);
+ }
+}
 flush();
 const de=document.documentElement;const sh=Math.max(de?de.scrollHeight:0,document.body?document.body.scrollHeight:0);
-return {g:gen,n:n-base,title:document.title,url:location.href,vw:vw,vh:vh,sy:Math.round(scrollY),sm:Math.max(0,Math.round(sh-vh)),items:items,cut:cut};
+return {g:gen,n:n-base,title:document.title,url:location.href,vw:vw,vh:vh,sy:Math.round(scrollY),sm:Math.max(0,Math.round(sh-vh)),items:items,cut:cut,reason:reason,visited:visited};
 }";
     // (n, g, mode) -> {x,y,how,kind,dis,name}. mode "click": scroll to the centre of the viewport, hit test, and when the element cannot be hit by the mouse: element.click() (how "js").
     // mode "fill": the same, but the fallback is focus() (how "focus"). mode "peek": no scrolling, no fallback. x,y are CSS pixels of the tab's viewport (frame offsets added).
@@ -123,16 +133,19 @@ const S=globalThis.__sa;if(!S||S.g!==g)return {e:'stale'};const el=S.m.get(n);if
 if(mode!=='peek'&&el.scrollIntoView)el.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
 const tag=el.localName;
 const kind=tag==='select'?'select':tag==='textarea'?'textarea':tag==='input'?'input':el.isContentEditable?'ce':'other';
-const out={kind:kind,type:String(el.type||''),dis:el.disabled===true||el.getAttribute('aria-disabled')==='true',name:String(el.getAttribute('aria-label')||(el.labels&&el.labels.length&&kind!=='other'?Array.from(el.labels[0].childNodes).filter(c=>c.nodeType===3).map(c=>c.nodeValue).join(' ').trim()||el.labels[0].innerText:'')||(kind==='other'?el.innerText||el.value:'')||el.placeholder||el.title||el.name||el.id||tag).replace(/\s+/g,' ').trim().slice(0,60)};
+const editable=!el.disabled&&!el.readOnly&&el.getAttribute('aria-disabled')!=='true'&&(kind==='select'||kind==='textarea'||kind==='ce'||(kind==='input'&&!/^(checkbox|radio|submit|button|reset|image|file|hidden)$/.test(el.type)));
+const out={editable:editable,kind:kind,type:String(el.type||''),dis:el.disabled===true||el.getAttribute('aria-disabled')==='true',name:String(el.getAttribute('aria-label')||(el.labels&&el.labels.length&&kind!=='other'?Array.from(el.labels[0].childNodes).filter(c=>c.nodeType===3).map(c=>c.nodeValue).join(' ').trim()||el.labels[0].innerText:'')||(kind==='other'?el.innerText||el.value:'')||el.placeholder||el.title||el.name||el.id||tag).replace(/\s+/g,' ').trim().slice(0,60)};
+if(mode==='fill'&&!editable){out.how='none';return out;}
 let ox=0,oy=0,w=el.ownerDocument.defaultView,inView=true;
 while(w&&w.frameElement){const f=w.frameElement;const r=f.getBoundingClientRect();const c=f.ownerDocument.defaultView.getComputedStyle(f);ox+=r.left+f.clientLeft+(parseFloat(c.paddingLeft)||0);oy+=r.top+f.clientTop+(parseFloat(c.paddingTop)||0);w=f.ownerDocument.defaultView;}
 const win=el.ownerDocument.defaultView;const topWin=w||win;
 const inside=h=>{for(let i=0;h&&i<400;i++){if(h===el)return true;h=h.parentNode||h.host;}return false;};
 const hit=(x,y)=>{if(x<0||y<0||x>=win.innerWidth||y>=win.innerHeight)return false;const root=el.getRootNode();const h=(root.elementFromPoint?root:el.ownerDocument).elementFromPoint(x,y);if(!h)return false;if(inside(h))return true;
  if(h.localName==='label'&&h.control===el)return true;return false;};
+const parentHit=(x,y)=>{let w=win;while(w&&w.frameElement){const f=w.frameElement,r=f.getBoundingClientRect(),p=f.ownerDocument.defaultView,c=p.getComputedStyle(f);x+=r.left+f.clientLeft+(parseFloat(c.paddingLeft)||0);y+=r.top+f.clientTop+(parseFloat(c.paddingTop)||0);const h=f.ownerDocument.elementFromPoint(x,y);if(h!==f&&!f.contains(h))return false;w=p;}return true;};
 const pts=[];const b=el.getBoundingClientRect();if(b.width>0&&b.height>0)pts.push([b.left+b.width/2,b.top+b.height/2]);
 for(const r of el.getClientRects()){if(r.width>0&&r.height>0){pts.push([r.left+r.width/2,r.top+r.height/2]);break;}}
-for(const p of pts){const tx=p[0]+ox,ty=p[1]+oy;if(hit(p[0],p[1])&&tx>=0&&ty>=0&&tx<topWin.innerWidth&&ty<topWin.innerHeight){out.x=tx;out.y=ty;out.how='mouse';return out;}}
+for(const p of pts){const tx=p[0]+ox,ty=p[1]+oy;if(hit(p[0],p[1])&&parentHit(p[0],p[1])&&tx>=0&&ty>=0&&tx<topWin.innerWidth&&ty<topWin.innerHeight){out.x=tx;out.y=ty;out.how='mouse';return out;}}
 if(mode==='click'){el.click();out.how='js';}
 else if(mode==='fill'){try{el.focus({preventScroll:true});}catch(e){/* the page forbids or lacks it: the step is skipped, the caller reads the outcome */}out.how='focus';}
 else out.how='none';
@@ -142,10 +155,16 @@ return out;}";
 const S=globalThis.__sa;if(!S||S.g!==g)return {e:'stale'};const el=S.m.get(n);if(!el||!el.isConnected)return {e:'stale'};
 const act=()=>{let a=el.ownerDocument.activeElement;while(a&&a.shadowRoot&&a.shadowRoot.activeElement)a=a.shadowRoot.activeElement;return a;};
 if(act()!==el){try{el.focus({preventScroll:true});}catch(e){/* the page forbids or lacks it: the step is skipped, the caller reads the outcome */}}
+if(el.disabled||el.readOnly||el.getAttribute('aria-disabled')==='true'||act()!==el)return {a:false,len:0};
 let len=0;
 if(el.isContentEditable){len=(el.innerText||'').replace(/\n$/,'').length;const d=el.ownerDocument;const r=d.createRange();r.selectNodeContents(el);if(!clear)r.collapse(false);const s=d.defaultView.getSelection();s.removeAllRanges();s.addRange(r);}
 else if('value' in el){len=String(el.value).length;try{if(clear)el.select();else el.setSelectionRange(len,len);}catch(e){/* the page forbids or lacks it: the step is skipped, the caller reads the outcome */}}
 const a=act();return {a:a===el||(!!a&&el.contains(a)),len:len};}";
+    public const string FocusProof=@"function(n,g){
+const S=globalThis.__sa;if(!S||S.g!==g)return {a:false};const el=S.m.get(n);if(!el||!el.isConnected||el.disabled||el.readOnly)return {a:false};
+let a=el.ownerDocument.activeElement;while(a&&a.shadowRoot&&a.shadowRoot.activeElement)a=a.shadowRoot.activeElement;
+let w=el.ownerDocument.defaultView;while(w&&w.frameElement){const f=w.frameElement;if(f.ownerDocument.activeElement!==f)return {a:false};w=f.ownerDocument.defaultView;}
+return {a:a===el};}";
     // (n, g) -> {v: value (password: null), len, pw}
     public const string ReadValue=@"function(n,g){
 const S=globalThis.__sa;if(!S||S.g!==g)return {e:'stale'};const el=S.m.get(n);if(!el||!el.isConnected)return {e:'stale'};
@@ -156,7 +175,7 @@ return {v:pw?null:v.slice(0,60000),len:v.length,pw:pw};}";
     // Called from the isolated world, so a framework's own property on the element (React's value tracker lives in the page's world) is not in the way.
     public const string SetValue=@"function(n,g,text){
 const S=globalThis.__sa;if(!S||S.g!==g)return {e:'stale'};const el=S.m.get(n);if(!el||!el.isConnected)return {e:'stale'};
-if(!('value' in el))return {ok:false};
+if(!('value' in el)||el.disabled||el.readOnly||el.getAttribute('aria-disabled')==='true'||!['input','textarea'].includes(el.localName))return {ok:false};
 let p=Object.getPrototypeOf(el),d=null;for(let i=0;p&&i<8&&!d;i++){d=Object.getOwnPropertyDescriptor(p,'value');p=Object.getPrototypeOf(p);}
 try{if(d&&d.set)d.set.call(el,text);else el.value=text;}catch(e){/* a field that refuses a value: reported as not set */return {ok:false};}
 el.dispatchEvent(new Event('input',{bubbles:true,composed:true}));el.dispatchEvent(new Event('change',{bubbles:true}));
@@ -164,6 +183,7 @@ return {ok:true};}";
     // (n, g, text): a <select> by the option's label, then its value, then a label that contains the text.
     public const string SelectOption=@"function(n,g,text){
 const S=globalThis.__sa;if(!S||S.g!==g)return {e:'stale'};const el=S.m.get(n);if(!el||!el.isConnected)return {e:'stale'};
+if(el.disabled||el.getAttribute('aria-disabled')==='true')return {ok:false};
 const t=String(text).trim().toLowerCase();const os=Array.from(el.options||[]);
 const lab=o=>String(o.label||o.text||'').trim();
 let o=os.find(o=>lab(o).toLowerCase()===t)||os.find(o=>String(o.value).toLowerCase()===t)||os.find(o=>t&&lab(o).toLowerCase().includes(t));
