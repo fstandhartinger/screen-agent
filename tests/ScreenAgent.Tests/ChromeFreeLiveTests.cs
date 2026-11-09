@@ -174,6 +174,11 @@ public class ChromeFreeLiveTests(ITestOutputHelper output)
             await Do("scroll",new{tab,dy=2000});await Task.Delay(300);
             var lower=await Do("chrome_screenshot",new{tab});
             Assert.NotEqual(atTop.Shot!.Jpeg,lower.Shot!.Jpeg);
+            // the wheel of the desktop toolset on the tab frame: pixels, and 0,0 means the middle of the page
+            await Do("chrome_eval",new{tab,js="scrollTo(0,0)"});
+            Assert.Equal("gescrollt",await c.Mouse(lower.Shot.Tab,"wheel",0,0,0,0,"left",1,0,600,600,""));
+            await Task.Delay(400);
+            Assert.InRange(double.Parse((await Do("chrome_eval",new{tab,js="scrollY"})).Text,System.Globalization.CultureInfo.InvariantCulture),300,900);
             // ---- his tabs: a tab the run did not open is not closed without force
             var theirs=await socket.Call("Target.createTarget",new{url=pages.Url("/nav1"),background=true});
             string theirId=theirs.GetProperty("targetId").GetString()!;

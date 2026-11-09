@@ -649,7 +649,8 @@ public sealed class ChromeFree:IDisposable
         string url=(await Info(tab,ct)).Url;
         return new(true,"Gescrollt um "+dy+" px in "+Name(tab)+".",Target:"tab",Domain:DomainOf(url),ObserveTab:tab);
     }
-    // The desktop mouse tools on a `tab` frame: x,y are CSS pixels of the tab's viewport ("<tab>#full": of the whole page, the point is scrolled into view first). dy/dx of the wheel are notches (100 px each).
+    // The desktop mouse tools on a `tab` frame: x,y are CSS pixels of the tab's viewport ("<tab>#full": of the whole page, the point is scrolled into view first). dx/dy of the wheel are
+    // pixels (the desktop toolset sends 120 per notch for `wheel` and the wire pixels for `scroll`); a wheel at 0,0 means "no place given" and turns at the middle of the page.
     public async Task<string> Mouse(string tabName,string kind,double x,double y,double x2,double y2,string button,int count,double dx,double dy,int ms,string mods,CancellationToken ct=default)
     {
         bool page=tabName.EndsWith("#full",StringComparison.Ordinal);
@@ -668,7 +669,8 @@ public sealed class ChromeFree:IDisposable
             case "click":
                 await MouseClick(tab,x,y,button,count,m,ct);return count>=2?"Doppelklick":"geklickt";
             case "wheel":
-                await Wheel(tab,x,y,dx*100,dy*100,m,ct);return "gescrollt";
+                if(x==0&&y==0){var (vw,vh)=await Viewport(tab,ct);x=vw/2;y=vh/2;}
+                await Wheel(tab,x,y,dx,dy,m,ct);return "gescrollt";
             case "drag":
             {
                 int steps=Math.Max(12,Math.Clamp(ms,100,5000)/25);
