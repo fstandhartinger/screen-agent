@@ -68,9 +68,9 @@ internal static class ChromeUi
         foreach(AutomationElement k in e.FindAll(TreeScope.Children,Automation.ControlViewCondition))Walk(k,image,process,hwnd,me,depth+1,s,tops);
     }
     // InvokePattern first; a button without it gets one real click at its centre (the cursor goes back where it was). Returns how.
-    public static string Press(AutomationElement el,Func<bool>? authority=null,Action? dispatched=null)
+    public static string Press(AutomationElement el,Func<bool>? authority=null,Action<string>? dispatched=null)
         =>ChromeUiLane.Run(valid=>PressNow(el,()=>valid()&&(authority?.Invoke()??true),dispatched),()=>authority is not null&&!authority(),500);
-    internal static string PressNow(AutomationElement el,Func<bool> allowed,Action? dispatched=null)
+    internal static string PressNow(AutomationElement el,Func<bool> allowed,Action<string>? dispatched=null)
     {
         void Check(){if(!allowed())throw new OperationCanceledException("prompt authority revoked");}
         Check();
@@ -79,13 +79,13 @@ internal static class ChromeUi
             Check();
             // Once Invoke enters a UIA provider Windows cannot recall it. The caller is bounded,
             // no fallback is issued on timeout, and the sole lane remains occupied until it returns.
-            dispatched?.Invoke();((InvokePattern)p).Invoke();return "invoke";
+            dispatched?.Invoke("invoke");Check();((InvokePattern)p).Invoke();return "invoke";
         }
         var r=el.Current.BoundingRectangle;
         if(r.IsEmpty||r.Width<2||r.Height<2)throw new InvalidOperationException("prompt button has no place on the screen");
         Check();GetCursorPos(out var was);
         Check();Native.SetCursorPos((int)(r.X+r.Width/2),(int)(r.Y+r.Height/2));
-        Check();dispatched?.Invoke();Native.Send(Native.Button(true),Native.Button(false));
+        Check();dispatched?.Invoke("mouse");Check();Native.Send(Native.Button(true),Native.Button(false));
         if(allowed())Native.SetCursorPos(was.X,was.Y);
         return "mouse";
     }
@@ -162,10 +162,18 @@ internal sealed class ChromeAllowClicker:IDisposable
                 if(pressedAt.TryGetValue(hwnd,out long at)&&now-at<gap+100)continue;
                 pressedAt[hwnd]=now;
             }
-            string how;
-            try{if(!Allowed())return;how=ChromeUi.Press(scan.Elements[b],Allowed,()=>{Interlocked.Increment(ref clicks);if(Record)LastTree=ChromeUi.Dump(scan,owner,b);});}
-            catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException){log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="press"});continue;}
-            log("computer.chrome.allow",new(){["ms"]=Environment.TickCount64-started,["how"]=how,["scan_ms"]=scan.Ms,["waited_ms"]=now-(firstSeen.TryGetValue(hwnd,out long fs)?fs:now)});
+            try
+            {
+                if(!Allowed())return;
+                ChromeUi.Press(scan.Elements[b],Allowed,how=>
+                {
+                    Interlocked.Increment(ref clicks);if(Record)LastTree=ChromeUi.Dump(scan,owner,b);
+                    // Receipt belongs to dispatch: Chrome may finish the handshake before Invoke returns.
+                    log("computer.chrome.allow",new(){["phase"]="dispatch",["ms"]=Environment.TickCount64-started,["how"]=how,["scan_ms"]=scan.Ms,["waited_ms"]=now-(firstSeen.TryGetValue(hwnd,out long fs)?fs:now)});
+                });
+            }
+            catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException){log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="press"});}
+
         }
     }
     public void Dispose(){Hot(0);stop=true;}
@@ -175,6 +183,7 @@ internal sealed class ChromeAllowClicker:IDisposable
 // UI Automation, wait for the port file, close that tab again (Ctrl+W, only while it is still the tab in front), and give the foreground back.
 internal static class ChromeEnable
 {
+    internal static Action<string>? BeforeInput; // Deterministic selftest race injection; never set by normal startup.
     public const string Url="chrome://inspect/#remote-debugging";
     const string PageTitle="Inspect with Chrome Developer Tools";
     static Native.Input V(ushort vk,bool up)=>Native.Key(vk,up,0,false,Native.Marker);
@@ -222,7 +231,7 @@ internal static class ChromeEnable
         if(pick.Hwnd==IntPtr.Zero)pick=browser.FirstOrDefault();
         if(pick.Hwnd==IntPtr.Zero)return (false,"no-window","");
         IntPtr hwnd=pick.Hwnd,before=UiaDriver.Root(Native.GetForegroundWindow());
-        var uia=new UiaDriver(host.Policy,host.Stopped);var seen=new List<string>();
+        var seen=new List<string>();
         var root=AutomationElement.FromHandle(hwnd);string? own=null,omnibox=null;string typed="";bool lost=false,navigated=false;
         void Check()
         {
@@ -250,17 +259,22 @@ internal static class ChromeEnable
         try
         {
             if(!UiaDriver.WaitModifiersUp(1500))return (false,"modifiers-held","");
-            if(!valid()||!uia.Focus(hwnd))return (false,"no-foreground","");
+            if(!valid())throw new OperationCanceledException("enable revoked");
+            if(Native.IsIconic(hwnd))Native.ShowWindow(hwnd,9);
+            Native.SetForegroundWindow(hwnd);
+            for(int i=0;i<8&&UiaDriver.Root(Native.GetForegroundWindow())!=hwnd;i++){if(!valid())throw new OperationCanceledException("enable revoked");Wait(host,25);}
+            if(UiaDriver.Root(Native.GetForegroundWindow())!=hwnd)return (false,"no-foreground","");
             var oldTabs=Tabs(root).Select(Id).ToHashSet();
-            Check();Chord(0x11,0x54);
+            BeforeInput?.Invoke("new-tab");Check();Chord(0x11,0x54);
             Wait(host,450);Check();
             var selected=Selected(root);
             if(selected is null||oldTabs.Contains(Id(selected)))return (false,"new-tab-unconfirmed","");
             own=Id(selected);
             if(!FocusedAddress(""))return (false,"no-omnibox","");
             // One bounded input chunk, after proof that our new tab's native omnibox is focused and empty.
-            Check();TypeText(Url);typed=Url;
+            BeforeInput?.Invoke("type");if(!FocusedAddress(""))return (false,"omnibox-changed","");Check();TypeText(Url);typed=Url;
             Wait(host,150);
+            BeforeInput?.Invoke("enter");
             if(!FocusedAddress(Url))return (false,"url-unconfirmed","");
             Check();Native.Send(V(0x0d,false),V(0x0d,true));navigated=true;
             snap?.Invoke("enable-1-typed");
@@ -278,7 +292,7 @@ internal static class ChromeEnable
                 bool on=box.TryGetCurrentPattern(TogglePattern.Pattern,out var tp)&&((TogglePattern)tp).Current.ToggleState==ToggleState.On;
                 if(!on)
                 {
-                    if(!Page())return (false,"page-left","");Check();
+                    BeforeInput?.Invoke("toggle");if(!Page())return (false,"page-left","");Check();
                     if(tp is TogglePattern toggle)toggle.Toggle();
                     else ChromeUi.PressNow(box,()=>{Check();return valid();});
                 }
@@ -293,9 +307,9 @@ internal static class ChromeEnable
             {
                 if(valid()&&!host.Stopped()&&!lost&&UiaDriver.Root(Native.GetForegroundWindow())==hwnd)
                 {
-                    if(own is not null&&navigated&&Page()){Check();Chord(0x11,0x57);}
+                    if(own is not null&&navigated&&Page()){BeforeInput?.Invoke("close");if(Page()){Check();Chord(0x11,0x57);}}
                     else if(own is not null&&!navigated&&typed.Length>0&&FocusedAddress(typed)){Check();Native.Send(V(0x1b,false),V(0x1b,true));}
-                    if(valid()&&!host.Stopped()&&!lost&&UiaDriver.Root(Native.GetForegroundWindow())==hwnd&&before!=IntPtr.Zero&&before!=hwnd)uia.Focus(before);
+                    if(valid()&&!host.Stopped()&&!lost&&UiaDriver.Root(Native.GetForegroundWindow())==hwnd&&before!=IntPtr.Zero&&before!=hwnd)Native.SetForegroundWindow(before);
                 }
             }
             catch(Exception e){host.Log("computer.chrome.enable_cleanup",new(){["type"]=e.GetType().Name});}

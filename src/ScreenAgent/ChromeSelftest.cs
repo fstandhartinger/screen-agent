@@ -389,6 +389,50 @@ internal static class ChromeSelftest
                 Must(!ChromeUi.Windows().Any(w=>w.Title.StartsWith("Inspect with Chrome",StringComparison.Ordinal)),"our chrome://inspect tab was left open");
                 await End(r3);
             });
+            await Step("D4 native setup aborts if the user changes tabs immediately before Enter",async()=>
+            {
+                bool injected=false;
+                var host=new FreeHost{Policy=new ComputerPolicy(new PrivacyPolicy()){Unrestricted=true},Stopped=()=>false,Log=(t,d)=>Logs.Enqueue((t,JsonSerializer.Serialize(d))),Chrome=new ChromeCdp.ConnectOptions(profileA,true)};
+                ChromeEnable.BeforeInput=step=>
+                {
+                    if(step!="enter")return;injected=true;
+                    Native.Input V(ushort k,bool up)=>Native.Key(k,up,0,false,Native.Marker);
+                    Native.Send(V(0x11,false),V(0x10,false),V(0x09,false),V(0x09,true),V(0x10,true),V(0x11,true));Thread.Sleep(100);
+                };
+                try
+                {
+                    bool refused=false;
+                    try{ChromeEnable.Run(host,()=>true);}catch(InvalidOperationException e) when(e.Message=="tab-left"){refused=true;}
+                    Must(injected&&refused,"setup did not abort after selected tab changed");
+                    Desktop("setup-tab-race-aborted");
+                }
+                finally{ChromeEnable.BeforeInput=null;}
+                await Task.CompletedTask;
+            });
+            await Step("D5 native setup sends no Enter after another application takes foreground",async()=>
+            {
+                bool injected=false;int enters=0;Window? window=null;System.Windows.Controls.TextBox? box=null;IntPtr other=IntPtr.Zero;
+                app.Dispatcher.Invoke(()=>
+                {
+                    box=new System.Windows.Controls.TextBox{Text="unchanged"};
+                    window=new Window{Title="Setup focus fixture",Width=360,Height=160,Content=box};
+                    window.PreviewKeyDown+=(_,e)=>{if(e.Key==System.Windows.Input.Key.Enter)enters++;};
+                    window.Show();box.Focus();other=new System.Windows.Interop.WindowInteropHelper(window).Handle;
+                });
+                var host=new FreeHost{Policy=new ComputerPolicy(new PrivacyPolicy()){Unrestricted=true},Stopped=()=>false,Log=(t,d)=>Logs.Enqueue((t,JsonSerializer.Serialize(d))),Chrome=new ChromeCdp.ConnectOptions(profileA,true)};
+                ChromeEnable.BeforeInput=step=>{if(step!="enter")return;injected=true;app.Dispatcher.Invoke(()=>window!.Activate());Native.SetForegroundWindow(other);Thread.Sleep(100);};
+                try
+                {
+                    bool refused=false;
+                    try{ChromeEnable.Run(host,()=>true);}catch(InvalidOperationException e) when(e.Message=="focus-left"){refused=true;}
+                    Must(injected&&refused,"setup did not abort after foreground changed");
+                    app.Dispatcher.Invoke(()=>Must(box!.Text=="unchanged"&&enters==0,"foreign application received input"));
+                    Must(UiaDriver.Root(Native.GetForegroundWindow())==other,"setup stole foreground back after user changed it");
+                    Desktop("setup-foreground-race-aborted");
+                }
+                finally{ChromeEnable.BeforeInput=null;app.Dispatcher.Invoke(()=>window?.Close());}
+                await Task.CompletedTask;
+            });
             Kill(chromeA);chromeA=null;
             await WaitFor(()=>!ChromeUi.Running(),10000);
             // ===== B, C: the real flow =====

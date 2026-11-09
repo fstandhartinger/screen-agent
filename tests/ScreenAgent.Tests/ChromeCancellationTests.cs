@@ -59,11 +59,29 @@ public class ChromeCancellationTests
         finally{gate.Release();}
         await Task.Delay(50);Assert.False(p.Saw("Browser.getVersion"));
     }
+    sealed class StalledTransport:WebSocket
+    {
+        bool aborted;
+        public override WebSocketCloseStatus? CloseStatus=>null;
+        public override string? CloseStatusDescription=>null;
+        public override WebSocketState State=>aborted?WebSocketState.Aborted:WebSocketState.Open;
+        public override string? SubProtocol=>null;
+        public override void Abort()=>aborted=true;
+        public override void Dispose()=>aborted=true;
+        public override Task CloseAsync(WebSocketCloseStatus status,string? text,CancellationToken ct)=>Task.CompletedTask;
+        public override Task CloseOutputAsync(WebSocketCloseStatus status,string? text,CancellationToken ct)=>Task.CompletedTask;
+        public override Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> b,CancellationToken ct)=>throw new NotSupportedException();
+        public override async Task SendAsync(ArraySegment<byte> b,WebSocketMessageType type,bool end,CancellationToken ct)=>await Task.Delay(Timeout.Infinite,ct);
+    }
     [Fact] public async Task BackpressuredSendIsBoundedAndAbortsSocket()
     {
-        using var p=new Peer();await p.Start(read:false);var sw=Stopwatch.StartNew();
-        await Assert.ThrowsAsync<TimeoutException>(()=>p.Socket.Call("Input.insertText",new{text=new string('x',16*1024*1024)},timeoutMs:100));
-        Assert.True(sw.ElapsedMilliseconds<1500,$"send took {sw.ElapsedMilliseconds} ms");Assert.False(p.Socket.Open);
+        // Deterministic backpressure: loopback buffers differ across Windows/Linux and may absorb a whole large message.
+        using var transport=new StalledTransport();
+        using var socket=(CdpSocket)Activator.CreateInstance(typeof(CdpSocket),BindingFlags.Instance|BindingFlags.NonPublic,null,
+            new object[]{transport,(Func<bool>)(()=>false),(Action<string,Dictionary<string,object?>>)((_,_)=>{})},null)!;
+        var sw=Stopwatch.StartNew();
+        await Assert.ThrowsAsync<TimeoutException>(()=>socket.Call("Input.insertText",new{text="test"},timeoutMs:100));
+        Assert.True(sw.ElapsedMilliseconds<1000,$"send took {sw.ElapsedMilliseconds} ms");Assert.False(socket.Open);
     }
     static object Protocol(JsonElement q,bool editable=true,bool disabled=false,bool focus=true,bool stale=false)
     {

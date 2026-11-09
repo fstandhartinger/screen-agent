@@ -40,7 +40,8 @@ internal sealed class ChromeTools:IFreeToolset
         };
         host.TabShot=tab=>
         {
-            if(Ensure(out _,out _) is not {} c)return null;
+            // Desktop wait/auto-observe may run without the input gate: observation must never enable Chrome.
+            ChromeFree? c;lock(sync)c=conn;if(c is not {Open:true})return null;
             try{var s=c.Shot(tab.EndsWith("#full",StringComparison.Ordinal)?tab[..^5]:tab,false).GetAwaiter().GetResult();return (s.Jpeg,FrameOf(s));}
             catch(Exception e) when(e is TimeoutException or CdpError or ChromeToolFail){host.Log("computer.chrome.shot_failed",new(){["type"]=e.GetType().Name});return null;}
         };
@@ -183,7 +184,7 @@ internal sealed class ChromeTools:IFreeToolset
                 }
                 free=new ChromeFree(socket,attemptState,Stopped,host.Log);
                 try{free.Version(default,3000).GetAwaiter().GetResult();}
-                catch(Exception e) when(e is TimeoutException or CdpError){free.Dispose();throw new CdpError("no-answer",e.GetType().Name);}
+                catch(Exception e) when(e is TimeoutException or CdpError){ck?.Hot(0);throw new CdpError("no-answer",e.GetType().Name);}
                 ck?.Hot(0);
                 lock(sync)
                 {

@@ -10,7 +10,7 @@ public sealed class CdpError(string code,string message=""):Exception(message.Le
 public sealed class ChromeToolFail(string rule,string text,bool stale=false):Exception(text){public string Rule=>rule;public bool Stale=>stale;}
 public sealed class CdpSocket:IDisposable
 {
-    readonly ClientWebSocket ws=new();
+    readonly WebSocket ws;
     readonly CancellationTokenSource life=new();
     readonly Dictionary<int,TaskCompletionSource<JsonElement>> waiting=[];
     readonly SemaphoreSlim sending=new(1,1);
@@ -20,13 +20,14 @@ public sealed class CdpSocket:IDisposable
     // (method, sessionId, params) on the reader thread: a handler must not block and must not await a Call inline.
     public event Action<string,string?,JsonElement>? Event;
     public bool Open=>ws.State==WebSocketState.Open&&!life.IsCancellationRequested;
-    CdpSocket(Func<bool> stopped,Action<string,Dictionary<string,object?>> log){this.stopped=stopped;this.log=log;}
+    CdpSocket(Func<bool> stopped,Action<string,Dictionary<string,object?>> log):this(new ClientWebSocket(),stopped,log){}
+    CdpSocket(WebSocket transport,Func<bool> stopped,Action<string,Dictionary<string,object?>> log){ws=transport;this.stopped=stopped;this.log=log;}
     // The handshake only completes once Chrome's allow prompt was answered (default profile); the caller runs the allow clicker meanwhile and bounds the wait with `ct`.
     public static async Task<CdpSocket> Connect(Uri uri,Func<bool> stopped,Action<string,Dictionary<string,object?>> log,CancellationToken ct)
     {
         var s=new CdpSocket(stopped,log);
-        s.ws.Options.Proxy=null;   // loopback: without this the first connect waits about a second for the system's proxy auto-detection
-        try{await s.ws.ConnectAsync(uri,ct);}
+        var client=(ClientWebSocket)s.ws;client.Options.Proxy=null;   // loopback: without this the first connect waits about a second for the system's proxy auto-detection
+        try{await client.ConnectAsync(uri,ct);}
         catch{s.Dispose();throw;}
         _=Task.Run(s.ReadLoop);
         return s;
