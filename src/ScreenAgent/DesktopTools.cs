@@ -60,9 +60,10 @@ internal sealed class DesktopTools:IFreeToolset
     {
         if(FreeArgs.Bool(args,"observe")==false)return result;
         input.Wait(Math.Clamp(FreeArgs.Int(args,"settle_ms")??350,0,5000));
-        if(host.Frame.Kind==FrameKind.Tab&&host.TabShot is {} capture)
+        string? observedTab=FreeArgs.Str(args,"tab")??(host.Frame.Kind==FrameKind.Tab?host.Frame.Tab:null);
+        if(observedTab is not null&&host.TabShot is {} capture)
         {
-            var tab=capture(host.Frame.Tab!);if(tab is {} shot){host.Frame=shot.Frame;return result with{Jpeg=shot.Jpeg,Text=$"frame: tab {shot.Frame.Width}x{shot.Frame.Height}\n"+result.Text};}
+            var tab=capture(observedTab);if(tab is {} shot){host.Frame=shot.Frame;return result with{Jpeg=shot.Jpeg,Text=$"frame: tab {shot.Frame.Width}x{shot.Frame.Height}\n"+result.Text};}
             return result with{Text=result.Text+"\nTab-Bild nicht verfügbar; screenshot aufrufen."};
         }
         var screen=screens.Capture(default,true);return result with{Jpeg=screen.Jpeg,Text=screen.Text+"\n"+result.Text};

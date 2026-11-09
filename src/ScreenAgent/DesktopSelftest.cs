@@ -129,6 +129,16 @@ internal static class DesktopSelftest
                 var wsl=await Act("run_wsl",new{command="printf wsl",timeout_s=3},false);if(!Good(wsl)&&wsl.GetProperty("rule").GetString()=="no-wsl")checks.Add(new("i-wsl",true,0,"Keine WSL-Distribution auf Runner installiert","skipped"));else Require(Good(wsl)&&Text(wsl).Contains("wsl"),"WSL unerwarteter Fehler");
                 await Act("file_write",new{path=temp,content="Grüße 😀"});Require(Text(await Act("file_read",new{path=temp}))=="Grüße 😀","Datei-Roundtrip fehlgeschlagen");
             });
+            await CheckIt("m-paste-uia-refs",async()=>
+            {
+                await FocusFixture();var tree=Text(await Act("ui_tree",new{window=fw}));var edit=Reference(tree,"Edit","Testtext");
+                await Act("ui_tree",new{window=DesktopWindows.Ref(notepad)});await Act("ui_windows");
+                await Act("ui_type",new{@ref=edit,text="Änderung 😀",observe=false});Require(Text(await Act("ui_read",new{@ref=edit})).Contains("Änderung 😀"),"UIA-Text oder Referenzstabilität fehlt");
+                await Act("clipboard_write",new{text="ursprüngliche Zwischenablage"});Ui(()=>fixture.Edit.Focus());await Act("key",new{key="ctrl+a",observe=false});
+                await Act("type",new{text="Grüße 😀\nZeile zwei",observe=false});Require(Ui(()=>fixture.Edit.Text).Replace("\r\n","\n")=="Grüße 😀\nZeile zwei","Automatisches Einfügen fehlt");
+                Require(Text(await Act("clipboard_read"))=="ursprüngliche Zwischenablage","Zwischenablage nicht wiederhergestellt");
+                var ps=Text(await Act("run_powershell",new{command="Write-Output 'Grüße 😀'"}));Require(ps.Contains("Grüße 😀"),"PowerShell UTF-8: "+ps);
+            });
             await CheckIt("j-kill",async()=>
             {
                 await FocusFixture();Ui(()=>fixture.Edit.Focus());var typing=session.Act("type",new{text=new string('x',5000),paste=false,observe=false});await Task.Delay(120);var sw=Stopwatch.StartNew();session.Kill();var result=await typing;Require(sw.ElapsedMilliseconds<300,"Kill zu langsam");Require(result.GetProperty("code").GetString()=="killed","Kill-Code fehlt");Require(Good(await session.Start("Desktop weiter testen")),"Neustart fehlgeschlagen");
