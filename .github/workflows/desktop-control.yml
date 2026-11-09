@@ -1,7 +1,7 @@
 name: Desktop control
 on:
   push:
-    branches: [main, computer-control-v2]
+    branches: [main, computer-control-v2, 'fusion/**']
   pull_request:
   workflow_dispatch:
 permissions:
