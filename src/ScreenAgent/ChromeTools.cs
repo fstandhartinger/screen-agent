@@ -211,11 +211,19 @@ internal sealed class ChromeTools:IFreeToolset
         enableTried=true;enablePid=pid;
         var sw=Stopwatch.StartNew();
         bool Ready()=>ReadPort(dir) is {} p&&p.Port+p.Path!=stale;
-        (bool Ok,string Step,string Seen) r;
-        try{r=ChromeEnable.Run(host,Ready,EnableSnap,stopped);}
-        catch(OperationCanceledException){throw;}
-        catch(InvalidOperationException e) when(e.Message is "tab-left" or "focus-left"){r=(false,e.Message,"");} // The machine step is logged below without page text.
-        catch(Exception e){r=(false,"error:"+e.GetType().Name,"");}   // UI Automation or SendInput failed: reported as the step that failed, the model goes on with the desktop tools
+        (bool Ok,string Step,string Seen) r=default;
+        for(int attempt=1;attempt<=2;attempt++)
+        {
+            try{r=ChromeEnable.Run(host,Ready,EnableSnap,stopped);}
+            catch(OperationCanceledException){throw;}
+            catch(InvalidOperationException e) when(e.Message is "tab-left" or "focus-left" or "tab-unavailable"){r=(false,e.Message,"");} // The machine step is logged below without page text.
+            catch(Exception e){r=(false,"error:"+e.GetType().Name,"");}   // UI Automation or SendInput failed: reported as the step that failed, the model goes on with the desktop tools
+            // Integration CI, 9 Nov: right after Ctrl+T the native tab strip was not readable yet and the step gave up after one second. A read that failed is tried once more;
+            // a tab or window that changed under us (the user) is not, and neither is a port that never appeared.
+            if(r.Ok||attempt==2||!(r.Step=="tab-unavailable"||r.Step.StartsWith("error:",StringComparison.Ordinal)))break;
+            host.Log("computer.chrome.enable_retry",new(){["run"]=runId,["step"]=r.Step});
+            for(long end=Environment.TickCount64+700;Environment.TickCount64<end;Thread.Sleep(50))host.ThrowIfStopped();
+        }
         LastEnable=r.Step;
         host.Log("computer.chrome.enable",new(){["run"]=runId,["ok"]=r.Ok,["step"]=r.Step,["ms"]=sw.ElapsedMilliseconds});
         return r.Ok?ReadPort(dir):null;
