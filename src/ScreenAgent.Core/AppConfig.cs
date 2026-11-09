@@ -19,6 +19,7 @@ public sealed class AppConfig
     // Screen vision (Florian's spec): while a voice session runs, a downscaled JPEG goes to the Desk every IntervalMs when the picture changed.
     // Windows matching the three lists above (if you set any) are painted black or not captured. Images stay in memory, never on disk.
     public int LearnThreshold {get;init;}=1;
+    public bool ScreenTextForSpeech {get;init;}=true;
     public bool SendFrames {get;init;}=true;
     // Client events (hotkeys, frame decisions, ids, lifecycle; no images or text) go to the Desk session trace.
     public bool TraceUpload {get;init;}=true;
@@ -113,7 +114,7 @@ public sealed class AppConfig
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
-        DictationBusyCursor=DictationBusyCursor,ComputerUnrestricted=ComputerUnrestricted,Indicator=Indicator,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,Briefing=Briefing,MainSessionPath=MainSessionPath,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,ComputerUse=ComputerUse,ComputerSensitive=ComputerSensitive,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,DictationPolish=DictationPolish,CaptionPolish=CaptionPolish,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
+        DictationBusyCursor=DictationBusyCursor,ComputerUnrestricted=ComputerUnrestricted,Indicator=Indicator,ScreenTextForSpeech=ScreenTextForSpeech,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,Briefing=Briefing,MainSessionPath=MainSessionPath,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,ComputerUse=ComputerUse,ComputerSensitive=ComputerSensitive,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,DictationPolish=DictationPolish,CaptionPolish=CaptionPolish,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
     };
     public RetentionOptions Retention()=>new(TimeSpan.FromHours(DictationKeepHours),TimeSpan.FromDays(DictationKeepFailedDays),DictationCapMb*(1L<<20));
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};

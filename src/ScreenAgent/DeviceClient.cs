@@ -15,7 +15,7 @@ internal sealed record RawReply(int Status,JsonDocument? Json,int RetryAfter) : 
     public bool Stop=>Json is {} j&&j.RootElement.ValueKind==JsonValueKind.Object&&j.RootElement.TryGetProperty("stop",out var s)&&s.ValueKind==JsonValueKind.True;
     public void Dispose()=>Json?.Dispose();
 }
-internal sealed class DeviceClient : IDisposable
+internal sealed partial class DeviceClient : IDisposable
 {
     readonly HttpClient http;
     readonly string origin;

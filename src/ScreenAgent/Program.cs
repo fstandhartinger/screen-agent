@@ -48,6 +48,7 @@ internal static class Program
             if(args.FirstOrDefault()=="--selftest-briefing")return BriefingSelftest.Run();
             if(args.FirstOrDefault()=="--computer-serve")return ComputerServe.Run(int.Parse(args[1]));
             if(args.FirstOrDefault()=="--selftest-desktop")return DesktopSelftest.Run();
+            if(args.FirstOrDefault()=="--selftest-screentext")return ScreenTextSelftest.Run();
             if(args.FirstOrDefault()=="--selftest-computer")return ComputerSelftest.Run();
             if(args.FirstOrDefault()=="--selftest-main-agent")return MainAgentSelftests.Run(args.Skip(1).ToArray());
             if(args.FirstOrDefault()=="--selftest-live-actions")return LiveSelftests.Actions(args[1],args[2],args[3],args[4]);

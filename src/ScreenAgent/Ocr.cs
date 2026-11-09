@@ -38,7 +38,7 @@ internal static class Ocr
             stream.Seek(0);var decoder=await BitmapDecoder.CreateAsync(stream);
             using var bitmap=await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8,BitmapAlphaMode.Premultiplied);
             var engine=OcrEngine.TryCreateFromLanguage(new Language("en-US"))??OcrEngine.TryCreateFromUserProfileLanguages()??throw new InvalidOperationException("No WinRT OCR language installed");
-            string text=(await engine.RecognizeAsync(bitmap)).Text;return new("winrt",text,ArtifactMatcher.Find(text),null);
+            string text=string.Join("\n",(await engine.RecognizeAsync(bitmap)).Lines.Select(l=>l.Text));return new("winrt",text,ArtifactMatcher.Find(text),null);
         }
         catch(Exception ex){failure=$"{ex.GetType().Name}: 0x{ex.HResult:x8}";Diag.Fail("ocr-winrt-memory",ex);}   // Tesseract takes over below
         return ReadTesseractMemory(png) with{WinRtFailure=failure};
@@ -49,7 +49,7 @@ internal static class Ocr
     // Wrong readings are harmless: the caller keeps only what the registry knows.
     public static async Task<OcrOutput> FindIds(System.Drawing.Bitmap frame,CancellationToken ct)
     {
-        var found=new List<string>();var engine=(Environment.GetEnvironmentVariable("SCREENAGENT_OCR_LANG") is {} only?OcrEngine.TryCreateFromLanguage(new Language(only)):OcrEngine.TryCreateFromLanguage(new Language("en-US")))??OcrEngine.TryCreateFromUserProfileLanguages();
+        var found=new List<string>();var text=new List<string>();var engine=(Environment.GetEnvironmentVariable("SCREENAGENT_OCR_LANG") is {} only?OcrEngine.TryCreateFromLanguage(new Language(only)):OcrEngine.TryCreateFromLanguage(new Language("en-US")))??OcrEngine.TryCreateFromUserProfileLanguages();
         if(engine is null)
         {
             using var whole=new MemoryStream();frame.Save(whole,System.Drawing.Imaging.ImageFormat.Png);
@@ -59,12 +59,12 @@ internal static class Ocr
         {
             ct.ThrowIfCancellationRequested();
             using var tile=frame.Clone(new System.Drawing.Rectangle(box.X,box.Y,box.W,box.H),System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            found.AddRange(await ReadTile(engine,tile));
+            var recognized=await ReadTile(engine,tile);found.AddRange(recognized.Ids);text.Add(recognized.Text);
         }
-        return new("winrt+tiles:"+engine.RecognizerLanguage.LanguageTag,"",found.Distinct(StringComparer.Ordinal).ToArray(),null);
+        return new("winrt+tiles:"+engine.RecognizerLanguage.LanguageTag,string.Join("\n",text),found.Distinct(StringComparer.Ordinal).ToArray(),null);
     }
-    static readonly Dictionary<long,string[]> TileCache=[];
-    static async Task<string[]> ReadTile(OcrEngine engine,System.Drawing.Bitmap tile)
+    static readonly Dictionary<long,(string[] Ids,string Text)> TileCache=[];
+    static async Task<(string[] Ids,string Text)> ReadTile(OcrEngine engine,System.Drawing.Bitmap tile)
     {
         var data=tile.LockBits(new(0,0,tile.Width,tile.Height),System.Drawing.Imaging.ImageLockMode.ReadOnly,System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         byte[] raw=new byte[data.Stride*tile.Height];System.Runtime.InteropServices.Marshal.Copy(data.Scan0,raw,0,raw.Length);int stride=data.Stride;tile.UnlockBits(data);
@@ -75,7 +75,7 @@ internal static class Ocr
         using var bitmap=Windows.Graphics.Imaging.SoftwareBitmap.CreateCopyFromBuffer(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(pass.Bgra),BitmapPixelFormat.Bgra8,pass.W,pass.H,BitmapAlphaMode.Premultiplied);
         var result=await engine.RecognizeAsync(bitmap);
         ids.AddRange(ArtifactMatcher.FindLoose(string.Join("\n",result.Lines.Select(l=>l.Text))));
-        var value=ids.Distinct(StringComparer.Ordinal).ToArray();
+        var value=(Ids:ids.Distinct(StringComparer.Ordinal).ToArray(),Text:string.Join("\n",result.Lines.Select(l=>l.Text)));
         lock(TileCache){if(TileCache.Count>=128)TileCache.Clear();TileCache[key]=value;}
         return value;
     }

@@ -13,8 +13,9 @@ internal sealed class PrivacyCapture
 {
     readonly PrivacyPolicy policy;
     readonly Func<bool> stillAllowed;
+    readonly bool captureAddress;
     (IntPtr Window,string Title,long At,string? Url)? addressCache;
-    public PrivacyCapture(PrivacyPolicy policy,Func<bool>? stillAllowed=null){this.policy=policy;this.stillAllowed=stillAllowed??(()=>true);}
+    public PrivacyCapture(PrivacyPolicy policy,Func<bool>? stillAllowed=null,bool captureAddress=true){this.policy=policy;this.stillAllowed=stillAllowed??(()=>true);this.captureAddress=captureAddress;}
     // Why the last Capture returned null: not-active | locked | config-list | windows-changed | capture-failed. A reason word only, never a title or URL.
     public string LastSkip {get;private set;}="";
     public static WindowInfo Describe(IntPtr h,PrivacyPolicy policy,bool readUrl,Func<IntPtr,string,string?>? address=null)
@@ -88,6 +89,13 @@ internal sealed class PrivacyCapture
         }
         finally{Native.CloseDesktop(desktop);}
     }
+    // Speech capture rechecks the same desktop/list rules immediately before it sends optional context.
+    public bool Allowed(IntPtr expected)
+    {
+        if(!stillAllowed()||Native.GetForegroundWindow()!=expected||SecureDesktop())return false;
+        var fg=Describe(expected,policy,policy.ExtraDomains.Length>0,CachedAddress);
+        return !PrivacyPolicy.LockedHost(fg.Process)&&!fg.Blocked&&stillAllowed()&&Native.GetForegroundWindow()==expected;
+    }
     public Bitmap? Capture(Rectangle monitor,bool sessionActive,bool paused,IntPtr underlying=default)=>Capture(monitor,sessionActive,paused,out _,underlying);
     public Bitmap? Capture(Rectangle monitor,bool sessionActive,bool paused,out CaptureInfo? info,IntPtr underlying=default)
     {
@@ -98,7 +106,7 @@ internal sealed class PrivacyCapture
         {
             if(SecureDesktop()){LastSkip="locked";return null;}
             IntPtr handle=underlying==IntPtr.Zero?Native.GetForegroundWindow():underlying;
-            var fg=handle==IntPtr.Zero?new WindowInfo(IntPtr.Zero,"","",null,default,false):Describe(handle,policy,true,CachedAddress);
+            var fg=handle==IntPtr.Zero?new WindowInfo(IntPtr.Zero,"","",null,default,false):Describe(handle,policy,captureAddress||policy.ExtraDomains.Length>0,CachedAddress);
             if(PrivacyPolicy.LockedHost(fg.Process)){LastSkip="locked";return null;}
             List<WindowInfo> before=[];
             if(policy.HasLists)
