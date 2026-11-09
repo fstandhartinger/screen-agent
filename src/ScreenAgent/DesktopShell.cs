@@ -21,7 +21,7 @@ internal sealed class DesktopShell(FreeHost host)
             int last=decoder.GetChars([],0,0,chars,0,true);if(last>0)Add(new string(chars,0,last));
         }
         void Add(string s){lock(sync){tail.Append(s);if(tail.Length>12000){int cut=tail.Length-12000;tail.Remove(0,cut);removed+=cut;}}}
-        public override string ToString(){lock(sync)return (removed>0?$"[… gekürzt, {removed} Zeichen davor]\n":"")+tail;}
+        public override string ToString(){lock(sync)return DesktopText.TailMarker(removed)+tail;}
     }
     (int Exit,long Ms,string Out,string Error) Execute(string exe,IEnumerable<string> args,int seconds,string cwd,string? stdin=null)
     {
@@ -80,6 +80,6 @@ internal sealed class DesktopShell(FreeHost host)
         if(!bom&&probe.Take(n).Any(b=>b==0))return new(true,$"Binärdatei: {stream.Length} Bytes.");stream.Position=0;using var reader=new StreamReader(stream,Encoding.UTF8,true);
         var text=new StringBuilder();var buf=new char[Math.Min(max,4096)];bool tail=FreeArgs.Bool(args,"tail")==true;long skipped=0;
         while((n=reader.Read(buf,0,buf.Length))>0){host.ThrowIfStopped();text.Append(buf,0,n);if(text.Length>max){int cut=text.Length-max;if(tail){text.Remove(0,cut);skipped+=cut;}else{text.Length=max;break;}}if(!tail&&text.Length>=max)break;}
-        return new(true,(tail&&skipped>0?$"[… gekürzt, {skipped} Zeichen davor]\n":"")+text);
+        return new(true,DesktopText.TailMarker(tail?skipped:0)+text);
     }
 }

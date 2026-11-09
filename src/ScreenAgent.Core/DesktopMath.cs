@@ -30,7 +30,8 @@ public readonly record struct PixelFrame(int Width,int Height,double X,double Y,
 }
 public static class DesktopText
 {
-    public static string Tail(string s,int max=12000)=>s.Length<=max?s:$"[… gekürzt, {s.Length-max} Zeichen davor]\n"+s[^max..];
+    public static string TailMarker(long removed)=>removed>0?$"[… gekürzt, {removed} Zeichen davor]\n":"";
+    public static string Tail(string s,int max=12000)=>s.Length<=max?s:TailMarker(s.Length-max)+s[^max..];
     public static string Output(int exit,long ms,string stdout,string stderr)=>$"exit={exit} ({ms} ms)\n--- stdout ---\n{Tail(stdout)}\n--- stderr ---\n{Tail(stderr)}";
 }
 public sealed record DesktopChord(ushort[] Modifiers,ushort Key,bool Extended);

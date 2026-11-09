@@ -7,7 +7,7 @@ namespace ScreenAgent;
 internal sealed class DesktopUia(FreeHost host,DesktopInput input)
 {
     sealed record Held(string Ref,IntPtr Window,AutomationElement Element,string Runtime);
-    readonly Dictionary<string,Held> refs=[];
+    readonly ConcurrentDictionary<string,Held> refs=new();
     Task? inFlight;
     long next;int generation;readonly AsyncLocal<Action?> lease=new();
     void Check(){lease.Value?.Invoke();host.ThrowIfStopped();}
@@ -18,7 +18,7 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
         using var cancelled=new CancellationTokenSource(ms);var token=cancelled.Token;int epoch=generation;
         var task=Task.Run(()=>{lease.Value=()=>{token.ThrowIfCancellationRequested();if(epoch!=generation)throw new OperationCanceledException();};try{Check();return action();}finally{lease.Value=null;}});inFlight=task;var sw=Stopwatch.StartNew();
         try{while(!task.IsCompleted){host.ThrowIfStopped();if(sw.ElapsedMilliseconds>=ms)throw new TimeoutException("UI Automation antwortet nicht.");Thread.Sleep(20);}
-        return task.GetAwaiter().GetResult();}finally{cancelled.Cancel();}
+        return task.GetAwaiter().GetResult();}catch(OperationCanceledException) when(!host.Stopped()){throw new TimeoutException("UI Automation hat das Zeitlimit überschritten.");}finally{cancelled.Cancel();}
     }
     static string Clean(string s,int max=80)=>new string(s.Take(max).Select(c=>char.IsControl(c)?' ':c).ToArray());
     string Line(Held held)
@@ -34,7 +34,7 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
     {
         if(inFlight is {IsCompleted:false})return FreeResult.Fail("timeout","UI Automation antwortet noch; anderes Fenster versuchen.");
         string? window=FreeArgs.Str(args,"window");var windows=window=="all"?DesktopWindows.List(true):[DesktopWindows.Resolve(window)];
-        foreach(var key in refs.Where(p=>windows.Contains(p.Value.Window)).Select(p=>p.Key).ToArray())refs.Remove(key);
+        foreach(var key in refs.Where(p=>windows.Contains(p.Value.Window)).Select(p=>p.Key).ToArray())refs.TryRemove(key,out _);
         int depth=Math.Clamp(FreeArgs.Int(args,"depth")??12,1,40),max=find?30:Math.Clamp(FreeArgs.Int(args,"max")??400,1,2000);
         string filter=FreeArgs.Str(args,find?"name":"filter")??"",role=FreeArgs.Str(args,"role")??"";
         var found=new ConcurrentQueue<(Held Held,string Line)>();using var stop=new CancellationTokenSource();var token=stop.Token;bool cut=false;
