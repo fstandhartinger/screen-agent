@@ -180,7 +180,7 @@ internal sealed class ChromeTools:IFreeToolset
                 catch(Exception e) when(e is TimeoutException or CdpError){free.Dispose();throw new CdpError("no-answer",e.GetType().Name);}
                 lock(sync){conn=free;clicker=ck;}
                 LastConnectClicks=ck?.Clicks??0;
-                ck?.Hot(0);   // connected: from here on the clicker only watches (the cheap title pass), it stays for the life of the connection
+                ck?.Hot(0);   // connected: the clicker goes quiet (it presses nothing and scans nothing until the next connect of ours makes it hot again)
                 host.Log("computer.chrome.connected",new(){["run"]=runId,["port"]=port.Value.Port,["version"]=free.BrowserVersion,["ms"]=Environment.TickCount64-t0,["prompt"]=(ck?.Clicks??0)>0,["free"]=true});
                 ck=null;
                 return free;

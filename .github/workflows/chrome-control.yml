@@ -3,7 +3,8 @@ name: Chrome control (free toolset)
 # (debug-port Chrome with local test pages, CDP away, and the REAL flow: chrome://inspect toggle + the "Allow remote debugging?" prompt).
 on:
   push:
-    branches: ['fusion/screen-agent-computer-control-20261109-client-chrome']
+    branches: [main, computer-control-v2]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read

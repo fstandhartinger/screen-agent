@@ -1,7 +1,8 @@
 name: Desktop control
 on:
   push:
-    branches: [fusion/screen-agent-computer-control-20261109-client-desktop]
+    branches: [main, computer-control-v2]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read

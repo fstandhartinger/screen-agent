@@ -17,14 +17,14 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
-      - name: Desktop like a laptop (1920x1080), test page in Chrome without a debugging port
+      - name: Desktop like a laptop (1920x1080), test page in a normally started Chrome (default profile, remote debugging off, as on his laptop)
         shell: pwsh
         run: |
           try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Host "resolution unchanged: $_" }
           New-Item -ItemType Directory -Force artifacts/e2e | Out-Null
           $chrome = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
           $page = (Resolve-Path ci/e2e/cards.html).Path
-          Start-Process $chrome -ArgumentList @("--user-data-dir=$env:RUNNER_TEMP\e2e-chrome", '--no-first-run', '--no-default-browser-check', '--disable-search-engine-choice-screen', '--start-maximized', "file:///$($page -replace '\\','/')")
+          Start-Process $chrome -ArgumentList @('--no-first-run', '--no-default-browser-check', '--disable-search-engine-choice-screen', '--start-maximized', "file:///$($page -replace '\\','/')")
           Start-Sleep 4
       - name: Serve behind the tunnel until the harness calls /stop (at most 30 minutes)
         # One step on purpose: the runner ends every process a step started when the step ends. The tunnel address leaves the step as a check run.

@@ -139,6 +139,9 @@ internal sealed class ChromeAllowClicker:IDisposable
     {
         long now=Environment.TickCount64;
         bool hot=now<Interlocked.Read(ref hotUntil);
+        // Lead decision (9 Nov 2026): the prompt is pressed only while OUR OWN connect is in flight (ChromeTools makes the clicker hot for that time, also on a reconnect).
+        // A prompt that appears at any other moment was caused by another program; that one is his to answer, and Chrome's window is not walked for nothing.
+        if(!hot)return;
         bool full=now-lastFull>=(hot?IntervalMs:IdleFullMs);
         var scan=ChromeUi.Scan(titledOnly:!full);
         Interlocked.Increment(ref scans);

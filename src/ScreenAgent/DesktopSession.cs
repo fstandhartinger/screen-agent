@@ -17,7 +17,7 @@ internal sealed class DesktopSession:IDisposable
         Agent=new ComputerAgent((url,body)=>
         {
             if(url.EndsWith("/result")){string id=url.Split('/')[^2];if(replies.TryRemove(id,out var reply))reply.TrySetResult(JsonSerializer.SerializeToElement(body));}return Task.FromResult(true);
-        },(_,_)=>{},new InputGate(),new ComputerPolicy(){Unrestricted=true},overlay,hook,()=>sid,()=>true,()=>true,()=>false,null,new ChromeCdp.ConnectOptions("",false),log,app.Dispatcher);
+        },(_,_)=>{},new InputGate(),new ComputerPolicy(){Unrestricted=true},overlay,hook,()=>sid,()=>true,()=>true,()=>false,null,new ChromeCdp.ConnectOptions(Environment.GetEnvironmentVariable("SA_SERVE_CHROME_DIR"),false),log,app.Dispatcher);
         beats=new Timer(_=>{if(RunId is {} run)Send(run,"beat");},null,1000,1000);
     }
     void Send(string run,string op,string? id=null,string? tool=null,object? args=null,string? goal=null)
