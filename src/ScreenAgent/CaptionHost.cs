@@ -21,10 +21,12 @@ internal sealed class CaptionHost : IDisposable
     bool active,dictating,sending;long statsAt,startedAt,tapRetryAt;
     DictationVisual visual;string? visualDetail;
     readonly LevelRing levels=new();
-    readonly List<DictationCaptions> dictations=[];   // the dictations whose own text the answers are added to (live ones and ones that ended a moment ago)
+    readonly List<DictationCaptions> dictations=[];
+    // v0.1.12: the live clean-up of the subtitle while he dictates (config CaptionPolish). Off for the rest of the session after a 503/429.
+    readonly bool polishOn;readonly LivePolish live=new();bool polishOff;   // the dictations whose own text the answers are added to (live ones and ones that ended a moment ago)
     public CaptionHost(AppConfig config,DeviceClient client,Telemetry telemetry,System.Windows.Threading.Dispatcher ui,Func<(string[] Ids,string[] Terms)> context)
     {
-        this.client=client;this.telemetry=telemetry;this.ui=ui;this.context=context;mode=CaptionModes.Parse(config.Captions);
+        this.client=client;this.telemetry=telemetry;this.ui=ui;this.context=context;mode=CaptionModes.Parse(config.Captions);polishOn=config.CaptionPolish;
         timer=new(_=>Tick(),null,250,250);
     }
     public bool Enabled=>mode!=CaptionMode.Off;
@@ -46,7 +48,7 @@ internal sealed class CaptionHost : IDisposable
     public DictationCaptions BeginDictation()
     {
         var d=new DictationCaptions();
-        lock(gate){stitch.Reset();filled=0;dictations.RemoveAll(x=>!x.Accepts(Environment.TickCount64));dictations.Add(d);}
+        lock(gate){stitch.Reset();live.Reset();filled=0;dictations.RemoveAll(x=>!x.Accepts(Environment.TickCount64));dictations.Add(d);}
         return d;
     }
     public void EndDictation(DictationCaptions d)=>d.End(Environment.TickCount64,EndGraceMs);
@@ -62,8 +64,8 @@ internal sealed class CaptionHost : IDisposable
     void Begin()
     {
         active=true;startedAt=Environment.TickCount64;statsAt=startedAt;
-        lock(gate){filled=0;if(!dictating)stitch.Reset();}
-        policy.NewSession();
+        lock(gate){filled=0;if(!dictating){stitch.Reset();live.Reset();}}
+        policy.NewSession();polishOff=false;
     }
     void End()
     {
@@ -134,9 +136,16 @@ internal sealed class CaptionHost : IDisposable
             }
             if(show&&!string.IsNullOrWhiteSpace(r.Text))
             {
-                string shown;lock(gate){stitch.Add(r.Text);shown=stitch.Last(110);}
+                string shown;LivePolish.Request? req=null;
+                lock(gate)
+                {
+                    stitch.Add(r.Text);var words=stitch.Words;
+                    shown=polishOn?live.Display(words,110):stitch.Last(110);
+                    if(polishOn&&!polishOff&&dictating)req=live.Next(words);
+                }
                 foreach(var d in owners)d.Add(r.Text);
-                _=ui.BeginInvoke(new System.Action(()=>{try{if(active||visual==DictationVisual.Processing)(overlay??=new CaptionOverlay()).Present(shown);}catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="overlay"}));}}));
+                Present(shown);
+                if(req is not null)_=Polish(req);
             }
         }
         catch(Exception ex)
@@ -145,6 +154,28 @@ internal sealed class CaptionHost : IDisposable
             telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="send",["failures"]=policy.Failed}));
         }
         finally{sending=false;}
+    }
+    void Present(string shown)=>_=ui.BeginInvoke(new System.Action(()=>{try{if(active||visual==DictationVisual.Processing)(overlay??=new CaptionOverlay()).Present(shown);}catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="overlay"}));}}));
+    // The stable part of the subtitle through the clean-up (one request at a time); the answer is shown at once if those words are still on screen. Text is never logged.
+    async Task Polish(LivePolish.Request req)
+    {
+        string? text=null;int status=0;long t0=Environment.TickCount64;
+        try
+        {
+            using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            var r=await client.Polish(req.Text,"live","","",cts.Token);status=r.Status;
+            if(r.Status is >=200 and <300)text=r.Text;
+            else if(r.Status is 429 or 503)
+            {
+                polishOff=true;
+                telemetry.Event("caption.polish.off",new(){["status"]=r.Status,["code"]=r.Code??""});
+            }
+        }
+        catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="polish"}));}
+        string shown;
+        lock(gate){live.Answer(req,text);shown=live.Display(stitch.Words,110);}
+        stats.Polish(status is >=200 and <300,Environment.TickCount64-t0);
+        if(text is not null)Present(shown);
     }
     public void Dispose()
     {

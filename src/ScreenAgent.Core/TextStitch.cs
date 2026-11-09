@@ -39,6 +39,7 @@ public sealed class CaptionStitcher(int lookback=60,int maxWords=int.MaxValue)
     readonly List<string> words=[];
     public int Count=>words.Count;
     public string Text=>string.Join(' ',words);
+    public string[] Words=>[..words];
     public string Last(int maxChars)
     {
         var t=Text;if(t.Length<=maxChars)return t;

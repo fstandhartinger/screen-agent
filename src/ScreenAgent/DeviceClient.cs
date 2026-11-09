@@ -194,5 +194,16 @@ internal sealed class DeviceClient : IDisposable
         return new(reply.Status,obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"",
             obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0,obj&&j!.Value.TryGetProperty("seconds",out var s)&&s.ValueKind==JsonValueKind.Number?s.GetDouble():0,cost,reply.Code);
     }
+    // v0.1.12 text clean-up (gateway /api/device/polish): mode "final" for the whole dictation, "live" for the subtitle. Status and text; a refusal never throws.
+    public sealed record PolishReply(int Status,string Text,long Ms,int Changed,string? Code);
+    public async Task<PolishReply> Polish(string text,string mode,string process,string fieldBefore,CancellationToken ct)
+    {
+        using var reply=await Raw(HttpMethod.Post,"api/device/polish",new{mode,text,context=new{process,fieldBefore}},ct);
+        var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
+        string t=obj&&j!.Value.TryGetProperty("text",out var tx)&&tx.ValueKind==JsonValueKind.String?tx.GetString()??"":"";
+        long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;
+        int changed=obj&&j!.Value.TryGetProperty("changed",out var c)&&c.ValueKind==JsonValueKind.Number?c.GetInt32():0;
+        return new(reply.Status,t,ms,changed,reply.Code);
+    }
     public void Dispose()=>http.Dispose();
 }
