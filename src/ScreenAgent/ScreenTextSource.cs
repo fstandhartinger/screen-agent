@@ -38,6 +38,8 @@ internal sealed class ScreenTextSource
         try{var result=await Task.Run(()=>Ocr.ReadMemory(png),ct).WaitAsync(TimeSpan.FromSeconds(4),ct);return(ScreenTextLogic.Tidy(result.Text),clock.ElapsedMilliseconds);}
         catch{ /* OCR is optional; UIA still supplies speech context. */ return("",clock.ElapsedMilliseconds); } // OCR is optional; do not turn a speech hint into a user-visible failure
     }
+    // 250 ms was too tight on a slow machine (integration CI: the walk of a small window needed 306 ms and lost a line). What was read until the budget ends is used; OCR adds the rest.
+    internal const int UiaBudgetMs=400;
     internal static async Task<string> ReadUia(IntPtr fg,CaptureInfo info,CancellationToken ct)
     {
         if(Interlocked.CompareExchange(ref uiaBusy,1,0)!=0)return "";
@@ -50,7 +52,7 @@ internal sealed class ScreenTextSource
                 var cache=new CacheRequest{TreeScope=TreeScope.Element};
                 foreach(var property in new[]{AutomationElement.NameProperty,AutomationElement.ControlTypeProperty,AutomationElement.IsOffscreenProperty,AutomationElement.IsPasswordProperty,AutomationElement.BoundingRectangleProperty})cache.Add(property);
                 var queue=new Queue<AutomationElement>();queue.Enqueue(AutomationElement.FromHandle(fg).GetUpdatedCache(cache));int nodes=0;
-                bool More()=>nodes<400&&clock.ElapsedMilliseconds<250&&!ct.IsCancellationRequested;
+                bool More()=>nodes<400&&clock.ElapsedMilliseconds<UiaBudgetMs&&!ct.IsCancellationRequested;
                 var walker=TreeWalker.ControlViewWalker;
                 while(queue.Count>0&&More())
                 {
@@ -73,7 +75,7 @@ internal sealed class ScreenTextSource
             catch{ } // A failed provider contributes no text; the masked image is still available to OCR.
             finally{Interlocked.Exchange(ref uiaBusy,0);done.TrySetResult();}
         }){IsBackground=true,Name="Screen text UIA"};thread.SetApartmentState(ApartmentState.MTA);thread.Start();
-        await Task.WhenAny(done.Task,Task.Delay(250,ct));
+        await Task.WhenAny(done.Task,Task.Delay(UiaBudgetMs+20,ct));
         lock(sync)return ScreenTextLogic.Tidy(string.Join("\n",lines));
     }
 }
