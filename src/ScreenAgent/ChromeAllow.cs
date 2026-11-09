@@ -150,7 +150,7 @@ internal sealed class ChromeAllowClicker:IDisposable
         foreach(int b in AllowPrompt.Find(scan.Nodes,owner))
         {
             IntPtr hwnd=scan.Hwnds[b];
-            string id;try{id=string.Join(".",scan.Elements[b].GetRuntimeId());}catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException){continue;}   // the prompt closed while it was matched
+            string id;try{id=ChromeUiLane.Run(_=>string.Join(".",scan.Elements[b].GetRuntimeId()),()=>!Allowed(),500);}catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException){continue;}   // the prompt closed while it was matched
             if(!done.Add(id))continue;   // the same button reached by two paths
             lock(pressedAt)
             {
