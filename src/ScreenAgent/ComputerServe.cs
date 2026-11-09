@@ -3,16 +3,19 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using ScreenAgent.Core;
 namespace ScreenAgent;
 internal static class ComputerServe
 {
     public static int Run(int port)
     {
         if(port is <1 or >65535)throw new ArgumentException("Ungültiger Port.");
+        string? token=Environment.GetEnvironmentVariable("SA_SERVE_TOKEN");
+        if(!ServeAuth.ValidToken(token)){Console.Error.WriteLine("--computer-serve benötigt SA_SERVE_TOKEN mit mindestens 16 Zeichen.");return 2;}
         var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};int exit=0;
         app.Startup+=async (_,_)=>
         {
-            try{await Serve(app,port);}catch(Exception e){Console.WriteLine(JsonSerializer.Serialize(new{error=e.Message}));exit=1;}finally{app.Shutdown(exit);}
+            try{await Serve(app,port,token!);}catch(Exception e){Console.WriteLine(JsonSerializer.Serialize(new{error=e.Message}));exit=1;}finally{app.Shutdown(exit);}
         };app.Run();return exit;
     }
     // TcpListener avoids HttpListener's administrator-only URL reservation on a normal Windows laptop.
@@ -39,11 +42,11 @@ internal static class ComputerServe
         byte[] body=JsonSerializer.SerializeToUtf8Bytes(result);string reason=status switch{200=>"OK",401=>"Unauthorized",404=>"Not Found",405=>"Method Not Allowed",_=>"Bad Request"};
         byte[] head=Encoding.ASCII.GetBytes($"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");await stream.WriteAsync(head);await stream.WriteAsync(body);
     }
-    static async Task Serve(Application app,int port)
+    static async Task Serve(Application app,int port,string token)
     {
         using var session=new DesktopSession(app,Path.Combine(Path.GetTempPath(),"sa-serve-"+Guid.NewGuid().ToString("N"),"computer.log"));
         using var listener=new TcpListener(IPAddress.Loopback,port);listener.Start();using var lifetime=new CancellationTokenSource(TimeSpan.FromMinutes(30));
-        var requests=new List<Task>();using var serial=new SemaphoreSlim(1);string? token=Environment.GetEnvironmentVariable("SA_SERVE_TOKEN");
+        var requests=new List<Task>();using var serial=new SemaphoreSlim(1);
         async Task Handle(TcpClient client)
         {
             using(client)
@@ -52,7 +55,8 @@ internal static class ComputerServe
                 try
                 {
                     var request=await Read(stream,lifetime.Token);string path=request.Path;
-                    if(!string.IsNullOrEmpty(token)&&(!request.Headers.TryGetValue("Authorization",out var auth)||auth!="Bearer "+token)){await Reply(stream,401,new{ok=false});return;}
+                    if(!ServeAuth.Authorized(token,request.Headers.GetValueOrDefault("Authorization"))){await Reply(stream,401,new{ok=false});return;}
+                    if(request.Method=="POST"&&!ServeAuth.JsonContentType(request.Headers.GetValueOrDefault("Content-Type"))){await Reply(stream,415,new{ok=false,error="Content-Type: application/json required"});return;}
                     if(path=="/health"&&request.Method=="GET")response=new{ok=true,mode="computer-serve",run=session.RunId};
                     else if(request.Method!="POST"){status=405;response=new{ok=false,error="POST required"};}
                     else if(path=="/stop"){session.Kill();response=new{ok=true};shutdown=true;}

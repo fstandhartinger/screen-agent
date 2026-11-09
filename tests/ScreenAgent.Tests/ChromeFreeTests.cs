@@ -65,12 +65,12 @@ public class AllowPromptTests
         Assert.Equal([8,b+2],AllowPrompt.Find(t,Chrome));
         Assert.Equal(2,AllowPrompt.Windows(t,Chrome).Count);
         // two stacked in one window
-        var s=new List<DialogNode>{N("Window","x - Google Chrome",0,-1),N("Pane","Allow remote debugging?",1,0),N("Button","Allow",2,1),N("Pane","Allow remote debugging?",1,0),N("Button","Allow",2,3)};
-        Assert.Equal([2,4],AllowPrompt.Find(s,Chrome));
+        var s=new List<DialogNode>{N("Window","x - Google Chrome",0,-1),N("Pane","Allow remote debugging?",1,0),N("Button","Allow",2,1),N("Text","Allow remote debugging?",2,1),N("Button","Cancel",2,1),N("Pane","Allow remote debugging?",1,0),N("Button","Allow",2,5),N("Text","Allow remote debugging?",2,5),N("Button","Cancel",2,5)};
+        Assert.Equal([2,6],AllowPrompt.Find(s,Chrome));
     }
     [Fact] public void OtherAllowButtonsOfTheWindowAreLeftAlone()
     {   // a permission bubble ("Allow" notifications) in the same browser window as the prompt
-        var t=new List<DialogNode>{N("Window","x - Google Chrome",0,-1),N("Pane","site wants to show notifications",1,0),N("Button","Allow",2,1),N("Pane","Allow remote debugging?",1,0),N("Text","Allow remote debugging?",2,3),N("Button","Allow",2,3)};
+        var t=new List<DialogNode>{N("Window","x - Google Chrome",0,-1),N("Pane","site wants to show notifications",1,0),N("Button","Allow",2,1),N("Pane","Allow remote debugging?",1,0),N("Text","Allow remote debugging?",2,3),N("Button","Allow",2,3),N("Button","Cancel",2,3)};
         Assert.Equal([5],AllowPrompt.Find(t,Chrome));
         // no prompt at all: a permission bubble alone is not ours
         Assert.Empty(AllowPrompt.Find(t.Take(3).ToList(),Chrome));
@@ -81,6 +81,18 @@ public class AllowPromptTests
         Assert.Empty(AllowPrompt.Find(Real("remote-fehlerbehebung zulassen?"),Chrome));
         var t=new List<DialogNode>{N("Window","x - Google Chrome",0,-1),N("Button","Allow remote debugging?",1,0),N("Button","Allow",1,0)};
         Assert.Empty(AllowPrompt.Find(t,Chrome));
+    }
+    [Theory,InlineData("Window"),InlineData("Pane")]
+    public void AHeadingTitleAndNativePermissionBubbleAreNotADebuggingDialog(string role)
+    {
+        var t=new List<DialogNode>{N(role,"Allow remote debugging?",0,-1),N("Document","page",1,0),N("Pane","notifications",1,0),N("Button","Allow",2,2),N("Button","Cancel",2,2)};
+        Assert.Empty(AllowPrompt.Find(t,Chrome));
+        // Even a text that was incorrectly marked native must not cross a Document ancestor.
+        t.Add(N("Text","Allow remote debugging?",2,1));Assert.Empty(AllowPrompt.Find(t,Chrome));
+    }
+    [Fact] public void InnerHeadingWithoutCompanionCancelDoesNotAuthorize()
+    {
+        var t=Real();t[7]=N("Button","unrelated",2,4);Assert.Empty(AllowPrompt.Find(t,Chrome));
     }
     static string Root()
     {

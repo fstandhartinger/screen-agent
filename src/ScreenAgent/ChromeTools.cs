@@ -20,7 +20,8 @@ internal sealed class ChromeTools:IFreeToolset
     ChromeAllowClicker? clicker;
     ChromeRunState state=new();
     ConnectMemory memory=new();
-    bool enableTried;
+    bool enableTried;int enablePid;long generation;
+    CancellationTokenSource? connecting;
     string? runId;
     internal ChromeAllowClicker? Clicker=>clicker;
     internal FreeHost Host=>host;
@@ -44,33 +45,27 @@ internal sealed class ChromeTools:IFreeToolset
             catch(Exception e) when(e is TimeoutException or CdpError or ChromeToolFail){host.Log("computer.chrome.shot_failed",new(){["type"]=e.GetType().Name});return null;}
         };
     }
-    // true = an acting tool: the app takes its input gate for the call (a dictation is never pasted in the middle of it) and a picture of the tab follows.
-    public IReadOnlyDictionary<string,bool> Tools {get;}=ChromeFree.Tools.ToDictionary(t=>t,ChromeFree.Acts);
+    // Every call may enable Chrome and type: take the shared input gate even for reads. Auto-observe still follows ChromeFree.Acts only.
+    public IReadOnlyDictionary<string,bool> Tools {get;}=ChromeFree.Tools.ToDictionary(t=>t,_=>true);
     static Frame FrameOf(ChromeShot s)=>new(FrameKind.Tab,s.Width,s.Height,0,0,s.Scale,s.Full?s.Tab+"#full":s.Tab);
     public void RunStarted(ComputerRun run)
     {
         Drop();
-        lock(sync){state=new();memory=new();enableTried=false;runId=run.Id;}
-        // The first UI Automation call of a process takes about a second (measured on the runner): made here in the background, so the first chrome_* call does not wait for it.
-        if(host.Chrome.AllowDialog)Task.Run(()=>{try{_=System.Windows.Automation.AutomationElement.RootElement.Current.ProcessId;}catch(Exception e){host.Log("computer.chrome.uia_warmup",new(){["type"]=e.GetType().Name});}});
+        lock(sync){state=new();memory=new();enableTried=false;enablePid=0;runId=run.Id;}
+
     }
     // His tabs are never closed, and neither are the run's own: he may want to see the result. How many own tabs stay open is logged.
     public void RunEnded(ComputerRun run)
     {
-        ChromeFree? c;lock(sync)c=conn;
-        int opened=state.Own.Count,open=opened;
-        if(c is {Open:true}&&opened>0)
-        {
-            try{open=c.OwnOpen().GetAwaiter().GetResult();}
-            catch(Exception e) when(e is CdpError or TimeoutException or OperationCanceledException){host.Log("computer.chrome.own_tabs_unread",new(){["type"]=e.GetType().Name});}
-        }
-        if(c is not null||opened>0)host.Log("computer.chrome.own_tabs",new(){["run"]=run.Id,["open"]=open,["connected"]=c is {Open:true}});
-        Drop();
+        int opened=state.Own.Count;
+        Drop(); // Revoke attempts before any reporting or provider/network work.
+        if(opened>0)host.Log("computer.chrome.own_tabs",new(){["run"]=run.Id,["open"]=opened});
     }
+
     void Drop()
     {
         ChromeFree? c;ChromeAllowClicker? k;
-        lock(sync){c=conn;k=clicker;conn=null;clicker=null;}
+        lock(sync){generation++;connecting?.Cancel();connecting=null;c=conn;k=clicker;conn=null;clicker=null;}
         k?.Dispose();
         try{c?.Dispose();}catch(Exception e) when(e is WebSocketException or ObjectDisposedException or InvalidOperationException){host.Log("computer.chrome.dispose",new(){["type"]=e.GetType().Name});}
     }
@@ -118,10 +113,13 @@ internal sealed class ChromeTools:IFreeToolset
     }
     ChromeFree Connect()
     {
+        long epoch;CancellationTokenSource attemptLife;ChromeRunState attemptState;
+        lock(sync){epoch=generation;connecting?.Cancel();attemptLife=new();connecting=attemptLife;attemptState=state;}
+        bool Stopped()=>host.Stopped()||attemptLife.IsCancellationRequested||Interlocked.Read(ref generation)!=epoch;
         long t0=Environment.TickCount64;var o=host.Chrome;string dir=o.UserDataDir??ChromeCdp.DefaultUserData;
         for(int attempt=0;;attempt++)
         {
-            host.ThrowIfStopped();
+            if(Stopped())throw new OperationCanceledException("connect revoked");
             var port=ReadPort(dir);
             if(port is null)
             {
@@ -131,7 +129,7 @@ internal sealed class ChromeTools:IFreeToolset
             string owner="";var clients=new List<uint>();
             try{var (pid,cl)=ComputerNative.PortUsers(port.Value.Port);owner=pid==0?"":ComputerNative.ImagePath(pid);clients=cl;}
             catch(Exception e) when(e is System.ComponentModel.Win32Exception or EntryPointNotFoundException or OutOfMemoryException){host.Log("computer.chrome.port_owner_unknown",new(){["type"]=e.GetType().Name});}
-            ChromeAllowClicker? ck=null;
+            ChromeAllowClicker? ck=null;ChromeFree? free=null;CdpSocket? socket=null;bool published=false;
             try
             {
                 if(o.AllowDialog)
@@ -139,26 +137,25 @@ internal sealed class ChromeTools:IFreeToolset
                     // Prompts left over from dead connections block a new one. They are cancelled only when no other program is connected to the port: another agent's attach may be in flight,
                     // and then its prompt is left alone (ours gets its own Allow click).
                     // (The prompt is a top-level window named like its heading, so the cheap title pass finds it; with no prompt open this costs no UI Automation call.)
-                    var scan=ChromeUi.Scan(titledOnly:true);var cancel=AllowPrompt.Find(scan.Nodes,owner,AllowPrompt.Cancel);
+                    var scan=ChromeUiLane.Run(_=>ChromeUi.Scan(titledOnly:true),Stopped,1500);var cancel=AllowPrompt.Find(scan.Nodes,owner,AllowPrompt.Cancel);
                     if(cancel.Count>0)
                     {
                         bool others=clients.Any(c=>c!=(uint)Environment.ProcessId);
                         // Chrome ignores a press on a prompt younger than the double-click time (how old this one is, nobody knows): wait that long first, or the Cancel is lost.
                         if(!others){for(long end=Environment.TickCount64+ChromeUi.PressGapMs;Environment.TickCount64<end;Thread.Sleep(50))host.ThrowIfStopped();}
-                        if(!others){foreach(int i in cancel){try{ChromeUi.Press(scan.Elements[i]);}catch(Exception e) when(e is InvalidOperationException or System.Windows.Automation.ElementNotAvailableException or System.Runtime.InteropServices.COMException){host.Log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="cancel"});}}Thread.Sleep(350);}
+                        if(!others){foreach(int i in cancel){try{ChromeUi.Press(scan.Elements[i],()=>!Stopped());}catch(Exception e) when(e is InvalidOperationException or System.Windows.Automation.ElementNotAvailableException or System.Runtime.InteropServices.COMException){host.Log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="cancel"});}}Thread.Sleep(350);}
                         host.Log("computer.chrome.stale",new(){["prompts"]=cancel.Count,["cancelled"]=!others});
                     }
-                    ck=new ChromeAllowClicker(owner,host.Log);ck.Hot(12000);
+                    ck=new ChromeAllowClicker(owner,host.Log,Stopped);ck.Hot(12000);
                 }
-                using var cts=new CancellationTokenSource(8000);
-                var task=CdpSocket.Connect(new Uri("ws://127.0.0.1:"+port.Value.Port+port.Value.Path),host.Stopped,host.Log,cts.Token);
-                CdpSocket socket;
+                using var cts=CancellationTokenSource.CreateLinkedTokenSource(attemptLife.Token);cts.CancelAfter(8000);
+                var task=CdpSocket.Connect(new Uri("ws://127.0.0.1:"+port.Value.Port+port.Value.Path),Stopped,host.Log,cts.Token);
                 try
                 {
-                    while(!task.Wait(50)){if(host.Stopped()){cts.Cancel();throw new OperationCanceledException("run stopped");}}
+                    while(!task.Wait(25)){if(Stopped()){cts.Cancel();_=task.ContinueWith(t=>{if(t.Status==TaskStatus.RanToCompletion)t.Result.Dispose();},TaskScheduler.Default);throw new OperationCanceledException("run stopped");}}
                     socket=task.GetAwaiter().GetResult();
                 }
-                catch(AggregateException a) when(a.GetBaseException() is OperationCanceledException){throw new CdpError(ck is {Prompts:>0}?"no-answer":"no-dialog");}   // 8 s without an open socket
+                catch(AggregateException a) when(a.GetBaseException() is OperationCanceledException){if(Stopped())throw new OperationCanceledException("connect revoked");throw new CdpError(ck is {Prompts:>0}?"no-answer":"no-dialog");}   // 8 s without an open socket
                 catch(AggregateException a) when(a.GetBaseException() is WebSocketException or SocketException or IOException or System.Net.Http.HttpRequestException)
                 {
                     var b=a.GetBaseException();
@@ -166,7 +163,7 @@ internal sealed class ChromeTools:IFreeToolset
                     {   // the port file is a leftover of an earlier Chrome: nobody listens there
                         ck?.Dispose();ck=null;
                         if(!ChromeUi.Running())throw new CdpError("chrome-not-running");
-                        if(attempt==0&&!enableTried)
+                        if(attempt==0)
                         {
                             string stale=port.Value.Port+port.Value.Path;
                             if(Enable(dir,stale) is not null)continue;
@@ -175,24 +172,31 @@ internal sealed class ChromeTools:IFreeToolset
                     }
                     throw new CdpError(ck is {Prompts:>0}?"no-answer":"debugging-off",b.GetType().Name);   // Chrome refused the handshake (the prompt was declined, or the address in the file is not this Chrome's)
                 }
-                var free=new ChromeFree(socket,state,host.Stopped,host.Log);
+                free=new ChromeFree(socket,attemptState,Stopped,host.Log);
                 try{free.Version(default,3000).GetAwaiter().GetResult();}
                 catch(Exception e) when(e is TimeoutException or CdpError){free.Dispose();throw new CdpError("no-answer",e.GetType().Name);}
-                lock(sync){conn=free;clicker=ck;}
+                ck?.Hot(0);
+                lock(sync)
+                {
+                    if(Stopped())throw new OperationCanceledException("connect revoked");
+                    conn=free;clicker=ck;published=true;
+                    // The published socket still uses the attempt token; Drop cancels it on run end.
+                }
                 LastConnectClicks=ck?.Clicks??0;
                 ck?.Hot(0);   // connected: the clicker goes quiet (it presses nothing and scans nothing until the next connect of ours makes it hot again)
                 host.Log("computer.chrome.connected",new(){["run"]=runId,["port"]=port.Value.Port,["version"]=free.BrowserVersion,["ms"]=Environment.TickCount64-t0,["prompt"]=(ck?.Clicks??0)>0,["free"]=true});
                 ck=null;
                 return free;
             }
-            finally{ck?.Dispose();}
+            finally{ck?.Hot(0);ck?.Dispose();if(!published){if(free is not null)free.Dispose();else socket?.Dispose();}}
         }
     }
     // Remote debugging is off while Chrome runs: switch it on ourselves, once per run. `stale` = the content of a leftover port file that must change. null = it did not work.
     (int Port,string Path)? Enable(string dir,string? stale)
     {
-        if(enableTried)return null;
-        enableTried=true;
+        int pid=ChromeUi.Windows().Select(w=>{Native.GetWindowThreadProcessId(w.Hwnd,out uint p);return (int)p;}).FirstOrDefault();
+        if(enableTried&&pid==enablePid)return null;
+        enableTried=true;enablePid=pid;
         var sw=Stopwatch.StartNew();
         bool Ready()=>ReadPort(dir) is {} p&&p.Port+p.Path!=stale;
         (bool Ok,string Step,string Seen) r;

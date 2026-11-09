@@ -208,6 +208,20 @@ internal static class ChromeSelftest
                 var k=await Tool(run,"chrome_key",new{tab,key="ctrl+a x y"},"key_observe");Must(Ok(k),Brief(k));
                 Must(Text(await Tool(run,"chrome_eval",new{tab,js="document.getElementById('q').value"}))=="xy","ctrl+a then typing");
             });
+            await Step("A4b fill refuses disabled, readonly and lost focus; failed verification never submits",async()=>
+            {
+                await Tool(run,"chrome_eval",new{tab,js="document.body.innerHTML='<input id=other aria-label=Other><input id=blocked aria-label=Blocked disabled><input id=ro aria-label=Readonly readonly><input id=blur aria-label=Blur><input id=reject aria-label=Reject><input id=pw aria-label=Password type=password>'; window.submits=0;document.addEventListener('keydown',e=>{if(e.key===\"Enter\")submits++});document.getElementById('blur').addEventListener('focus',()=>document.getElementById('other').focus());document.getElementById('reject').addEventListener('input',e=>{e.target.value=\"rejected\"});document.getElementById('other').focus();true"});
+                string form=Text(await Tool(run,"chrome_snapshot",new{tab}));
+                foreach(var name in new[]{"Blocked","Readonly","Blur","Reject"})
+                {
+                    var r=await Tool(run,"chrome_fill",new{@ref=Ref(form,"textbox",name),text="test-value",enter=true,observe=false});
+                    Must(!Ok(r)&&Rule(r)==(name=="Blur"?"no-focus":name=="Reject"?"verify-failed":"not-editable"),name+": "+Brief(r));
+                }
+                Must(Text(await Tool(run,"chrome_eval",new{tab,js="document.getElementById('other').value+'|'+submits"}))=="|0","unexpected text or Enter in another field");
+                var pw=await Tool(run,"chrome_fill",new{@ref=Ref(form,"textbox","Password"),text="sample-password",observe=false});
+                Must(Ok(pw),"password fill in unrestricted mode: "+Brief(pw));
+                Must(Text(await Tool(run,"chrome_eval",new{tab,js="document.getElementById('pw').value.length"}))=="15","password length");
+            });
             await Step("A5 chrome_eval: expression, function body with return/await, error as text, timeout",async()=>
             {
                 Must(Text(await Tool(run,"chrome_eval",new{tab,js="1+2"}))=="3","expression");

@@ -79,23 +79,41 @@ public sealed class CdpSocket:IDisposable
         if(args is not null)body["params"]=args;
         if(session is not null)body["sessionId"]=session;
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct,life.Token);timeout.CancelAfter(timeoutMs);
+        int runCancelled=0;
+        using var watch=new Timer(_=>{if(!evenStopped&&stopped()){Interlocked.Exchange(ref runCancelled,1);try{timeout.Cancel();}catch(ObjectDisposedException){ /* Call already ended. */ }}},null,0,25);
+        bool inSend=false;
         try
         {
             await sending.WaitAsync(timeout.Token);
-            // the send itself is never cancelled by the per-call timeout: a cancelled SendAsync aborts the whole socket
-            try{await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(body),WebSocketMessageType.Text,true,life.Token);}
+            try
+            {
+                if(!evenStopped&&stopped())throw new OperationCanceledException("run stopped");
+                timeout.Token.ThrowIfCancellationRequested();
+                inSend=true;
+                await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(body),WebSocketMessageType.Text,true,timeout.Token);
+                inSend=false;
+            }
             finally{sending.Release();}
             return await tcs.Task.WaitAsync(timeout.Token);
         }
         catch(OperationCanceledException)
         {
-            lock(waiting)waiting.Remove(id);
-            if(ct.IsCancellationRequested)throw;
-            if(life.IsCancellationRequested||ws.State!=WebSocketState.Open)throw new CdpError("closed");
+            bool cancelled=ct.IsCancellationRequested||Volatile.Read(ref runCancelled)!=0||(!evenStopped&&stopped());
+            bool closed=life.IsCancellationRequested;
+            if(inSend)Abort(); // A partial protocol message must never be reused after its deadline.
+            if(cancelled)throw new OperationCanceledException("run stopped",ct);
+            if(closed)throw new CdpError("closed");
             throw new TimeoutException(method);
         }
-        catch(Exception e) when(e is WebSocketException or ObjectDisposedException or InvalidOperationException){lock(waiting)waiting.Remove(id);throw new CdpError("closed",e.GetType().Name);}
+        catch(Exception e) when(e is WebSocketException or ObjectDisposedException or InvalidOperationException)
+        {
+            if(!evenStopped&&stopped())throw new OperationCanceledException("run stopped");
+            throw new CdpError("closed",e.GetType().Name);
+        }
+        finally{lock(waiting)waiting.Remove(id);}
     }
+    public void Abort(){life.Cancel();ws.Abort();}
+
     public void Dispose()
     {
         try{life.Cancel();}catch(ObjectDisposedException){ }   // already disposed
@@ -491,6 +509,7 @@ public sealed class ChromeFree:IDisposable
         var lines=ChromeOutline.Lines(r.TryGetProperty("items",out var items)?items:default);
         string title=S(r,"title"),url=S(r,"url");int vh=(int)D(r,"vh"),sm=(int)D(r,"sm");
         string text=ChromeOutline.Build(ChromeOutline.Header(state.Alias(tab),title,url,(int)D(r,"vw"),vh,(int)D(r,"sy"),sm),lines,filter,all,B(r,"cut"),more:sm>vh/2);
+        if(B(r,"cut"))text+="\nSeitenbudget erreicht: "+S(r,"reason")+" ("+D(r,"visited")+" Knoten besucht).";
         return new(true,text,Target:title,Domain:DomainOf(url));
     }
     // ---- input
@@ -567,6 +586,7 @@ public sealed class ChromeFree:IDisposable
         bool shown=await Show(tab,ct);
         var loc=await Locate(tab,gen,n,"fill",ct);
         string kind=S(loc,"kind"),name=S(loc,"name");
+        if(B(loc,"dis")||!B(loc,"editable"))throw new ChromeToolFail("not-editable","Das Ziel ist deaktiviert oder nicht bearbeitbar; nichts eingegeben.");
         string url=(await Info(tab,ct)).Url;
         if(kind=="select")
         {
@@ -582,29 +602,41 @@ public sealed class ChromeFree:IDisposable
         if(S(loc,"how")=="mouse")await MouseClick(tab,D(loc,"x"),D(loc,"y"),"left",1,0,ct);
         var focus=await InWorld(tab,ChromePageJs.FocusSelect,[n,gen,clear],ct);
         if(S(focus,"e")=="stale")throw Stale(n);
+        if(!B(focus,"a"))throw new ChromeToolFail("no-focus","Das Zielfeld hat keinen bestätigten Fokus; nichts eingegeben.");
+        var inputProof=await InWorld(tab,ChromePageJs.FocusProof,[n,gen],ct);
+        if(!B(inputProof,"a"))throw new ChromeToolFail("no-focus","Der Fokus hat gewechselt; nichts eingegeben.");
         int had=(int)D(focus,"len");
         if(text.Length>0)await On(tab,"Input.insertText",new{text},ct,Math.Max(InputMs,text.Length/2));
         else if(clear&&had>0)await Press(tab,new CdpKey(0,"Backspace","Backspace",8,""),ct);
         // read back before Enter (Enter may submit and take the field away)
         var back=await InWorld(tab,ChromePageJs.ReadValue,[n,gen],ct);
-        string status;
-        if(S(back,"e")=="stale")status="eingetragen ("+text.Length+" Zeichen); das Feld ist danach verschwunden";
+        string status;bool verified=false;
+        if(S(back,"e")=="stale"||back.ValueKind!=JsonValueKind.Object||!back.TryGetProperty("len",out _))status="Der Feldinhalt ließ sich nicht prüfen; aktueller Inhalt unbekannt, kein Enter.";
         else
         {
             bool pw=B(back,"pw");int len=(int)D(back,"len");string now=pw?"":Norm(S(back,"v"));string want=Norm(text);
             bool same=pw?(clear?len==text.Length:len>=text.Length):(clear?now==want:now.Contains(want,StringComparison.Ordinal));
             if(!same&&clear&&kind is "input" or "textarea")
             {   // typed text did not land (a date or range field, or the page dropped it): set the value directly, with the events a framework listens to
+                var setterProof=await InWorld(tab,ChromePageJs.FocusProof,[n,gen],ct);
+                if(!B(setterProof,"a"))return new(false,"Der Fokus hat gewechselt; Feldinhalt nicht bestätigt, kein Enter.","no-focus",ObserveTab:tab);
                 var set=await InWorld(tab,ChromePageJs.SetValue,[n,gen,text],ct);
                 if(B(set,"ok"))
                 {
                     back=await InWorld(tab,ChromePageJs.ReadValue,[n,gen],ct);
-                    pw=B(back,"pw");len=(int)D(back,"len");now=pw?"":Norm(S(back,"v"));same=pw?len==text.Length:now==want;
+                    pw=B(back,"pw");len=(int)D(back,"len");now=pw?"":Norm(S(back,"v"));same=S(back,"e")==""&&back.TryGetProperty("len",out _)&&(pw?len==text.Length:now==want);
                 }
             }
+            verified=same;
             status=same?"eingetragen ("+text.Length+" Zeichen)":pw?"Das Feld hält jetzt "+len+" Zeichen (verdeckt), erwartet waren "+text.Length:"Das Feld enthält jetzt: \""+Cap(now,300)+"\" ("+now.Length+" Zeichen), nicht genau den Text";
         }
-        if(enter){await Press(tab,new CdpKey(0,"Enter","Enter",13,"\r"),ct);status+=" · Enter gedrückt";}
+        if(!verified)return new(false,status,"verify-failed",Target:name,Domain:DomainOf(url),ObserveTab:tab);
+        if(enter)
+        {
+            var proof=await InWorld(tab,ChromePageJs.FocusProof,[n,gen],ct);
+            if(!B(proof,"a"))return new(false,"Der Fokus hat gewechselt; kein Enter gedrückt.","no-focus",ObserveTab:tab);
+            await Press(tab,new CdpKey(0,"Enter","Enter",13,"\r"),ct);status+=" · Enter gedrückt";
+        }
         if(shown)status+=" · der Tab wurde dafür in seinem Fenster nach vorn geholt";
         return new(true,"\""+Cap(name,60).Replace('"','\'')+"\": "+status,Target:name,Domain:DomainOf(url),ObserveTab:tab);
     }
@@ -688,8 +720,12 @@ public sealed class ChromeFree:IDisposable
                 }
                 finally
                 {   // the button always comes up again, also when the run is stopped mid-drag
-                    try{await socket.Call("Input.dispatchMouseEvent",new{type="mouseReleased",x=x2,y=y2,button,buttons=0,clickCount=1,modifiers=m},sessions.TryGetValue(tab,out var s)?s:null,default,InputMs);}
-                    catch(Exception e) when(e is CdpError or TimeoutException or OperationCanceledException){ }   // the socket is gone or the run stopped: Chrome releases the button with the session
+                    try
+                    {
+                        if(!sessions.TryGetValue(tab,out var s))socket.Abort();
+                        else await socket.Call("Input.dispatchMouseEvent",new{type="mouseReleased",x=x2,y=y2,button,buttons=0,clickCount=1,modifiers=m},s,default,100,true);
+                    }
+                    catch(Exception e) when(e is CdpError or TimeoutException or OperationCanceledException){socket.Abort();}   // the socket is gone or the run stopped: Chrome releases the button with the session
                 }
                 return "gezogen";
             }

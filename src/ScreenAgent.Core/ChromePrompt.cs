@@ -19,52 +19,41 @@ public static class AllowPrompt
     static int Root(IReadOnlyList<DialogNode> t,int i){for(int g=0;g<128&&i>=0&&i<t.Count&&t[i].Parent>=0&&t[i].Parent<t.Count&&t[i].Parent!=i;g++)i=t[i].Parent;return i;}
     static bool Browser(DialogNode n,string owner,string[] browsers)
         =>n.ImagePath.Length>0&&browsers.Any(b=>string.Equals(Leaf(n.ImagePath),b,StringComparison.OrdinalIgnoreCase))&&(owner.Length==0||string.Equals(n.ImagePath,owner,StringComparison.OrdinalIgnoreCase));
-    static bool Heading(DialogNode n)=>!n.InDocument&&n.Role is not ("Button" or "Edit" or "Document")&&Array.IndexOf(Headings,n.Name)>=0;
-    // Indices of the top-level windows that hold a prompt.
-    public static List<int> Windows(IReadOnlyList<DialogNode> tree,string ownerImage,string[]? browsers=null)
+    static bool Native(IReadOnlyList<DialogNode> t,int i)
     {
-        var roots=new List<int>();
-        for(int i=0;i<tree.Count;i++)
+        for(int g=0;g<128&&i>=0&&i<t.Count;g++)
         {
-            if(!Heading(tree[i]))continue;
-            int r=Root(tree,i);
-            if(r>=0&&Browser(tree[r],ownerImage,browsers??Browsers)&&Browser(tree[i],ownerImage,browsers??Browsers)&&!roots.Contains(r))roots.Add(r);
+            if(t[i].InDocument||t[i].Role=="Document")return false;
+            int p=t[i].Parent;if(p<0)return true;if(p==i)return false;i=p;
         }
-        return roots;
+        return false;
     }
-    // Indices of the buttons to press, in tree order. `names` = Allow (default) or Cancel. ownerImage "" = the owner of the port is not known: any chrome.exe counts.
+    public static List<int> Windows(IReadOnlyList<DialogNode> tree,string ownerImage,string[]? browsers=null)
+        =>Find(tree,ownerImage,null,browsers).Select(i=>Root(tree,i)).Distinct().ToList();
+    // An independent inner Text plus BOTH companion buttons in its nearest dialog container is required.
+    // A page-controlled window title never contributes authority, even in app/popup windows.
     public static List<int> Find(IReadOnlyList<DialogNode> tree,string ownerImage,string[]? names=null,string[]? browsers=null)
     {
-        names??=Allow;browsers??=Browsers;
-        var hits=new List<int>();
-        foreach(int root in Windows(tree,ownerImage,browsers))
+        names??=Allow;browsers??=Browsers;var hits=new HashSet<int>();
+        for(int h=0;h<tree.Count;h++)
         {
-            var loose=new List<int>();var tight=new List<int>();
-            for(int i=0;i<tree.Count;i++)
+            if(tree[h].Role!="Text"||!Headings.Contains(tree[h].Name)||!Native(tree,h)||!Browser(tree[h],ownerImage,browsers))continue;
+            int a=tree[h].Parent;
+            for(int g=0;g<128&&a>=0&&a<tree.Count;g++)
             {
-                var n=tree[i];
-                if(n.Role!="Button"||n.InDocument||Array.IndexOf(names,n.Name)<0||!Browser(n,ownerImage,browsers)||Root(tree,i)!=root)continue;
-                // the nearest ancestor that has a heading below it (or is one): the dialog container. The window itself counts as a container only when it carries the heading.
-                int box=Container(tree,i);
-                if(box<0)continue;
-                if(box!=root||Heading(tree[root]))tight.Add(i);else loose.Add(i);
+                if(!Native(tree,a)||!Browser(tree[a],ownerImage,browsers))break;
+                var buttons=Enumerable.Range(0,tree.Count).Where(i=>tree[i].Role=="Button"&&Native(tree,i)&&Browser(tree[i],ownerImage,browsers)&&Under(tree,i,a)).ToArray();
+                if(buttons.Any(i=>Allow.Contains(tree[i].Name))&&buttons.Any(i=>Cancel.Contains(tree[i].Name)))
+                {
+                    foreach(int i in buttons.Where(i=>names.Contains(tree[i].Name)))hits.Add(i);
+                    break;
+                }
+                // Never widen a titled dialog to its surrounding browser window.
+                if(Headings.Contains(tree[a].Name)||tree[a].Parent==a)break;
+                a=tree[a].Parent;
             }
-            hits.AddRange(tight.Count>0?tight:loose);
         }
-        hits.Sort();
-        return hits;
-    }
-    static int Container(IReadOnlyList<DialogNode> t,int button)
-    {
-        int a=t[button].Parent;
-        for(int g=0;g<128&&a>=0&&a<t.Count;g++)
-        {
-            if(Heading(t[a]))return a;
-            for(int i=0;i<t.Count;i++)if(i!=button&&Heading(t[i])&&Under(t,i,a))return a;
-            if(t[a].Parent==a)break;
-            a=t[a].Parent;
-        }
-        return -1;
+        return hits.Order().ToList();
     }
     static bool Under(IReadOnlyList<DialogNode> t,int i,int ancestor)
     {
