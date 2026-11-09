@@ -6,7 +6,8 @@ namespace ScreenAgent.Core;
 public sealed record ChunkRequest(string DictationId,Chunk Chunk,bool Only,string FieldBefore);
 // Status: 2xx ok; 0 no connection; -1 timeout; -2 the Desk answered 2xx but without a usable text (bad-reply) or with an empty text for speech (empty-text); otherwise the HTTP status.
 // Providers like "groq:ok,openai:503".
-public sealed record ChunkReply(int Status,string Text="",string[]? Providers=null,bool Degraded=false,double Seconds=0,long Ms=0,string? Code=null,string? Failure=null)
+// Silent: the gateway's recognisers agree that nobody spoke in this chunk (v0.1.13): an empty text that is an answer, not a lost chunk.
+public sealed record ChunkReply(int Status,string Text="",string[]? Providers=null,bool Degraded=false,double Seconds=0,long Ms=0,string? Code=null,string? Failure=null,bool Silent=false)
 {
     public bool Ok=>Status is >=200 and <300;
     public bool Network=>Status==0;
@@ -32,7 +33,8 @@ public static class ChunkReplyParse
         double seconds=obj&&j!.Value.TryGetProperty("seconds",out var sec)&&sec.ValueKind==JsonValueKind.Number?sec.GetDouble():0;
         long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;
         if(status is >=200 and <300&&!hasText)return new(-2,"",providers,degraded,seconds,ms,"bad-reply",obj?"NoText":"NotJson");
-        return new(status,text,providers,degraded,seconds,ms,code);
+        bool silent=obj&&j!.Value.TryGetProperty("silent",out var si)&&si.ValueKind==JsonValueKind.True;
+        return new(status,text,providers,degraded,seconds,ms,code,null,silent);
     }
 }
 public delegate Task<ChunkReply> ChunkSender(ChunkRequest request,CancellationToken ct);
@@ -116,7 +118,7 @@ public sealed class DictationJob
             catch(Exception ex){reply=new(0,Failure:ex.GetType().Name);}   /* in the reply; the job logs it */
             int httpStatus=reply.Status;
             // A 2xx with no text for a chunk that had speech is a lost chunk, not a quiet one (captive portal, provider hiccup behind a 200).
-            if(reply.Ok&&string.IsNullOrWhiteSpace(reply.Text)&&DictationGate.HadSpeech(chunk))reply=reply with{Status=-2,Code="empty-text",Failure="EmptyText"};
+            if(reply.Ok&&string.IsNullOrWhiteSpace(reply.Text)&&DictationGate.HadSpeech(chunk)&&!reply.Silent)reply=reply with{Status=-2,Code="empty-text",Failure="EmptyText"};
             log("dictation.chunk",new(){["id"]=id,["http"]=httpStatus,["index"]=chunk.Index,["bytes"]=chunk.Samples.Length*2+Wav.HeaderBytes,["seconds"]=Math.Round(chunk.Seconds,1),["ms"]=clock.ElapsedMilliseconds-t0,["status"]=reply.Status,["attempt"]=attempt,["providers"]=string.Join(',',reply.Providers??[]),["code"]=reply.Code??"",["exType"]=reply.Failure??"",["degraded"]=reply.Degraded,["overlap"]=chunk.OverlapSamples>0});
             if(reply.Ok)return reply;
             if(reply.Network)

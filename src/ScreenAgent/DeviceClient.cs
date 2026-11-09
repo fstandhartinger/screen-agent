@@ -196,9 +196,10 @@ internal sealed class DeviceClient : IDisposable
     }
     // v0.1.12 text clean-up (gateway /api/device/polish): mode "final" for the whole dictation, "live" for the subtitle. Status and text; a refusal never throws.
     public sealed record PolishReply(int Status,string Text,long Ms,int Changed,string? Code);
-    public async Task<PolishReply> Polish(string text,string mode,string process,string fieldBefore,CancellationToken ct)
+    // v0.1.13: mode "format" (line breaks only) and format=true with "final" (light structure on top of the clean-up). An older gateway ignores the flag and refuses the mode.
+    public async Task<PolishReply> Polish(string text,string mode,string process,string fieldBefore,CancellationToken ct,bool format=false)
     {
-        using var reply=await Raw(HttpMethod.Post,"api/device/polish",new{mode,text,context=new{process,fieldBefore}},ct);
+        using var reply=await Raw(HttpMethod.Post,"api/device/polish",new{mode,text,format,context=new{process,fieldBefore}},ct);
         var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
         string t=obj&&j!.Value.TryGetProperty("text",out var tx)&&tx.ValueKind==JsonValueKind.String?tx.GetString()??"":"";
         long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;
