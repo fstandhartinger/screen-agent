@@ -37,6 +37,11 @@ debugging?" / "Remote-Fehlerbehebung zulassen?" prompt, only while its own conne
 (a prompt at any other moment belongs to another program and stays for you). When CDP is not to
 be had, every `chrome_*` tool answers at once with the reason and "take the desktop tools", and
 the run goes on with screenshots, UI Automation and clicks.
+Safety of the Chrome tools (independent review, 9 Nov): before every key the enable step sends it
+checks that Chrome is still in front and the tab and address bar are its own, and aborts otherwise;
+`chrome_fill` refuses a disabled or read-only field and types nothing without proven focus on the
+field it was given, and never presses Enter when the text did not arrive as sent; a stop, your own
+mouse or a pause ends a pending Chrome call within about 100 ms and releases a held mouse button.
 
 **Stop and supervision are unchanged:** the purple frame, Ctrl+Win+Shift+X stops at once (also a
 running command), your own mouse or keyboard pauses the run. In unrestricted mode the app no
@@ -52,8 +57,9 @@ privacy rules as the frames (paused, locked, blocked windows: nothing is sent).
 `ScreenTextForSpeech: false` in `config.json` turns it off. Log event `screen.text` (counts only).
 
 **For testing:** `--selftest-desktop`, `--selftest-chrome`, `--selftest-screentext`, and
-`--computer-serve <port>`: a local debug HTTP endpoint (`/start`, `/act`, `/stop`, bearer token from
-`SA_SERVE_TOKEN`) that drives the same `ComputerAgent` without a voice session; the gateway's
+`--computer-serve <port>`: a local debug HTTP endpoint (`/start`, `/act`, `/stop`; it refuses to start
+without a bearer token of at least 16 characters in `SA_SERVE_TOKEN`, listens on 127.0.0.1 only and wants
+`Content-Type: application/json`) that drives the same `ComputerAgent` without a voice session; the gateway's
 `scripts/computer-e2e.mjs` runs its real loop against it. The tool contract is
 `docs/computer-contract-v2.md` in agent-desk.
 
