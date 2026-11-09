@@ -96,6 +96,9 @@ internal static class DesktopSelftest
                 await Act("open",new{target="notepad.exe",settle_ms=700});
                 for(int i=0;i<30;i++){notepad=DesktopWindows.List().FirstOrDefault(h=>UiaDriver.ProcessOf(h).Equals("notepad",StringComparison.OrdinalIgnoreCase));if(notepad!=IntPtr.Zero)break;await Task.Delay(100);}
                 Require(notepad!=IntPtr.Zero,"Notepad fehlt");await Act("window_focus",new{window=DesktopWindows.Ref(notepad),observe=false});
+                Match editor=Regex.Match("",@"^$");
+                for(int i=0;i<30;i++){var readyTree=await Act("ui_tree",new{window=DesktopWindows.Ref(notepad)});editor=Regex.Match(Text(readyTree),@"^(r\d+) (Document|Edit) ",RegexOptions.Multiline);if(editor.Success)break;await Task.Delay(100);}
+                Require(editor.Success,"Notepad-Editor nicht bereit");await Act("ui_click",new{@ref=editor.Groups[1].Value,observe=false});
                 const string value="Grüße äöü ß 😀\nZweite Zeile";await Act("type",new{text=value,paste=false,observe=false});await Act("key",new{key="ctrl+a ctrl+c",observe=false});await Task.Delay(150);
                 var clip=await Act("clipboard_read");Require(Text(clip).Replace("\r\n","\n")==value,"Unicode-Readback: "+Text(clip));
                 var tree=await Act("ui_tree",new{window=DesktopWindows.Ref(notepad)});var edit=Regex.Match(Text(tree),@"^(r\d+) (Document|Edit) ",RegexOptions.Multiline);Require(edit.Success,"Notepad-Editor fehlt");Require(Text(await Act("ui_read",new{@ref=edit.Groups[1].Value})).Contains("Grüße"),"UIA-Readback fehlt");

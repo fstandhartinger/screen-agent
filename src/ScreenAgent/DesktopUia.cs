@@ -79,9 +79,10 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
     }
     public FreeResult Read(string reference)=>Bounded(()=>
     {
-        var h=Get(reference);var text=new StringBuilder(Line(h));
-        if(h.Element.TryGetCurrentPattern(TextPattern.Pattern,out var p))text.Append('\n').Append(((TextPattern)p).DocumentRange.GetText(20000));
-        else if(h.Element.TryGetCurrentPattern(ValuePattern.Pattern,out p))text.Append('\n').Append(((ValuePattern)p).Current.Value[..Math.Min(20000,((ValuePattern)p).Current.Value.Length)]);
+        var h=Get(reference);var c=h.Element.Current;var name=c.Name??"";var text=new StringBuilder(Line(h));
+        text.Append("\nname: ").Append(name[..Math.Min(20000,name.Length)]).Append("\nenabled: ").Append(c.IsEnabled).Append("; offscreen: ").Append(c.IsOffscreen);
+        if(h.Element.TryGetCurrentPattern(ValuePattern.Pattern,out var value)){string v=((ValuePattern)value).Current.Value;text.Append("\nvalue: ").Append(v[..Math.Min(20000,v.Length)]);}
+        if(h.Element.TryGetCurrentPattern(TextPattern.Pattern,out var p))text.Append("\ntext: ").Append(((TextPattern)p).DocumentRange.GetText(20000));
         return new FreeResult(true,text.ToString());
     });
     public FreeResult Click(string reference,string button,bool twice)=>Bounded(()=>
