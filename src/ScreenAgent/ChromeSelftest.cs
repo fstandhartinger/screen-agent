@@ -344,7 +344,7 @@ internal static class ChromeSelftest
                 try
                 {
                     var r=await Tool(run,"chrome_tabs",new{});
-                    Must(revoked&&!Ok(r)&&!tools.ConnectedForTest&&LogCount("computer.chrome.connected")==before,"late connection was published after Drop");
+                    Must(revoked&&!Ok(r)&&!tools.ConnectedForTest&&LogCount("computer.chrome.connected")==before,"revoke="+revoked+", connected="+tools.ConnectedForTest+", logs="+(LogCount("computer.chrome.connected")-before)+", result="+Brief(r));
                 }
                 finally{ChromeTools.BeforePublishForTest=null;}
                 Must(Ok(await Tool(run,"chrome_tabs",new{})),"next connection after revoked attempt");

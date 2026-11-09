@@ -9,13 +9,20 @@ public static class ChromeUiLane
     {
         long end=Environment.TickCount64+timeoutMs;int revoked=0;
         bool Allowed()=>Volatile.Read(ref revoked)==0&&!stopped()&&Environment.TickCount64<end;
-        Task<T> task;
-        lock(sync)
+        Task<T>? task=null;
+        while(task is null)
         {
-            if(pending is {IsCompleted:false})throw new TimeoutException("Chrome UI Automation ist noch beschäftigt.");
-            if(!Allowed())throw new OperationCanceledException("run stopped");
-            task=Task.Factory.StartNew(()=>{if(!Allowed())throw new OperationCanceledException();return work(Allowed);},CancellationToken.None,TaskCreationOptions.LongRunning,TaskScheduler.Default);pending=task;
-            _=task.ContinueWith(t=>{_ = t.Exception;},TaskContinuationOptions.OnlyOnFaulted);
+            if(stopped())throw new OperationCanceledException("run stopped");
+            if(Environment.TickCount64>=end)throw new TimeoutException("Chrome UI Automation ist noch beschäftigt.");
+            lock(sync)
+            {
+                if(pending is not {IsCompleted:false})
+                {
+                    task=Task.Factory.StartNew(()=>{if(!Allowed())throw new OperationCanceledException();return work(Allowed);},CancellationToken.None,TaskCreationOptions.LongRunning,TaskScheduler.Default);pending=task;
+                    _=task.ContinueWith(t=>{_ = t.Exception;},TaskContinuationOptions.OnlyOnFaulted);
+                }
+            }
+            if(task is null)Thread.Sleep(25);
         }
         try
         {

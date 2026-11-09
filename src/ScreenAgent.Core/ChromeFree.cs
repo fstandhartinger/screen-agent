@@ -511,7 +511,7 @@ public sealed class ChromeFree:IDisposable
         int count=(int)D(r,"n");state.NextRef=first+count;snaps[tab]=(gen,first,count);
         var lines=ChromeOutline.Lines(r.TryGetProperty("items",out var items)?items:default);
         string title=S(r,"title"),url=S(r,"url");int vh=(int)D(r,"vh"),sm=(int)D(r,"sm");
-        string text=ChromeOutline.Build(ChromeOutline.Header(state.Alias(tab),title,url,(int)D(r,"vw"),vh,(int)D(r,"sy"),sm),lines,filter,all,B(r,"cut"),more:sm>vh/2);
+        string text=ChromeOutline.Build(ChromeOutline.Header(state.Alias(tab),title,url,(int)D(r,"vw"),vh,(int)D(r,"sy"),sm),lines,filter,all,B(r,"cut")&&S(r,"reason")=="items",more:sm>vh/2);
         if(B(r,"cut"))text+="\nSeitenbudget erreicht: "+S(r,"reason")+" ("+D(r,"visited")+" Knoten besucht).";
         return new(true,text,Target:title,Domain:DomainOf(url));
     }

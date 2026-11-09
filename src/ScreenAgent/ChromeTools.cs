@@ -214,6 +214,7 @@ internal sealed class ChromeTools:IFreeToolset
         (bool Ok,string Step,string Seen) r;
         try{r=ChromeEnable.Run(host,Ready,EnableSnap,stopped);}
         catch(OperationCanceledException){throw;}
+        catch(InvalidOperationException e) when(e.Message is "tab-left" or "focus-left"){r=(false,e.Message,"");} // The machine step is logged below without page text.
         catch(Exception e){r=(false,"error:"+e.GetType().Name,"");}   // UI Automation or SendInput failed: reported as the step that failed, the model goes on with the desktop tools
         LastEnable=r.Step;
         host.Log("computer.chrome.enable",new(){["run"]=runId,["ok"]=r.Ok,["step"]=r.Step,["ms"]=sw.ElapsedMilliseconds});
