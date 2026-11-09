@@ -1,4 +1,26 @@
-# Screen Agent v0.1.11 preview
+# Screen Agent v0.1.13 preview
+
+Version 0.1.13 is about the dictated text (Alt+Win). The gateway now listens with better
+recognisers and guards the clean-up word by word (agent-desk PR #21, #22); the app does three
+things with it:
+
+- **Light structure.** A long dictation arrives with a line break between thoughts and a blank
+  line between topics or separate requests. The words are the same; there is no markup. The
+  line breaks only exist where the text is pasted (texts of 60 characters or more outside a
+  terminal). Typed key by key (terminals, short texts, a clipboard another program holds) an
+  Enter would send a chat message or run a command, so there the text stays one line.
+  `DictationFormat: false` in `config.json` turns it off. A dictation of one chunk gets the
+  structure from the gateway's `format` pass when it has 45 words or more.
+- **Nobody spoke.** The gateway can answer a chunk with `silent: true` (its recognisers agree
+  there were no words). That is an answer, not a lost chunk: no retry, no failure window.
+- **The seconds after the last word.** A last chunk that never gets clearly louder than room
+  noise and stays under an eighth of the loudest moment of the dictation is not sent. On
+  9 Nov those tails came back as "Okay.", "Ja." or whole invented sentences.
+
+The correction learner compares one line with one line, so a hand correction inside a text
+with line breaks is still seen. `dictation.polish` log events carry `mode` and `breaks`.
+
+## v0.1.11
 
 Version 0.1.11 repairs the Main Agent command-palette path. It waits for a unique
 editable query, verifies the full query and selected `Claude Code: Focus input`

@@ -13,7 +13,8 @@ internal static class TextInjector
         if(root.TryGetCurrentPattern(TextPattern.Pattern,out var t))return ((TextPattern)t).DocumentRange.GetText(-1).TrimEnd('\r','\n');
         return null;
     }
-    public static string Sanitize(string text)=>new(text.Select(c=>c is '\r' or '\n' or '\t'?' ':c).Where(c=>!char.IsControl(c)).ToArray());
+    // One line, no control characters: what is typed key by key, and what the correction learner compares.
+    public static string Sanitize(string text)=>DictationLayout.Flat(text);
     internal static bool Elevated(IntPtr hwnd)=>ElevationRefusal(hwnd) is not null;
     internal static string? ElevationRefusal(IntPtr hwnd)
     {
@@ -36,6 +37,8 @@ internal static class TextInjector
     // true = the text went into the target. false = it did not (the reason is in inject.refused); the clipboard is NOT used for a refused text, the caller shows it in a window.
     public static async Task<bool> Inject(Target target,string text,bool clipboard,PrivacyPolicy policy,InputGate? gate=null)
     {
+        // v0.1.13: line breaks (light structure from the gateway) stay when the text is pasted; typed key by key an Enter would send or run something, so that is one line.
+        string pasted=DictationLayout.ForPaste(text);
         text=Sanitize(text);
         // A Main Agent prompt being typed finishes first (30 s at most); if it does not, the text is refused like any unsafe target.
         using var slot=gate is null?null:await gate.BeginInject(TimeSpan.FromSeconds(30));
@@ -43,7 +46,7 @@ internal static class TextInjector
         for(int i=0;i<100&&!Native.ModifiersUp;i++)await Task.Delay(10);
         string? why=!Native.ModifiersUp?"modifiers-down":SafeWhy(target,policy);
         if(why is not null){Refused(why,text);return false;}
-        if(clipboard&&await Paste(text))return true;
+        if(clipboard&&await Paste(pasted))return true;
         foreach(char c in text)Native.Send(Native.Key(0,false,c,true),Native.Key(0,true,c,true));   // short text, terminals, and a clipboard another program holds
         return true;
     }
