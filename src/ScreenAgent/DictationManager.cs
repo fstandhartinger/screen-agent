@@ -136,14 +136,15 @@ internal sealed class DictationManager : IDisposable
     async Task<DictationOutcome> Polished(Task<DictationOutcome> job,string id,string process,string fieldBefore)
     {
         var o=await job;
-        if(!config.DictationPolish||!DictationPolish.Wanted(o))return o;
+        string? mode=DictationPolish.Mode(o,config.DictationPolish,config.DictationFormat);
+        if(mode is null)return o;
         var clock=System.Diagnostics.Stopwatch.StartNew();
         try
         {
             using var cts=CancellationTokenSource.CreateLinkedTokenSource(life.Token);cts.CancelAfter(DictationPolish.Budget(o.Text));
-            var r=await client.Polish(o.Text,"final",process,fieldBefore.Length>500?fieldBefore[^500..]:fieldBefore,cts.Token);
+            var r=await client.Polish(o.Text,mode,process,fieldBefore.Length>500?fieldBefore[^500..]:fieldBefore,cts.Token,config.DictationFormat);
             bool ok=r.Status is >=200 and <300&&DictationPolish.Accept(o.Text,r.Text);
-            Log("dictation.polish",new(){["id"]=id,["status"]=r.Status,["code"]=r.Code??"",["ok"]=ok,["changed"]=r.Changed,["ms"]=clock.ElapsedMilliseconds,["chars"]=o.Text.Length});
+            Log("dictation.polish",new(){["id"]=id,["mode"]=mode,["status"]=r.Status,["code"]=r.Code??"",["ok"]=ok,["changed"]=r.Changed,["breaks"]=ok&&DictationLayout.HasBreaks(r.Text),["ms"]=clock.ElapsedMilliseconds,["chars"]=o.Text.Length});
             return ok?o with{Text=r.Text.Trim()}:o;
         }
         catch(Exception ex){Log("dictation.polish",Redact.Of(ex,new(){["id"]=id,["ok"]=false,["ms"]=clock.ElapsedMilliseconds,["chars"]=o.Text.Length}));return o;}
@@ -196,7 +197,7 @@ internal sealed class DictationManager : IDisposable
             Log("dictation.skip",new(){["id"]=rec.Meta.Id,["why"]=why,["seconds"]=Math.Round(rec.Seconds,2),["peak"]=rec.Peak,["bytes"]=rec.Samples*2});
             return flow;
         }
-        if(last is not null&&flow.Job.Enqueued>0&&DictationGate.Reject(last.Samples.Length-last.OverlapSamples,AudioLevel.Peak(last.Samples)) is {} lw)
+        if(last is not null&&flow.Job.Enqueued>0&&DictationGate.RejectTail(last.Samples.Length-last.OverlapSamples,AudioLevel.Peak(last.Samples),rec.Peak) is {} lw)
         {Log("dictation.skip",new(){["id"]=rec.Meta.Id,["why"]="last-"+lw,["index"]=last.Index,["seconds"]=Math.Round(last.Seconds-last.OverlapSamples/(double)Wav.Rate,2),["peak"]=AudioLevel.Peak(last.Samples)});last=null;}
         int from=flow.Marks[^1];
         flow.Outcome=Polished(flow.Job.Complete(last,()=>flow.Captions.Slice(from,int.MaxValue)),rec.Meta.Id,flow.Process,flow.FieldBefore);

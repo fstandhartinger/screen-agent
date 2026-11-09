@@ -22,7 +22,9 @@ internal sealed class CorrectionLearner
         try
         {
             if(!TextInjector.Safe(target,policy)||TextInjector.Terminal(target.Window))return;
-            string? initial=TextInjector.Read(target.Element);
+            // v0.1.13: the inserted text may have line breaks in the field; everything is compared as one line (TextInjector.Sanitize), so a correction is still seen.
+            before=TextInjector.Sanitize(before);inserted=TextInjector.Sanitize(inserted);
+            string? initial=TextInjector.Read(target.Element) is {} read0?TextInjector.Sanitize(read0):null;
             if(initial is null||!Corrections.InsertedSpan(before,initial,inserted,out int offset))return;
             string prefix=initial[..offset],suffix=initial[(offset+inserted.Length)..];
             Correction? last=null;int stable=0;
@@ -30,7 +32,7 @@ internal sealed class CorrectionLearner
             {
                 await Task.Delay(1000,ct);
                 if(own!=generation||!TextInjector.Safe(target,policy))return;
-                string? value=TextInjector.Read(target.Element);
+                string? value=TextInjector.Read(target.Element) is {} read?TextInjector.Sanitize(read):null;
                 if(value is null||!value.StartsWith(prefix,StringComparison.Ordinal)||!value.EndsWith(suffix,StringComparison.Ordinal)||value.Length<prefix.Length+suffix.Length)return;
                 string span=value.Substring(prefix.Length,value.Length-prefix.Length-suffix.Length);
                 var pair=Corrections.Diff(inserted,span);

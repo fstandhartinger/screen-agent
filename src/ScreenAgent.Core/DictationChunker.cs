@@ -20,6 +20,11 @@ public static class DictationGate
     public const double SpeechSeconds=2;
     public const int SpeechPeak=2000;
     public static bool HadSpeech(Chunk c)=>c.Seconds>SpeechSeconds&&AudioLevel.Peak(c.Samples)>=SpeechPeak;
+    // v0.1.13: the seconds between his last word and letting go of the keys. Measured 9 Nov: those tails (peak 40-470 against 5,000-8,000 while he spoke) came back
+    // from the recognisers as "Okay.", "Ja." or whole invented sentences. A last chunk that never gets clearly louder than room noise and stays under an eighth
+    // of the loudest moment of the dictation is not sent.
+    public static bool QuietTail(int chunkPeak,int recordingPeak)=>chunkPeak<SpeechPeak&&(long)chunkPeak*8<recordingPeak;
+    public static string? RejectTail(long samples,int peak,int recordingPeak)=>Reject(samples,peak)??(QuietTail(peak,recordingPeak)?"quiet":null);
 }
 // Splits a running recording for the gateway (60 s per request). Cuts at the first pause of Gap length after MinSeconds (so chunks go out while he still talks);
 // with none by HardSeconds it cuts anyway and the next chunk starts OverlapSeconds earlier, which DictationJoin removes by word overlap again.

@@ -48,6 +48,30 @@ public class FixAppTests
         var o2=await Job((_,_)=>Task.FromResult(new ChunkReply(200,""))).Complete(C(0,Tone(1.5)));   // loud but shorter than 2 s
         Assert.True(o2.Complete);
     }
+    // ---- v0.1.13: "nobody spoke" is an answer of the gateway, and a quiet tail is not sent at all
+    [Fact] public async Task ASilentAnswerForALoudChunkIsAcceptedWithoutARetry()
+    {
+        var silent=ChunkReplyParse.From(200,Json("{\"text\":\"\",\"silent\":true,\"providers\":{\"mai\":{\"ok\":false,\"reason\":\"empty\"}}}"),null);
+        Assert.True(silent.Ok);Assert.True(silent.Silent);Assert.Equal("",silent.Text);
+        Assert.False(ChunkReplyParse.From(200,Json("{\"text\":\"hallo\"}"),null).Silent);
+        Assert.False(ChunkReplyParse.From(200,Json("{\"text\":\"\",\"silent\":\"yes\"}"),null).Silent);
+        int calls=0;
+        var job=Job((r,_)=>{calls++;return Task.FromResult(silent);});
+        var o=await job.Complete(C(0,Tone(5)),()=>"Live-Text");   // loud and long: without the flag this would be a lost chunk
+        Assert.Equal(1,calls);Assert.True(o.Complete);Assert.Equal(0,o.Failed);Assert.Equal("",o.Text);Assert.False(o.FromFallback);
+    }
+    [Fact] public void TheSecondsAfterHisLastWordAreNotSent()
+    {
+        // measured 9 Nov: tails with a peak of 42, 277 and 472 against 5,000-8,000 while he spoke
+        Assert.True(DictationGate.QuietTail(42,7118));Assert.True(DictationGate.QuietTail(472,6709));
+        Assert.Equal("quiet",DictationGate.RejectTail(16000*4,472,6709));
+        Assert.Equal("silent",DictationGate.RejectTail(16000*4,5,6709));Assert.Equal("too-short",DictationGate.RejectTail(100,5000,6709));
+        // speech stays: clearly louder than room noise, or a quiet microphone where everything is low
+        Assert.Null(DictationGate.RejectTail(16000*4,3000,30000));   // a loud click earlier does not make normal speech a tail
+        Assert.Null(DictationGate.RejectTail(16000*4,1400,1500));    // a low-gain microphone
+        Assert.Null(DictationGate.RejectTail(16000*4,900,6709));     // quieter than before but above an eighth
+        Assert.False(DictationGate.QuietTail(2000,100000));
+    }
     [Fact] public void TheSpeechGateNeedsMoreThanTwoSecondsAndAClearPeak()
     {
         Assert.True(DictationGate.HadSpeech(C(0,Tone(3))));
@@ -131,7 +155,23 @@ public class FixAppTests
     [Fact] public void AClipboardAnotherProcessHoldsFallsBackToTypingNotToAnException()
     {
         string inj=Src("src/ScreenAgent/TextInjector.cs");
-        Assert.Contains("COMException",inj);Assert.Matches(@"if\(clipboard&&await Paste\(text\)\)return true;",inj);
+        Assert.Contains("COMException",inj);Assert.Matches(@"if\(clipboard&&await Paste\(pasted\)\)return true;",inj);
+    }
+    // v0.1.13: line breaks only ever reach a window through the clipboard. Typed key by key an Enter would send a chat message or run a command.
+    [Fact] public void LineBreaksArePastedAndNeverTyped()
+    {
+        string inj=Src("src/ScreenAgent/TextInjector.cs");
+        Assert.Matches(@"string pasted=DictationLayout\.ForPaste\(text\);\s*text=Sanitize\(text\);",inj);
+        Assert.Matches(@"public static string Sanitize\(string text\)=>DictationLayout\.Flat\(text\);",inj);
+        Assert.Matches(@"foreach\(char c in text\)Native\.Send",inj);            // the typed text is the one-line one
+        Assert.DoesNotMatch(@"foreach\(char c in pasted\)",inj);
+        Assert.DoesNotContain('\n',DictationLayout.Flat("a\r\n\r\nb\nc"));Assert.DoesNotContain('\r',DictationLayout.Flat("a\r\n\r\nb\nc"));
+        // terminals and short texts never use the clipboard (AppController decides), so they get one line
+        Assert.Equal(2,Regex.Matches(Src("src/ScreenAgent/AppController.cs"),@"text\.Length>=60&&!TextInjector\.Terminal\(").Count);
+        // the manager asks for the pass that fits and keeps the line breaks of the answer
+        string man=Src("src/ScreenAgent/DictationManager.cs");
+        Assert.Contains("DictationPolish.Mode(o,config.DictationPolish,config.DictationFormat)",man);Assert.Contains("o with{Text=r.Text.Trim()}",man);
+        Assert.Contains("DictationGate.RejectTail(",man);
     }
     [Fact] public void TheRetryShowsTheStoredTextInsteadOfTranscribingAgain()
     {
