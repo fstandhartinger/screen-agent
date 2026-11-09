@@ -78,7 +78,8 @@ public sealed class CdpSocket:IDisposable
         var body=new Dictionary<string,object?>{["id"]=id,["method"]=method};
         if(args is not null)body["params"]=args;
         if(session is not null)body["sessionId"]=session;
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct,life.Token);timeout.CancelAfter(timeoutMs);
+        using var deadline=new CancellationTokenSource(timeoutMs);
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct,life.Token,deadline.Token);
         int runCancelled=0;
         using var watch=new Timer(_=>{if(!evenStopped&&stopped()){Interlocked.Exchange(ref runCancelled,1);try{timeout.Cancel();}catch(ObjectDisposedException){ /* Call already ended. */ }}},null,0,25);
         bool inSend=false;
@@ -102,12 +103,14 @@ public sealed class CdpSocket:IDisposable
             bool closed=life.IsCancellationRequested;
             if(inSend)Abort(); // A partial protocol message must never be reused after its deadline.
             if(cancelled)throw new OperationCanceledException("run stopped",ct);
+            if(deadline.IsCancellationRequested)throw new TimeoutException(method);
             if(closed)throw new CdpError("closed");
             throw new TimeoutException(method);
         }
         catch(Exception e) when(e is WebSocketException or ObjectDisposedException or InvalidOperationException)
         {
-            if(!evenStopped&&stopped())throw new OperationCanceledException("run stopped");
+            if(ct.IsCancellationRequested||(!evenStopped&&stopped()))throw new OperationCanceledException("run stopped");
+            if(deadline.IsCancellationRequested){if(inSend)Abort();throw new TimeoutException(method);}
             throw new CdpError("closed",e.GetType().Name);
         }
         finally{lock(waiting)waiting.Remove(id);}
@@ -116,9 +119,8 @@ public sealed class CdpSocket:IDisposable
 
     public void Dispose()
     {
-        try{life.Cancel();}catch(ObjectDisposedException){ }   // already disposed
-        try{if(ws.State==WebSocketState.Open)ws.CloseAsync(WebSocketCloseStatus.NormalClosure,"",new CancellationTokenSource(800).Token).Wait(1000);}catch(Exception){ }   // closing at the end of a run: nothing left to report
-        ws.Dispose();
+        // Teardown is also the cleanup path after stop; do not wait for an unresponsive peer's close handshake.
+        try{life.Cancel();ws.Abort();ws.Dispose();}catch(ObjectDisposedException){ /* Already disposed. */ }
     }
 }
 public sealed record ChromeShot(string Jpeg,int Width,int Height,double Scale,string Tab,bool Full,double CssWidth,double CssHeight);
@@ -707,9 +709,9 @@ public sealed class ChromeFree:IDisposable
             {
                 int steps=Math.Max(12,Math.Clamp(ms,100,5000)/25);
                 await On(tab,"Input.dispatchMouseEvent",new{type="mouseMoved",x,y,modifiers=m},ct,InputMs);
-                await On(tab,"Input.dispatchMouseEvent",new{type="mousePressed",x,y,button,buttons=ButtonMask(button),clickCount=1,modifiers=m},ct,InputMs);
                 try
                 {
+                    await On(tab,"Input.dispatchMouseEvent",new{type="mousePressed",x,y,button,buttons=ButtonMask(button),clickCount=1,modifiers=m},ct,InputMs);
                     await Sleep(80,ct);
                     for(int i=1;i<=steps;i++)
                     {

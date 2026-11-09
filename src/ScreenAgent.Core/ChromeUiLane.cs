@@ -1,7 +1,7 @@
-namespace ScreenAgent;
+namespace ScreenAgent.Core;
 // One provider call at a time. A timed-out provider occupies the lane until it returns;
 // callers never create replacement threads that could accumulate delayed input.
-internal static class ChromeUiLane
+public static class ChromeUiLane
 {
     static readonly object sync=new();
     static Task? pending;
@@ -14,7 +14,7 @@ internal static class ChromeUiLane
         {
             if(pending is {IsCompleted:false})throw new TimeoutException("Chrome UI Automation ist noch beschäftigt.");
             if(!Allowed())throw new OperationCanceledException("run stopped");
-            task=Task.Run(()=>{if(!Allowed())throw new OperationCanceledException();return work(Allowed);});pending=task;
+            task=Task.Factory.StartNew(()=>{if(!Allowed())throw new OperationCanceledException();return work(Allowed);},CancellationToken.None,TaskCreationOptions.LongRunning,TaskScheduler.Default);pending=task;
             _=task.ContinueWith(t=>{_ = t.Exception;},TaskContinuationOptions.OnlyOnFaulted);
         }
         try

@@ -65,7 +65,7 @@ internal sealed class ChromeTools:IFreeToolset
     void Drop()
     {
         ChromeFree? c;ChromeAllowClicker? k;
-        lock(sync){generation++;connecting?.Cancel();connecting=null;c=conn;k=clicker;conn=null;clicker=null;}
+        lock(sync){generation++;connecting?.Cancel();connecting?.Dispose();connecting=null;c=conn;k=clicker;conn=null;clicker=null;}
         k?.Dispose();
         try{c?.Dispose();}catch(Exception e) when(e is WebSocketException or ObjectDisposedException or InvalidOperationException){host.Log("computer.chrome.dispose",new(){["type"]=e.GetType().Name});}
     }
@@ -114,8 +114,17 @@ internal sealed class ChromeTools:IFreeToolset
     ChromeFree Connect()
     {
         long epoch;CancellationTokenSource attemptLife;ChromeRunState attemptState;
-        lock(sync){epoch=generation;connecting?.Cancel();attemptLife=new();connecting=attemptLife;attemptState=state;}
-        bool Stopped()=>host.Stopped()||attemptLife.IsCancellationRequested||Interlocked.Read(ref generation)!=epoch;
+        lock(sync){epoch=generation;connecting?.Cancel();connecting?.Dispose();attemptLife=new();connecting=attemptLife;attemptState=state;}
+        var token=attemptLife.Token;
+        bool Stopped()=>host.Stopped()||token.IsCancellationRequested||Interlocked.Read(ref generation)!=epoch;
+        try{return ConnectAttempt(epoch,attemptState,Stopped,token);}
+        finally
+        {
+            lock(sync)if(ReferenceEquals(connecting,attemptLife)&&conn is null){connecting=null;attemptLife.Dispose();}
+        }
+    }
+    ChromeFree ConnectAttempt(long epoch,ChromeRunState attemptState,Func<bool> Stopped,CancellationToken token)
+    {
         long t0=Environment.TickCount64;var o=host.Chrome;string dir=o.UserDataDir??ChromeCdp.DefaultUserData;
         for(int attempt=0;;attempt++)
         {
@@ -124,7 +133,7 @@ internal sealed class ChromeTools:IFreeToolset
             if(port is null)
             {
                 if(!ChromeUi.Running())throw new CdpError("chrome-not-running");
-                port=Enable(dir,null)??throw new CdpError("debugging-off",LastEnable);
+                port=Enable(dir,null,Stopped)??throw new CdpError("debugging-off",LastEnable);
             }
             string owner="";var clients=new List<uint>();
             try{var (pid,cl)=ComputerNative.PortUsers(port.Value.Port);owner=pid==0?"":ComputerNative.ImagePath(pid);clients=cl;}
@@ -142,13 +151,13 @@ internal sealed class ChromeTools:IFreeToolset
                     {
                         bool others=clients.Any(c=>c!=(uint)Environment.ProcessId);
                         // Chrome ignores a press on a prompt younger than the double-click time (how old this one is, nobody knows): wait that long first, or the Cancel is lost.
-                        if(!others){for(long end=Environment.TickCount64+ChromeUi.PressGapMs;Environment.TickCount64<end;Thread.Sleep(50))host.ThrowIfStopped();}
-                        if(!others){foreach(int i in cancel){try{ChromeUi.Press(scan.Elements[i],()=>!Stopped());}catch(Exception e) when(e is InvalidOperationException or System.Windows.Automation.ElementNotAvailableException or System.Runtime.InteropServices.COMException){host.Log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="cancel"});}}Thread.Sleep(350);}
+                        if(!others){for(long end=Environment.TickCount64+ChromeUi.PressGapMs;Environment.TickCount64<end;Thread.Sleep(25))if(Stopped())throw new OperationCanceledException("connect revoked");}
+                        if(!others){foreach(int i in cancel){try{ChromeUi.Press(scan.Elements[i],()=>!Stopped());}catch(Exception e) when(e is InvalidOperationException or System.Windows.Automation.ElementNotAvailableException or System.Runtime.InteropServices.COMException){host.Log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="cancel"});}}for(long end=Environment.TickCount64+350;Environment.TickCount64<end;Thread.Sleep(25))if(Stopped())throw new OperationCanceledException("connect revoked");}
                         host.Log("computer.chrome.stale",new(){["prompts"]=cancel.Count,["cancelled"]=!others});
                     }
                     ck=new ChromeAllowClicker(owner,host.Log,Stopped);ck.Hot(12000);
                 }
-                using var cts=CancellationTokenSource.CreateLinkedTokenSource(attemptLife.Token);cts.CancelAfter(8000);
+                using var cts=CancellationTokenSource.CreateLinkedTokenSource(token);cts.CancelAfter(8000);
                 var task=CdpSocket.Connect(new Uri("ws://127.0.0.1:"+port.Value.Port+port.Value.Path),Stopped,host.Log,cts.Token);
                 try
                 {
@@ -166,7 +175,7 @@ internal sealed class ChromeTools:IFreeToolset
                         if(attempt==0)
                         {
                             string stale=port.Value.Port+port.Value.Path;
-                            if(Enable(dir,stale) is not null)continue;
+                            if(Enable(dir,stale,Stopped) is not null)continue;
                         }
                         throw new CdpError("debugging-off",LastEnable.Length>0?LastEnable:"port closed");
                     }
@@ -188,11 +197,12 @@ internal sealed class ChromeTools:IFreeToolset
                 ck=null;
                 return free;
             }
+            catch(TimeoutException e){throw new CdpError("no-answer",e.Message);}
             finally{ck?.Hot(0);ck?.Dispose();if(!published){if(free is not null)free.Dispose();else socket?.Dispose();}}
         }
     }
     // Remote debugging is off while Chrome runs: switch it on ourselves, once per run. `stale` = the content of a leftover port file that must change. null = it did not work.
-    (int Port,string Path)? Enable(string dir,string? stale)
+    (int Port,string Path)? Enable(string dir,string? stale,Func<bool> stopped)
     {
         int pid=ChromeUi.Windows().Select(w=>{Native.GetWindowThreadProcessId(w.Hwnd,out uint p);return (int)p;}).FirstOrDefault();
         if(enableTried&&pid==enablePid)return null;
@@ -200,7 +210,7 @@ internal sealed class ChromeTools:IFreeToolset
         var sw=Stopwatch.StartNew();
         bool Ready()=>ReadPort(dir) is {} p&&p.Port+p.Path!=stale;
         (bool Ok,string Step,string Seen) r;
-        try{r=ChromeEnable.Run(host,Ready,EnableSnap);}
+        try{r=ChromeEnable.Run(host,Ready,EnableSnap,stopped);}
         catch(OperationCanceledException){throw;}
         catch(Exception e){r=(false,"error:"+e.GetType().Name,"");}   // UI Automation or SendInput failed: reported as the step that failed, the model goes on with the desktop tools
         LastEnable=r.Step;

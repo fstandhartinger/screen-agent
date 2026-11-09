@@ -106,6 +106,11 @@ public class AllowPromptTests
         var nodes=root.GetProperty("nodes").EnumerateArray().Select(n=>new DialogNode(n.GetProperty("role").GetString()!,n.GetProperty("name").GetString()!,n.GetProperty("inDocument").GetBoolean(),n.GetProperty("process").GetString()!,n.GetProperty("image").GetString()!,n.GetProperty("depth").GetInt32(),n.GetProperty("parent").GetInt32())).ToList();
         return (nodes,root.GetProperty("owner").GetString()??"",root.GetProperty("clicked").GetInt32());
     }
+    [Theory,InlineData("title-native-permission-negative.json"),InlineData("app-popup-title-negative.json")]
+    public void SyntheticTitleOnlyWindowsDoNotAuthorizeButtons(string file)
+    {
+        var (nodes,owner,_)=Load(file);Assert.Empty(AllowPrompt.Find(nodes,owner));Assert.Empty(AllowPrompt.Find(nodes,owner,AllowPrompt.Cancel));
+    }
     // The REAL prompt of Chrome 156 on the Windows runner (run 42704040240), read while it was open, before the scan left out mirrored windows: the dialog is a top-level window named like
     // its heading (Pane > Window > ... Text heading, Buttons "Turn off in settings" / "Allow" / "Cancel") and the same dialog shows up again inside the browser window's tree.
     // Three or six heading nodes, not one: the shape the old matcher called "several".

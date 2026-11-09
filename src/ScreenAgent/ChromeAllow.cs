@@ -68,9 +68,9 @@ internal static class ChromeUi
         foreach(AutomationElement k in e.FindAll(TreeScope.Children,Automation.ControlViewCondition))Walk(k,image,process,hwnd,me,depth+1,s,tops);
     }
     // InvokePattern first; a button without it gets one real click at its centre (the cursor goes back where it was). Returns how.
-    public static string Press(AutomationElement el,Func<bool>? authority=null)
-        =>ChromeUiLane.Run(valid=>PressNow(el,()=>valid()&&(authority?.Invoke()??true)),()=>authority is not null&&!authority(),500);
-    internal static string PressNow(AutomationElement el,Func<bool> allowed)
+    public static string Press(AutomationElement el,Func<bool>? authority=null,Action? dispatched=null)
+        =>ChromeUiLane.Run(valid=>PressNow(el,()=>valid()&&(authority?.Invoke()??true),dispatched),()=>authority is not null&&!authority(),500);
+    internal static string PressNow(AutomationElement el,Func<bool> allowed,Action? dispatched=null)
     {
         void Check(){if(!allowed())throw new OperationCanceledException("prompt authority revoked");}
         Check();
@@ -79,13 +79,13 @@ internal static class ChromeUi
             Check();
             // Once Invoke enters a UIA provider Windows cannot recall it. The caller is bounded,
             // no fallback is issued on timeout, and the sole lane remains occupied until it returns.
-            ((InvokePattern)p).Invoke();return "invoke";
+            dispatched?.Invoke();((InvokePattern)p).Invoke();return "invoke";
         }
         var r=el.Current.BoundingRectangle;
         if(r.IsEmpty||r.Width<2||r.Height<2)throw new InvalidOperationException("prompt button has no place on the screen");
         Check();GetCursorPos(out var was);
         Check();Native.SetCursorPos((int)(r.X+r.Width/2),(int)(r.Y+r.Height/2));
-        Check();Native.Send(Native.Button(true),Native.Button(false));
+        Check();dispatched?.Invoke();Native.Send(Native.Button(true),Native.Button(false));
         if(allowed())Native.SetCursorPos(was.X,was.Y);
         return "mouse";
     }
@@ -163,10 +163,8 @@ internal sealed class ChromeAllowClicker:IDisposable
                 pressedAt[hwnd]=now;
             }
             string how;
-            try{if(!Allowed())return;how=ChromeUi.Press(scan.Elements[b],Allowed);}
+            try{if(!Allowed())return;how=ChromeUi.Press(scan.Elements[b],Allowed,()=>{Interlocked.Increment(ref clicks);if(Record)LastTree=ChromeUi.Dump(scan,owner,b);});}
             catch(Exception e) when(e is ElementNotAvailableException or InvalidOperationException or COMException){log("computer.chrome.allow_error",new(){["type"]=e.GetType().Name,["step"]="press"});continue;}
-            Interlocked.Increment(ref clicks);
-            if(Record)LastTree=ChromeUi.Dump(scan,owner,b);
             log("computer.chrome.allow",new(){["ms"]=Environment.TickCount64-started,["how"]=how,["scan_ms"]=scan.Ms,["waited_ms"]=now-(firstSeen.TryGetValue(hwnd,out long fs)?fs:now)});
         }
     }
@@ -215,8 +213,8 @@ internal static class ChromeEnable
         }
         return null;
     }
-    public static (bool Ok,string Step,string Seen) Run(FreeHost host,Func<bool> ready,Action<string>? snap=null)
-        =>ChromeUiLane.Run(valid=>RunCore(host,ready,snap,valid),host.Stopped,20000);
+    public static (bool Ok,string Step,string Seen) Run(FreeHost host,Func<bool> ready,Action<string>? snap=null,Func<bool>? cancelled=null)
+        =>ChromeUiLane.Run(valid=>RunCore(host,ready,snap,valid),()=>host.Stopped()||(cancelled?.Invoke()??false),20000);
     static (bool Ok,string Step,string Seen) RunCore(FreeHost host,Func<bool> ready,Action<string>? snap,Func<bool> valid)
     {
         var browser=ChromeUi.Windows().Where(w=>UiaDriver.ClassOf(w.Hwnd)=="Chrome_WidgetWin_1"&&w.Title.Length>0&&Array.IndexOf(AllowPrompt.Headings,w.Title)<0).ToList();
