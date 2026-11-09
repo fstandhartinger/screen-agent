@@ -40,6 +40,8 @@ internal sealed class ComputerAgent:IDisposable
     bool handsOnNoted,confirmKeyNoted,hotkeyChecked;
     string lastGatewayGoal="";
     Work? pendingWork;
+    readonly FreeHost freeHost;
+    readonly IFreeToolset[] free;
     Func<ActionBinding?,string>? pendingExec;
     Plan? pendingPlan;
     long lastBeat;
@@ -53,6 +55,8 @@ internal sealed class ComputerAgent:IDisposable
     {
         this.post=post;this.telemetry=telemetry;this.gate=gate;this.policy=policy;this.overlay=overlay;this.hook=hook;this.sessionId=sessionId;this.voiceOn=voiceOn;this.enabled=enabled;this.muted=muted;this.notice=notice;
         chromeOptions=chrome;this.logPath=logPath;this.ui=ui;this.boardHost=boardHost;
+        freeHost=new FreeHost{Log=(t,d)=>Log(t,d),Stopped=()=>run is not {} fr||fr.Revoked||fr.IsHandsOn||fr.IsClosed||fr.IsPaused,Policy=policy,Chrome=chrome};
+        free=[new DesktopTools(freeHost),new ChromeTools(freeHost)];
         worker=new Thread(Loop){IsBackground=true,Name="ScreenAgent computer"};worker.Start();
         ticker=new System.Threading.Timer(_=>{try{Tick();}catch{ }},null,500,500);   // the tick is retried in 500 ms; every failure that matters ends the run with a logged reason
     }
@@ -186,6 +190,7 @@ internal sealed class ComputerAgent:IDisposable
             uia=new UiaDriver(policy,()=>nr.Revoked||nr.IsHandsOn||nr.IsClosed||nr.IsPaused);   // every driver and CDP call looks at this: hands-on, a close, a pause and the kill stop typing in flight
             ComputerGuard.Attach(nr);hook?.ComputerRunStarted();
         }
+        if(policy.Unrestricted)foreach(var t in free){try{t.RunStarted(nr);}catch(Exception e){Log("computer.error",new(){["run"]=nr.Id,["type"]=e.GetType().Name,["where"]="free-start"});}}
         // No kill path, no run: the keyboard hook or RegisterHotKey must be live.
         if(!KillPathLive())
         {
@@ -240,6 +245,7 @@ internal sealed class ComputerAgent:IDisposable
         bool killed=r.Revoked;
         lock(sync){revokedRuns.Add(r.Id);if(revokedRuns.Count>64)revokedRuns.Clear();}
         ComputerGuard.Attach(null);hook?.ComputerRunEnded();
+        foreach(var t in free){try{t.RunEnded(r);}catch{ }}   // a toolset that fails to tidy up must not keep the run open
         try{cdp?.Dispose();}catch{ }   // disposing at the end of a run
         cdp=null;pendingExec=null;pendingPlan=null;pendingWork=null;
         try{ui.Invoke(()=>overlay.Hide());}catch{ }   // the overlay thread is gone: nothing to hide
@@ -326,6 +332,7 @@ internal sealed class ComputerAgent:IDisposable
             return;
         }
         if(ElevatedStop(w,r,tool))return;
+        if(policy.Unrestricted&&free.FirstOrDefault(t=>t.Tools.ContainsKey(tool)) is {} toolset){ActFree(w,r,toolset,sw);return;}
         Plan plan;Verdict v;
         try
         {
@@ -350,6 +357,42 @@ internal sealed class ComputerAgent:IDisposable
         {Send(w,Reply(false,ComputerCodes.Refused,ActionClass.R3,"no-trace",null,null,r.StateName));return;}
         if(v.Confirm){Propose(w,r,plan,v,data);return;}
         Execute(w,r,plan,v,data,null,sw);
+    }
+    // General computer control (unrestricted): no class, no scope, no confirm. Intent and outcome are logged like every action; the input gate keeps dictation injection and the run apart.
+    void ActFree(Work w,ComputerRun r,IFreeToolset toolset,Stopwatch sw)
+    {
+        var cmd=w.Cmd;string tool=cmd.Tool;bool input=toolset.Tools[tool];
+        string proc=UiaDriver.ProcessOf(UiaDriver.Root(Native.GetForegroundWindow()));
+        var data=new Dictionary<string,object?>{["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=tool,["class"]=input?"R1":"R0",["rule"]="free",["process"]=proc,["chars"]=FreeArgs.Str(cmd.Args,"text")?.Length??FreeArgs.Str(cmd.Args,"command")?.Length??FreeArgs.Str(cmd.Args,"code")?.Length??0};
+        Log("computer.action",new(data){["phase"]="intent"});
+        IDisposable? slot=null;
+        try
+        {
+            if(input)
+            {
+                slot=gate.BeginInject(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+                if(slot is null){Log("computer.action",new(data){["ok"]=false,["reason"]="input-busy",["ms"]=sw.ElapsedMilliseconds});Send(w,Reply(false,ComputerCodes.Refused,null,"input-busy","Gerade wird ein Diktat eingefügt. Gleich noch einmal versuchen.",null,r.StateName));return;}
+            }
+            if(r.Revoked)throw new OperationCanceledException("run revoked");
+            var res=toolset.Run(new FreeCall(tool,cmd.Args,r));
+            r.Counted();ui.BeginInvoke(()=>overlay.Update("läuft",r.Actions,MaxShown,tool));
+            Log("computer.action",new(data){["ok"]=res.Ok,["ms"]=sw.ElapsedMilliseconds,["phase"]="done",["reason"]=res.Ok?null:res.Rule,["target"]=Labels.Clean(res.Target??""),["image"]=res.Jpeg is not null});
+            var meta=new ComputerWire.ResultMeta(string.IsNullOrEmpty(res.Target)?null:Labels.Clean(res.Target),res.Domain,res.Process??proc,res.Jpeg);
+            Send(w,Reply(res.Ok,res.Ok?ComputerCodes.Done:res.Stale?ComputerCodes.StaleRef:ComputerCodes.Refused,null,res.Ok?"free":res.Rule,res.Text,null,r.StateName,meta));
+        }
+        catch(OperationCanceledException)
+        {
+            string why=r.Revoked?"killed":r.IsHandsOn?"handson":r.IsClosed?"closed":"paused";
+            Log("computer.action",new(data){["ok"]=false,["reason"]=why,["ms"]=sw.ElapsedMilliseconds});
+            Send(w,Reply(false,r.Revoked?ComputerCodes.Killed:r.IsHandsOn?ComputerCodes.HandsOn:r.IsClosed?ComputerCodes.NoRun:ComputerCodes.Refused,null,why,null,null,r.StateName));
+        }
+        catch(Exception e)
+        {   // a tool must answer, never take the worker down: the model reads the reason and tries another way
+            string msg=e.Message.Length>200?e.Message[..200]:e.Message;
+            Log("computer.action",new(data){["ok"]=false,["reason"]=e.GetType().Name,["ms"]=sw.ElapsedMilliseconds});
+            Send(w,Reply(false,ComputerCodes.Unclear,null,"error",e.GetType().Name+": "+msg,null,r.StateName));
+        }
+        finally{slot?.Dispose();}
     }
     // A window with administrator rights in front: our input would not reach it, and we do not try. The run closes. Checked for every action AND again on the confirm path (the window in front may have changed while he decided).
     bool ElevatedStop(Work w,ComputerRun r,string tool)
@@ -684,6 +727,6 @@ internal sealed class ComputerAgent:IDisposable
     }
     public void Dispose()
     {
-        ticker.Dispose();Stop("dispose");queue.CompleteAdding();
+        ticker.Dispose();Stop("dispose");queue.CompleteAdding();foreach(var t in free)t.Dispose();
     }
 }

@@ -336,7 +336,7 @@ public class ComputerWireTests
     [InlineData("""{"computer":{"id":"c0123456789abcdef","run":"r0123456789abcdef","seq":0,"op":"action","tool":"a b"}}""","tool")]
     public void RejectsMalformed(string json,string why){Assert.Null(P(json,out var w));Assert.Equal(why,w);}
     [Fact] public void NoComputerKeyIsNotACommand(){Assert.Null(P("""{"fresh":true}""",out var w));Assert.Equal("",w);}
-    [Fact] public void ResultFitsFiveTwelveKb()
+    [Fact] public void ResultFitsTheWireLimit()
     {
         var big=new string('"',2_000_000);
         var d=ComputerWire.Result(true,ComputerCodes.Done,"R0","read",big);
