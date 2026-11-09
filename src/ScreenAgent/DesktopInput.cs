@@ -13,7 +13,7 @@ internal sealed class DesktopInput(FreeHost host)
     {
         ModifiersUp();int held=0;
         try{foreach(var m in mods){host.ThrowIfStopped();Native.Send(Scan(m));held++;}act();}
-        finally{for(int i=held-1;i>=0;i--)Native.Send(Scan(mods[i],true));}
+        finally{Exception? releaseError=null;for(int i=held-1;i>=0;i--)try{Native.Send(Scan(mods[i],true));}catch(Exception e){releaseError=e; /* Try every modifier even if one release is refused. */ }if(releaseError is not null)throw releaseError;}
     }
     public void Keys(string keys,int times=1)
     {
@@ -25,6 +25,7 @@ internal sealed class DesktopInput(FreeHost host)
     }
     public void Type(string text,bool paste,bool enter)
     {
+        using var timing=new DesktopNative.FastTimer();
         ModifiersUp();host.ThrowIfStopped();
         if(paste)
         {
@@ -62,6 +63,7 @@ internal sealed class DesktopInput(FreeHost host)
     }
     public void Drag(int x,int y,int x2,int y2,string button,int ms)
     {
+        using var timing=new DesktopNative.FastTimer();
         _=ButtonFlag(button,true);ModifiersUp();Move(x,y);
         try
         {

@@ -144,8 +144,9 @@ internal static class DesktopSelftest
             await CheckIt("l-browser-no-cdp",async()=>
             {
                 using var pages=new Fixtures();string? exe=new[]{Environment.GetEnvironmentVariable("ProgramFiles")+@"\Google\Chrome\Application\chrome.exe",Environment.GetEnvironmentVariable("ProgramFiles(x86)")+@"\Microsoft\Edge\Application\msedge.exe"}.FirstOrDefault(File.Exists);Require(exe is not null,"Kein Browser");
-                var start=new ProcessStartInfo(exe!){UseShellExecute=false};foreach(var arg in new[]{"--user-data-dir="+Path.Combine(root,"browser-profile"),"--no-first-run","--no-default-browser-check","--force-renderer-accessibility","--window-size=1000,700","http://site.localhost:"+pages.Port+"/inject"})start.ArgumentList.Add(arg);browser=Process.Start(start);await Task.Delay(2500);
-                var h=DesktopWindows.List().FirstOrDefault(h=>UiaDriver.TitleOf(h).Contains("Inject"));Require(h!=IntPtr.Zero,"Browserfenster fehlt");await Act("window_focus",new{window=DesktopWindows.Ref(h),observe=false});var shot=await Act("screenshot",new{monitor=0});Require(shot.GetProperty("result").TryGetProperty("jpeg",out _),"Browserbild ausgeblendet");
+                var start=new ProcessStartInfo(exe!){UseShellExecute=false};foreach(var arg in new[]{"--user-data-dir="+Path.Combine(root,"browser-profile"),"--no-first-run","--no-default-browser-check","--force-renderer-accessibility","--window-size=1000,700","http://site.localhost:"+pages.Port+"/inject"})start.ArgumentList.Add(arg);browser=Process.Start(start);IntPtr h=IntPtr.Zero;
+                for(int i=0;i<150;i++){h=DesktopWindows.List().FirstOrDefault(h=>UiaDriver.TitleOf(h).Contains("Inject"));if(h!=IntPtr.Zero)break;await Task.Delay(100);}
+                Require(h!=IntPtr.Zero,"Browserfenster fehlt; "+(browser is {HasExited:true}?"exit="+browser.ExitCode:"noch gestartet")+"; "+DesktopWindows.Listing());await Act("window_focus",new{window=DesktopWindows.Ref(h),observe=false});var shot=await Act("screenshot",new{monitor=0});Require(shot.GetProperty("result").TryGetProperty("jpeg",out _),"Browserbild ausgeblendet");
                 var found=await Act("ui_find",new{name="Senden",window=DesktopWindows.Ref(h)});await Act("ui_click",new{@ref=Reference(Text(found),"Button","Senden"),observe=false});await Task.Delay(250);Require(pages.Count("site.localhost/send")>0,"Browser-UIA-Klick fehlt");
                 found=await Act("ui_find",new{name="Ansehen",window=DesktopWindows.Ref(h)});var xy=Regex.Match(Text(found),@"\[(-?\d+),(-?\d+)\]");Require(xy.Success,"Browser-Koordinaten fehlen");await Act("click",new{x=int.Parse(xy.Groups[1].Value),y=int.Parse(xy.Groups[2].Value),observe=false});await Task.Delay(250);Require(UiaDriver.TitleOf(h).Contains("clicked-ok"),"Browser-Koordinatenklick fehlt");
             });
@@ -160,6 +161,7 @@ internal static class DesktopSelftest
             try{if(browser is {HasExited:false})browser.Kill(true);browser?.Dispose();}catch{ }
             if(notepad!=IntPtr.Zero)try{Native.GetWindowThreadProcessId(notepad,out uint pid);using var p=Process.GetProcessById((int)pid);p.Kill(true);}catch{ }
             Ui(()=>{if(!fixture.IsDisposed)fixture.Close();});
+            try{Directory.Delete(Path.Combine(root,"browser-profile"),true);}catch{ /* Owned browser profile may still be closing; it is runner-local. */ }
         }
         var output=new{test="desktop",ok=checks.All(c=>c.ok),scenarios=checks,unproven=new[]{"physical kill hook (run.Kill used)","multi-monitor laptop at 125–150%", "real Chrome profile"}};string json=JsonSerializer.Serialize(output,new JsonSerializerOptions{WriteIndented=true});File.WriteAllText(Path.Combine(root,"results.json"),json);Console.WriteLine(json);return checks.All(c=>c.ok)?0:1;
     }

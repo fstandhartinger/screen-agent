@@ -78,6 +78,7 @@ internal sealed class DesktopTools:IFreeToolset
         if(f.Kind==FrameKind.None&&tool!="scroll")return FreeResult.Fail("no-frame","Zuerst screenshot aufnehmen.");
         double x,y;DesktopNative.GetCursorPos(out var cursor);var cp=f.Kind==FrameKind.None?(0.0,0.0):f.FromTarget(cursor.X,cursor.Y);
         if(tool is "wheel" or "scroll"){x=FreeArgs.Num(a,"x")??cp.Item1;y=FreeArgs.Num(a,"y")??cp.Item2;}else{x=Number(a,"x");y=Number(a,"y");}
+        if(f.Kind==FrameKind.Tab&&tool is "wheel" or "scroll"){x=FreeArgs.Num(a,"x")??f.Width/2.0;y=FreeArgs.Num(a,"y")??f.Height/2.0;}
         double x2=tool=="drag"?Number(a,"x2"):x,y2=tool=="drag"?Number(a,"y2"):y;
         string button=FreeArgs.Str(a,"button")??"left",mods=FreeArgs.Str(a,"mods")??"";int count=Math.Clamp(FreeArgs.Int(a,"count")??1,1,3),ms=Math.Clamp(FreeArgs.Int(a,"ms")??600,100,5000);
         double dy=tool is "wheel" or "scroll"?Number(a,"dy"):0,dx=FreeArgs.Num(a,"dx")??0;

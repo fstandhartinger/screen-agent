@@ -9,14 +9,16 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
     sealed record Held(string Ref,IntPtr Window,AutomationElement Element,string Runtime);
     readonly Dictionary<string,Held> refs=[];
     Task? inFlight;
-    long next;
-    public void Reset()=>refs.Clear();
+    long next;int generation;readonly AsyncLocal<Action?> lease=new();
+    void Check(){lease.Value?.Invoke();host.ThrowIfStopped();}
+    public void Reset(){Interlocked.Increment(ref generation);refs.Clear();}
     T Bounded<T>(Func<T> action,int ms=4000)
     {
         if(inFlight is {IsCompleted:false})throw new TimeoutException("UI Automation antwortet noch; anderes Fenster versuchen.");
-        var task=Task.Run(action);inFlight=task;var sw=Stopwatch.StartNew();
-        while(!task.IsCompleted){host.ThrowIfStopped();if(sw.ElapsedMilliseconds>=ms)throw new TimeoutException("UI Automation antwortet nicht.");Thread.Sleep(20);}
-        return task.GetAwaiter().GetResult();
+        using var cancelled=new CancellationTokenSource(ms);var token=cancelled.Token;int epoch=generation;
+        var task=Task.Run(()=>{lease.Value=()=>{token.ThrowIfCancellationRequested();if(epoch!=generation)throw new OperationCanceledException();};try{Check();return action();}finally{lease.Value=null;}});inFlight=task;var sw=Stopwatch.StartNew();
+        try{while(!task.IsCompleted){host.ThrowIfStopped();if(sw.ElapsedMilliseconds>=ms)throw new TimeoutException("UI Automation antwortet nicht.");Thread.Sleep(20);}
+        return task.GetAwaiter().GetResult();}finally{cancelled.Cancel();}
     }
     static string Clean(string s,int max=80)=>new string(s.Take(max).Select(c=>char.IsControl(c)?' ':c).ToArray());
     string Line(Held held)
@@ -31,7 +33,7 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
     public FreeResult Tree(JsonElement args,bool find)
     {
         if(inFlight is {IsCompleted:false})return FreeResult.Fail("timeout","UI Automation antwortet noch; anderes Fenster versuchen.");
-        string? window=FreeArgs.Str(args,"window");var windows=window=="all"?DesktopWindows.List():[DesktopWindows.Resolve(window)];
+        string? window=FreeArgs.Str(args,"window");var windows=window=="all"?DesktopWindows.List(true):[DesktopWindows.Resolve(window)];
         foreach(var key in refs.Where(p=>windows.Contains(p.Value.Window)).Select(p=>p.Key).ToArray())refs.Remove(key);
         int depth=Math.Clamp(FreeArgs.Int(args,"depth")??12,1,40),max=find?30:Math.Clamp(FreeArgs.Int(args,"max")??400,1,2000);
         string filter=FreeArgs.Str(args,find?"name":"filter")??"",role=FreeArgs.Str(args,"role")??"";
@@ -84,25 +86,25 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
     });
     public FreeResult Click(string reference,string button,bool twice)=>Bounded(()=>
     {
-        var h=Get(reference);host.ThrowIfStopped();if(!h.Element.Current.IsEnabled)return FreeResult.Fail("disabled","Element ist deaktiviert.");
+        var h=Get(reference);Check();if(!h.Element.Current.IsEnabled)return FreeResult.Fail("disabled","Element ist deaktiviert.");
         object? p;
         if(button=="left"&&!twice)
         {
-            if(h.Element.TryGetCurrentPattern(InvokePattern.Pattern,out p)){host.ThrowIfStopped();((InvokePattern)p).Invoke();return new FreeResult(true,"angeklickt",Target:reference);}
-            if(h.Element.TryGetCurrentPattern(TogglePattern.Pattern,out p)){host.ThrowIfStopped();((TogglePattern)p).Toggle();return new FreeResult(true,"umgeschaltet",Target:reference);}
-            if(h.Element.TryGetCurrentPattern(SelectionItemPattern.Pattern,out p)){host.ThrowIfStopped();((SelectionItemPattern)p).Select();return new FreeResult(true,"ausgewählt",Target:reference);}
-            if(h.Element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern,out p)){host.ThrowIfStopped();((ExpandCollapsePattern)p).Expand();return new FreeResult(true,"aufgeklappt",Target:reference);}
+            if(h.Element.TryGetCurrentPattern(InvokePattern.Pattern,out p)){Check();((InvokePattern)p).Invoke();return new FreeResult(true,"angeklickt",Target:reference);}
+            if(h.Element.TryGetCurrentPattern(TogglePattern.Pattern,out p)){Check();((TogglePattern)p).Toggle();return new FreeResult(true,"umgeschaltet",Target:reference);}
+            if(h.Element.TryGetCurrentPattern(SelectionItemPattern.Pattern,out p)){Check();((SelectionItemPattern)p).Select();return new FreeResult(true,"ausgewählt",Target:reference);}
+            if(h.Element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern,out p)){Check();((ExpandCollapsePattern)p).Expand();return new FreeResult(true,"aufgeklappt",Target:reference);}
         }
-        DesktopWindows.Focus(h.Window);var r=h.Element.Current.BoundingRectangle;if(r.IsEmpty||h.Element.Current.IsOffscreen)return FreeResult.Fail("offscreen","Element ist nicht sichtbar; zuerst in den sichtbaren Bereich scrollen.");
-        input.Click((int)(r.X+r.Width/2),(int)(r.Y+r.Height/2),button,twice?2:1);return new FreeResult(true,"geklickt",Target:reference);
+        Check();DesktopWindows.Focus(h.Window);var r=h.Element.Current.BoundingRectangle;if(r.IsEmpty||h.Element.Current.IsOffscreen)return FreeResult.Fail("offscreen","Element ist nicht sichtbar; zuerst in den sichtbaren Bereich scrollen.");
+        Check();input.Click((int)(r.X+r.Width/2),(int)(r.Y+r.Height/2),button,twice?2:1);return new FreeResult(true,"geklickt",Target:reference);
     });
     public FreeResult Type(string reference,string text,bool clear,bool enter)
     {
         // UIA lookup is bounded; potentially long unicode input remains on the cancellable agent worker.
         var h=Bounded(()=>Get(reference));bool set=Bounded(()=>
         {
-            host.ThrowIfStopped();DesktopWindows.Focus(h.Window);h.Element.SetFocus();
-            if(clear&&h.Element.TryGetCurrentPattern(ValuePattern.Pattern,out var p)&&!((ValuePattern)p).Current.IsReadOnly){host.ThrowIfStopped();((ValuePattern)p).SetValue(text);return true;}return false;
+            Check();DesktopWindows.Focus(h.Window);Check();h.Element.SetFocus();
+            if(clear&&h.Element.TryGetCurrentPattern(ValuePattern.Pattern,out var p)&&!((ValuePattern)p).Current.IsReadOnly){Check();((ValuePattern)p).SetValue(text);return true;}return false;
         });
         if(set){if(enter)input.Keys("enter");}
         else{if(clear)input.Keys("ctrl+a");input.Type(text,text.Length>200||text.Contains('\n'),enter);}

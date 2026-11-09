@@ -84,7 +84,7 @@ internal static class DesktopWindows
         if(reference.StartsWith('w')&&long.TryParse(reference[1..],System.Globalization.NumberStyles.HexNumber,null,out long value)&&DesktopNative.IsWindow((IntPtr)value))return (IntPtr)value;
         throw new ArgumentException("Fenster nicht gefunden; ui_windows erneut aufrufen.");
     }
-    public static List<IntPtr> List(){var windows=new List<IntPtr>();Native.EnumWindows((h,_)=>{if(Native.IsWindowVisible(h)&&UiaDriver.TitleOf(h).Length>0&&(!Native.DwmGetWindowAttribute(h,14,out int cloaked,4).Equals(0)||cloaked==0))windows.Add(h);return true;},IntPtr.Zero);return windows;}
+    public static List<IntPtr> List(bool includeUntitled=false){var windows=new List<IntPtr>();Native.EnumWindows((h,_)=>{if(Native.IsWindowVisible(h)&&(includeUntitled||UiaDriver.TitleOf(h).Length>0)&&(!Native.DwmGetWindowAttribute(h,14,out int cloaked,4).Equals(0)||cloaked==0))windows.Add(h);return true;},IntPtr.Zero);return windows;}
     public static string Listing()
     {
         var monitors=DesktopScreens.Monitors();return string.Join("\n",List().Select(h=>{Native.GetWindowRect(h,out var r);var m=monitors.FirstOrDefault(m=>m.Bounds.Contains((r.Left+r.Right)/2,(r.Top+r.Bottom)/2));return $"{Ref(h)} {UiaDriver.ProcessOf(h)} \"{UiaDriver.TitleOf(h)}\" {(Native.IsIconic(h)?"min":DesktopNative.IsZoomed(h)?"max":"normal")} [{r.Left},{r.Top},{r.Right-r.Left},{r.Bottom-r.Top}] Monitor {m?.Index??0}{(h==Native.GetForegroundWindow()?" [vorn]":"")}";}));
