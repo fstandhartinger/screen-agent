@@ -8,11 +8,12 @@ namespace ScreenAgent;
 // What the image the model saw last shows. x,y of click/move/drag/wheel are pixels in that image; the app maps them.
 internal enum FrameKind{None,Screen,Window,Region,Tab}
 // Screen kinds: physical virtual-desktop pixel (OriginX,OriginY) is image pixel (0,0); one image pixel is 1/Scale physical pixels. Tab: CSS pixel = image pixel / Scale in tab `Tab`.
-internal sealed record Frame(FrameKind Kind,int Width,int Height,double OriginX,double OriginY,double Scale,string? Tab=null,IntPtr Hwnd=default)
+internal sealed record Frame(FrameKind Kind,int Width,int Height,double OriginX,double OriginY,double Scale,string? Tab=null,IntPtr Hwnd=default,double SourceWidth=0,double SourceHeight=0)
 {
     public static readonly Frame None=new(FrameKind.None,0,0,0,0,1);
-    public (double X,double Y) ToTarget(double x,double y)=>(OriginX+x/Scale,OriginY+y/Scale);
-    public (double X,double Y) FromTarget(double x,double y)=>((x-OriginX)*Scale,(y-OriginY)*Scale);
+    public PixelFrame Pixels=>new(Width,Height,OriginX,OriginY,SourceWidth>0?SourceWidth:Width/Scale,SourceHeight>0?SourceHeight:Height/Scale);
+    public (double X,double Y) ToTarget(double x,double y)=>Kind==FrameKind.Tab?(OriginX+x/Scale,OriginY+y/Scale):Pixels.Physical(x,y);
+    public (double X,double Y) FromTarget(double x,double y)=>Kind==FrameKind.Tab?((x-OriginX)*Scale,(y-OriginY)*Scale):Pixels.Image(x,y);
     public bool Contains(double x,double y)=>x>=0&&y>=0&&x<Width&&y<Height;
 }
 internal sealed record FreeCall(string Tool,JsonElement Args,ComputerRun Run);

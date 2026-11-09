@@ -1,0 +1,33 @@
+name: Desktop control
+on:
+  push:
+    branches: [fusion/screen-agent-computer-control-20261109-client-desktop]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test tests/ScreenAgent.Tests/ScreenAgent.Tests.csproj -c Release --logger "trx;LogFileName=core.trx" --results-directory artifacts
+      - run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish
+      - name: Desktop scenarios through ComputerAgent
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          Invoke-SA --selftest-desktop
+          if ($LASTEXITCODE -ne 0) { throw "Desktop selftest failed: $LASTEXITCODE" }
+      - name: Local debug HTTP transport and token
+        shell: pwsh
+        run: ./ci/desktop-serve.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-control
+          path: artifacts/
+          retention-days: 7

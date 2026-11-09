@@ -200,12 +200,12 @@ public sealed class ComputerRun
     }
     public void Void(){lock(gate)Pending=null;}
     // Reasons to close that the clock decides: 60 s idle, the gateway gone quiet (heartbeat), the time cap.
-    public string? Due()
+    public string? Due(bool executing=false)
     {
         long now=clock();
         if(IsClosed||Revoked)return null;
         if(now-StartedAt>Caps.MaxMs)return "time-cap";
-        if(Pending is null&&now-Volatile.Read(ref lastAction)>Caps.IdleMs&&!IsHandsOn)return "idle";
+        if(!executing&&Pending is null&&now-Volatile.Read(ref lastAction)>Caps.IdleMs&&!IsHandsOn)return "idle";
         if(now-Volatile.Read(ref lastGateway)>Caps.GatewayQuietMs)return "gateway-quiet";
         return null;
     }
