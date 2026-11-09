@@ -30,7 +30,7 @@ internal sealed class DesktopInput(FreeHost host)
         if(paste)
         {
             string old=ClipboardText.Read();
-            try{ClipboardText.Write(text);Keys("ctrl+v");Wait(150);}finally{ClipboardText.Write(old);}
+            try{ClipboardText.Write(text.Replace("\r\n","\n").Replace("\r","\n").Replace("\n","\r\n"));Keys("ctrl+v");Wait(150);}finally{ClipboardText.Write(old);}
         }
         else
         {

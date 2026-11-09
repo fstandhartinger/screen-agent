@@ -10,9 +10,17 @@ using Forms=System.Windows.Forms;
 namespace ScreenAgent;
 internal static class DesktopSelftest
 {
+    // WPF owns this harness's message loop, so implement the shortcut normally supplied by WinForms preprocessing.
+    sealed class TestEdit:Forms.TextBox
+    {
+        protected override void WndProc(ref Forms.Message m)
+        {
+            if(m.Msg==0x100&&(int)m.WParam==65&&(Forms.Control.ModifierKeys&Forms.Keys.Control)!=0){SelectAll();return;}base.WndProc(ref m);
+        }
+    }
     sealed class TestWindow:Forms.Form
     {
-        public readonly Forms.TextBox Edit=new(){Location=new(20,210),Width=300,Height=65,Multiline=true,AccessibleName="Testtext"};
+        public readonly TestEdit Edit=new(){Location=new(20,210),Width=300,Height=65,Multiline=true,AccessibleName="Testtext"};
         public readonly Forms.ListBox List=new(){Location=new(400,40),Width=180,Height=220,AccessibleName="Scrollliste"};
         public Point LastDown,LastUp;public int Moves,Clicks,ClickCount,Choice;public Forms.MouseButtons Button;
         bool dragging;
@@ -135,10 +143,10 @@ internal static class DesktopSelftest
                 await Act("ui_tree",new{window=DesktopWindows.Ref(notepad)});await Act("ui_windows");
                 await Act("ui_type",new{@ref=edit,text="Änderung 😀",observe=false});Require(Text(await Act("ui_read",new{@ref=edit})).Contains("Änderung 😀"),"UIA-Text oder Referenzstabilität fehlt");
                 await Act("clipboard_write",new{text="ursprüngliche Zwischenablage"});Ui(()=>fixture.Edit.Focus());await Act("key",new{key="ctrl+a",observe=false});
-                await Act("type",new{text="Grüße 😀\nZeile zwei",observe=false});Require(Ui(()=>fixture.Edit.Text).Replace("\r\n","\n")=="Grüße 😀\nZeile zwei","Automatisches Einfügen fehlt");
+                await Act("type",new{text="Grüße 😀\nZeile zwei",observe=false});Require(Ui(()=>fixture.Edit.Text).Replace("\r\n","\n")=="Grüße 😀\nZeile zwei","Automatisches Einfügen fehlt: "+Ui(()=>fixture.Edit.Text));
                 Require(Text(await Act("clipboard_read"))=="ursprüngliche Zwischenablage","Zwischenablage nicht wiederhergestellt");
-                var ps=Text(await Act("run_powershell",new{command="Write-Output 'Grüße 😀'"}));Require(ps.Contains("Grüße 😀"),"PowerShell UTF-8: "+ps);
             });
+            await CheckIt("n-powershell-unicode",async()=>{var ps=Text(await Act("run_powershell",new{command="Write-Output 'Grüße 😀'"}));Require(ps.Contains("Grüße 😀"),"PowerShell UTF-8: "+ps);});
             await CheckIt("j-kill",async()=>
             {
                 await FocusFixture();Ui(()=>fixture.Edit.Focus());var typing=session.Act("type",new{text=new string('x',5000),paste=false,observe=false});await Task.Delay(120);var sw=Stopwatch.StartNew();session.Kill();var result=await typing;Require(sw.ElapsedMilliseconds<300,"Kill zu langsam");Require(result.GetProperty("code").GetString()=="killed","Kill-Code fehlt");Require(Good(await session.Start("Desktop weiter testen")),"Neustart fehlgeschlagen");
