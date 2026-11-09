@@ -12,6 +12,7 @@ internal sealed class AppController : IDisposable
     readonly KeyboardHook hook;
     readonly StatusToast toast;
     readonly PrivacyCapture privacy;
+    readonly ScreenTextSender screenText;
     readonly CorrectionLearner learner;
     readonly DispatcherTimer timer;
     readonly System.Windows.Forms.NotifyIcon tray;
@@ -74,6 +75,8 @@ internal sealed class AppController : IDisposable
         captions=new(config,client,telemetry,bridge.Dispatcher,()=>(ids.ToArray(),terms.Take(30).ToArray()));
         dictation=new(config,client,telemetry,captions,bridge.Dispatcher,(text,level)=>{if(bridge.Dispatcher.CheckAccess())Notice(text,level,"dictation");else bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,level,"dictation")));},text=>Balloon(text,"dictation"),
             (proc,field)=>new DictationContext(proc,field.Length<=500?field:field[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray()),InsertHere);
+        screenText=new(new ScreenTextSource(config.Policy(),()=>!disposed&&client.Paired&&hook.Healthy&&!hook.Paused&&!paused&&drawings.Count==0),client,()=>config.ScreenTextForSpeech,(type,data)=>telemetry.Event(type,data));
+        dictation.Started+=()=>_=screenText.Start("dictation",CancellationToken.None);
         briefing=new(config,client,Trace,()=>bridge.SessionId);
         if(config.ActivityOverlay)activity=new ActivityOverlay(()=>toast.IsVisible?(int)Math.Ceiling(toast.ActualHeight*System.Windows.Media.VisualTreeHelper.GetDpi(toast).DpiScaleY)+6:0);
         bridge.Activity+=e=>OnActivity(e,false);bridge.ActivityRejected+=why=>telemetry.Event("activity.invalid",new(){["reason"]=why});
@@ -535,6 +538,7 @@ internal sealed class AppController : IDisposable
         bool idsDue=!(fg==lastForeground&&now-capturedAt<config.IntervalMs&&!schedule.RenewalDue(now));
         bool frameDue=frames&&planner.CaptureDue(now,(long)fg,freshId!=null);
         if(busy||!schedule.Ready(now)||!Active||drawings.Count>0||!(idsDue||frameDue))return;
+        if(voice&&fg!=lastForeground)_=screenText.Start("foreground",epoch.Token,"");
         busy=true;capturedAt=now;lastForeground=fg;planner.Captured(now,(long)fg);
         var ct=epoch.Token;string sid=bridge.SessionId!;contextSid=sid;
         if(voice&&commandsSid!=sid){commandsSid=sid;_=CommandLoop(sid,ct);_=briefing.Start(sid,ct);}   // also without frames: prompts for the Main Agent arrive on this channel
@@ -597,6 +601,7 @@ internal sealed class AppController : IDisposable
                 var confirmed=await client.Exists(found.Ids,ct);
                 if(gen!=ocrGen||!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg){ocrGrid=null;return;}   // the picture moved on: look again
                 briefing.NoteScreenText(found.Text);   // kept in memory for the start briefing; only for a picture that is still current (a Reset cleared the earlier one), cleared with the picture
+                _=screenText.Start("session",ct,found.Text,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),fg);
                 ocrIds=confirmed;var merged=DevicePayloads.Merge(ocrIds,visionIds);
                 await PostScreen(sid,DevicePayloads.Screen(merged,process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
                 if(gen!=ocrGen||!Active||ct.IsCancellationRequested)return;
