@@ -3,6 +3,15 @@ using Xunit;
 namespace ScreenAgent.Tests;
 public class DesktopMathTests
 {
+    [Fact] public void UnrestrictedRunSurvivesASlowModelTurnWhileTheGatewayBeats()
+    {
+        // e2e 9 Nov 2026: one model turn of 65 s ended the run as "idle" although the gateway was alive and beating.
+        long now=0;var run=new ComputerRun("run","goal",new ComputerScope(),()=>now,ComputerCaps.Unrestricted);
+        for(int i=0;i<13;i++){now+=5000;run.Seen();Assert.Null(run.Due());}   // 65 s without an action, a beat every 5 s
+        now+=16000;Assert.Equal("gateway-quiet",run.Due());                  // the gateway gone quiet still ends it after 15 s
+        now=0;var stuck=new ComputerRun("run2","goal",new ComputerScope(),()=>now,ComputerCaps.Unrestricted);
+        for(int i=0;i<121;i++){now+=5000;stuck.Seen();}Assert.Equal("idle",stuck.Due());   // ten minutes of beats without one action: last resort
+    }
     [Fact] public void ExecutingIsNotIdleButGatewayAndTimeCapsRemain()
     {
         long now=0;var run=new ComputerRun("run","goal",new ComputerScope(),()=>now);

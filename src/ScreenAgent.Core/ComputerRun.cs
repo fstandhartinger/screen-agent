@@ -66,7 +66,9 @@ public sealed class ActionBinding
 }
 public sealed record PendingAsk(string Tool,string Hash,string Spoken,string Code,long At,ActionBinding Binding,JsonElement Args,string Class,string Rule);
 public sealed record RunCaps(long MaxMs=10*60_000,int MaxActions=150,int StepReport=25,long PendingMs=60_000,int MaxAsks=8,int MaxExpiries=2,long IdleMs=60_000,long GatewayQuietMs=15_000);
-public static class ComputerCaps{public const int UnrestrictedActions=1000;public static readonly RunCaps Unrestricted=new(MaxMs:60*60_000,MaxActions:UnrestrictedActions,StepReport:int.MaxValue);}
+// Unrestricted: the gateway's heartbeat (GatewayQuietMs) says whether the run is alive, and the gateway has its own idle rule that knows about a model call in flight and an open question to him.
+// The app's 60 s idle rule ended live runs whenever one model turn or his answer took longer than a minute (e2e, 9 Nov 2026), so here it is only a last resort.
+public static class ComputerCaps{public const int UnrestrictedActions=1000;public static readonly RunCaps Unrestricted=new(MaxMs:60*60_000,MaxActions:UnrestrictedActions,StepReport:int.MaxValue,IdleMs:10*60_000);}
 public enum RunState { Running, HandsOn, Paused, Closed }
 // The app owns the run. The kill flag is set from the keyboard hook callback (an Interlocked write: no allocation, no lock, no I/O) and the input worker looks at it before every SendInput batch and CDP call.
 public sealed class ComputerRun
