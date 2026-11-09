@@ -280,8 +280,9 @@ internal static class ChromeEnable
             AutomationElement? box=null;long end=Environment.TickCount64+6000;
             while(box is null)
             {
-                Tab();
-                if(Page())box=Box(root,seen);
+                try{Tab();if(Page())box=Box(root,seen);}
+                catch(Exception e) when(e is ElementNotAvailableException or COMException||(e is InvalidOperationException&&e.Message is not ("tab-left" or "focus-left")))
+                {host.Log("computer.chrome.enable_read_retry",new(){["type"]=e.GetType().Name});} // Chrome rebuilds its accessibility tree during navigation; no input is sent until a fresh proof succeeds.
                 if(box is null){if(Environment.TickCount64>end)return (false,"no-verified-checkbox",string.Join(" | ",seen));Wait(host,100);}
             }
             snap?.Invoke("enable-2-page");

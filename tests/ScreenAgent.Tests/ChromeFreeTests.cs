@@ -94,6 +94,11 @@ public class AllowPromptTests
     {
         var t=Real();t[7]=N("Button","unrelated",2,4);Assert.Empty(AllowPrompt.Find(t,Chrome));
     }
+    [Fact] public void AppTitlebarTextCannotCombineWithANativePermissionBubble()
+    {
+        var t=new List<DialogNode>{N("Window","Allow remote debugging?",0,-1),N("TitleBar","",1,0),N("Text","Allow remote debugging?",2,1),N("Pane","permission",1,0),N("Button","Allow",2,3),N("Button","Cancel",2,3)};
+        Assert.Empty(AllowPrompt.Find(t,Chrome));
+    }
     static string Root()
     {
         for(var d=new DirectoryInfo(AppContext.BaseDirectory);d is not null;d=d.Parent)if(Directory.Exists(Path.Combine(d.FullName,"testdata","chrome")))return d.FullName;

@@ -15,7 +15,7 @@ public static class AllowPrompt
     {
         for(int g=0;g<128&&i>=0&&i<t.Count;g++)
         {
-            if(t[i].InDocument||t[i].Role=="Document")return false;
+            if(t[i].InDocument||t[i].Role is "Document" or "TitleBar")return false;
             int p=t[i].Parent;if(p<0)return true;if(p==i)return false;i=p;
         }
         return false;
@@ -34,6 +34,8 @@ public static class AllowPrompt
             for(int g=0;g<128&&a>=0&&a<tree.Count;g++)
             {
                 if(!Native(tree,a)||!Browser(tree[a],ownerImage,browsers))break;
+                // The dialog's container is native-only; never combine a title/tooltip with a permission bubble across page content.
+                if(Enumerable.Range(0,tree.Count).Any(i=>tree[i].Role=="Document"&&Under(tree,i,a)))break;
                 var buttons=Enumerable.Range(0,tree.Count).Where(i=>tree[i].Role=="Button"&&Native(tree,i)&&Browser(tree[i],ownerImage,browsers)&&Under(tree,i,a)).ToArray();
                 if(buttons.Any(i=>Allow.Contains(tree[i].Name))&&buttons.Any(i=>Cancel.Contains(tree[i].Name)))
                 {
