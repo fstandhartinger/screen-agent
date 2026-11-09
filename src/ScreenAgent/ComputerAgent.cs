@@ -45,6 +45,7 @@ internal sealed class ComputerAgent:IDisposable
     Func<ActionBinding?,string>? pendingExec;
     Plan? pendingPlan;
     long lastBeat;
+    int freeExecuting; // An in-flight shell/input action is not idle; time and gateway caps still apply.
     string lastState="";
     public ComputerRun? Run=>run;
     public bool Active=>run is {IsClosed:false};
@@ -273,7 +274,7 @@ internal sealed class ComputerAgent:IDisposable
         if(Native.OpenInputDesktop(0,false,0x100) is var d&&d==IntPtr.Zero){r.Close("lock");EndRun("lock");return;}
         else if(d!=IntPtr.Zero)Native.CloseDesktop(d);
         r.Pause(muted());
-        if(r.Due() is {} why){r.Close(why);EndRun(why);return;}
+        if(r.Due(policy.Unrestricted&&Volatile.Read(ref freeExecuting)>0) is {} why){r.Close(why);EndRun(why);return;}
         if(r.ExpirePending()){Log("computer.confirm.expired",new(){["run"]=r.Id});ui.BeginInvoke(()=>overlay.ClearAsk());pendingExec=null;pendingPlan=null;pendingWork=null;if(r.IsClosed){EndRun("expired-twice");return;}}
         if(r.IsHandsOn&&!handsOnNoted)
         {
@@ -362,6 +363,7 @@ internal sealed class ComputerAgent:IDisposable
     void ActFree(Work w,ComputerRun r,IFreeToolset toolset,Stopwatch sw)
     {
         var cmd=w.Cmd;string tool=cmd.Tool;bool input=toolset.Tools[tool];
+        Interlocked.Increment(ref freeExecuting);
         string proc=UiaDriver.ProcessOf(UiaDriver.Root(Native.GetForegroundWindow()));
         var data=new Dictionary<string,object?>{["run"]=r.Id,["seq"]=cmd.Seq,["tool"]=tool,["class"]=input?"R1":"R0",["rule"]="free",["process"]=proc,["chars"]=FreeArgs.Str(cmd.Args,"text")?.Length??FreeArgs.Str(cmd.Args,"command")?.Length??FreeArgs.Str(cmd.Args,"code")?.Length??0};
         Log("computer.action",new(data){["phase"]="intent"});
@@ -392,7 +394,7 @@ internal sealed class ComputerAgent:IDisposable
             Log("computer.action",new(data){["ok"]=false,["reason"]=e.GetType().Name,["ms"]=sw.ElapsedMilliseconds});
             Send(w,Reply(false,ComputerCodes.Unclear,null,"error",e.GetType().Name+": "+msg,null,r.StateName));
         }
-        finally{slot?.Dispose();}
+        finally{Interlocked.Decrement(ref freeExecuting);slot?.Dispose();}
     }
     // A window with administrator rights in front: our input would not reach it, and we do not try. The run closes. Checked for every action AND again on the confirm path (the window in front may have changed while he decided).
     bool ElevatedStop(Work w,ComputerRun r,string tool)

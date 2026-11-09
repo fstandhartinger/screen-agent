@@ -35,7 +35,7 @@ internal sealed class DesktopUia(FreeHost host,DesktopInput input)
         if(inFlight is {IsCompleted:false})return FreeResult.Fail("timeout","UI Automation antwortet noch; anderes Fenster versuchen.");
         string? window=FreeArgs.Str(args,"window");var windows=window=="all"?DesktopWindows.List(true):[DesktopWindows.Resolve(window)];
         foreach(var key in refs.Where(p=>windows.Contains(p.Value.Window)).Select(p=>p.Key).ToArray())refs.TryRemove(key,out _);
-        int depth=Math.Clamp(FreeArgs.Int(args,"depth")??12,1,40),max=find?30:Math.Clamp(FreeArgs.Int(args,"max")??400,1,2000);
+        int depth=Math.Clamp(FreeArgs.Int(args,"depth")??(find?40:12),1,40),max=find?30:Math.Clamp(FreeArgs.Int(args,"max")??400,1,2000);
         string filter=FreeArgs.Str(args,find?"name":"filter")??"",role=FreeArgs.Str(args,"role")??"";
         var found=new ConcurrentQueue<(Held Held,string Line)>();using var stop=new CancellationTokenSource();var token=stop.Token;bool cut=false;
         var task=Task.Run(()=>
