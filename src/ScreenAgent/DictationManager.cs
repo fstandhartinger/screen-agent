@@ -112,7 +112,8 @@ internal sealed class DictationManager : IDisposable
             Log("dictation.fail",Redact.Of(ex,new(){["stage"]="start",["reason"]="microphone",["path"]=Store.Folder}));
             cts.Cancel();rec.Dispose();Store.Delete(rec.Meta);cts.Dispose();throw;
         }
-        var caps=captions.BeginDictation();
+        var caps=captions.BeginDictation(rec.Meta.Id);
+        job.Joined+=text=>captions.Settle(caps,text);   // what will be typed replaces its part of the subtitle while he still talks
         var flow=new DictationFlow{Capture=capture,Job=job,Cts=cts,Process=process,Captions=caps,FieldBefore=fieldBefore};
         rec.Warning+=w=>ui.BeginInvoke(new System.Action(()=>notice(w,Level.Warn)));
         rec.ChunkReady+=chunk=>
@@ -259,6 +260,7 @@ internal sealed class DictationManager : IDisposable
         catch(Exception ex){Fail(m,"Verarbeitung abgebrochen","deliver",0,ex.GetType().Name,null,false,null,ex);flow.Capture.Dispose();return;}
         finally{lock(active)active.Remove(flow);}
         flow.ResultText=o.Text;
+        CaptionDone(flow,o.Text);
         // The disk refused part of it and the transcription failed: what only reached memory goes to a file now, and the memory stays alive for the retry of this run.
         bool keepMemory=!o.Complete&&!flow.Rec.DiskOk;
         if(keepMemory)
@@ -270,6 +272,20 @@ internal sealed class DictationManager : IDisposable
         }
         else flow.Capture.Dispose();
         await Finish(m,o,flow.Process,flow.Captions.Text,inject,false,flow);
+    }
+    // v0.1.16: the subtitle's log and measures to the Desk (config CaptionLog), and with DictationRefinementKeep the audio and the log on disk for a refinement round.
+    void CaptionDone(DictationFlow flow,string typed)
+    {
+        try
+        {
+            var summary=captions.Summary(flow.Captions,typed);
+            if(!config.DictationRefinementKeep)return;
+            var store=new RefinementStore(Path.Combine(ScreenConfig.Folder,"refinement"));
+            var (windows,shown)=captions.Snapshot(flow.Captions);
+            string dir=store.Save(flow.Meta,windows,shown,typed,summary,DateTimeOffset.UtcNow);
+            Log("dictation.refinement.keep",new(){["id"]=flow.Meta.Id,["path"]=dir});
+        }
+        catch(Exception ex){Log("dictation.fail",Redact.Of(ex,new(){["id"]=flow.Meta.Id,["stage"]="caption",["reason"]="summary"}));}
     }
     void Release(string id)
     {

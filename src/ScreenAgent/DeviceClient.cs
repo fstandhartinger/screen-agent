@@ -183,10 +183,12 @@ internal sealed partial class DeviceClient : IDisposable
     internal static ChunkReply Parse(RawReply reply)=>ChunkReplyParse.From(reply.Status,reply.Json?.RootElement,reply.Code);
     // Live caption of the last seconds of audio (PCM16 16 kHz mono WAV, at most 12 s). Status, text and the cost the gateway measured, if it says.
     public sealed record CaptionReply(int Status,string Text,long Ms,double Seconds,double? Cost,string? Code);
-    public async Task<CaptionReply> Caption(byte[] wav,string[] visibleIds,string[] recentTerms,CancellationToken ct)
+    // v0.1.16: dictation = the id of the dictation the window belongs to, seq = its number: the Desk logs the window's text under it (caption.log).
+    public async Task<CaptionReply> Caption(byte[] wav,string[] visibleIds,string[] recentTerms,CancellationToken ct,string? dictation=null,int seq=0)
     {
         using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(wav);audio.Headers.ContentType=new("audio/wav");
         form.Add(audio,"audio","caption.wav");form.Add(new StringContent(JsonSerializer.Serialize(new{visibleIds,recentTerms})),"context");
+        if(!string.IsNullOrEmpty(dictation)){form.Add(new StringContent(dictation),"dictation");form.Add(new StringContent(seq.ToString(System.Globalization.CultureInfo.InvariantCulture)),"seq");}
         using var reply=await RawContent(HttpMethod.Post,"api/device/caption",form,ct);
         var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
         double? cost=obj&&j!.Value.TryGetProperty("usage",out var u)&&u.ValueKind==JsonValueKind.Object&&u.TryGetProperty("cost",out var c)&&c.ValueKind==JsonValueKind.Number?c.GetDouble()
@@ -197,9 +199,13 @@ internal sealed partial class DeviceClient : IDisposable
     // v0.1.12 text clean-up (gateway /api/device/polish): mode "final" for the whole dictation, "live" for the subtitle. Status and text; a refusal never throws.
     public sealed record PolishReply(int Status,string Text,long Ms,int Changed,string? Code);
     // v0.1.13: mode "format" (line breaks only) and format=true with "final" (light structure on top of the clean-up). An older gateway ignores the flag and refuses the mode.
-    public async Task<PolishReply> Polish(string text,string mode,string process,string fieldBefore,CancellationToken ct,bool format=false)
+    // v0.1.16: before = the subtitle words right before the live piece (context for the clean-up, not part of the answer); dictation = its id for the Desk's log.
+    public async Task<PolishReply> Polish(string text,string mode,string process,string fieldBefore,CancellationToken ct,bool format=false,string? before=null,string? dictation=null)
     {
-        using var reply=await Raw(HttpMethod.Post,"api/device/polish",new{mode,text,format,context=new{process,fieldBefore}},ct);
+        object body=before is null&&dictation is null?new{mode,text,format,context=new{process,fieldBefore}}
+            :before is null?new{mode,text,format,dictation,context=new{process,fieldBefore}}
+            :dictation is null?new{mode,text,format,context=new{process,fieldBefore,before}}:new{mode,text,format,dictation,context=new{process,fieldBefore,before}};
+        using var reply=await Raw(HttpMethod.Post,"api/device/polish",body,ct);
         var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
         string t=obj&&j!.Value.TryGetProperty("text",out var tx)&&tx.ValueKind==JsonValueKind.String?tx.GetString()??"":"";
         long ms=obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0;

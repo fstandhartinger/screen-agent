@@ -39,6 +39,12 @@ public sealed class AppConfig
     // v0.1.13: light structure in the inserted text (a line break between thoughts, a blank line between topics; same words, no markup). Only where it is pasted.
     public bool DictationFormat {get;init;}=true;
     public bool CaptionPolish {get;init;}=true;
+    // v0.1.16: the subtitle's text (raw windows at the Desk, what was shown, the typed text, the measures) goes into the Desk's device log for refinement rounds.
+    // Needs TraceUpload. false = counts only, as before.
+    public bool CaptionLog {get;init;}=true;
+    // v0.1.16: keep the audio of each dictation with its caption log in %APPDATA%\ScreenAgent\refinement for 14 days (at most 1 GB), for a refinement round.
+    // Off by default; only Florian switches it on.
+    public bool DictationRefinementKeep {get;init;}=false;
     // While a dictation is being processed the pointer shows the arrow with the little circle (system-wide, and it always comes back). false = the circle in the pill only.
     public bool DictationBusyCursor {get;init;}=true;
     // Live activity overlay: what the agent is doing right now (tool calls, typing the Main Agent prompt), small rows above the status note.
@@ -116,7 +122,7 @@ public sealed class AppConfig
     {
         DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
-        DictationBusyCursor=DictationBusyCursor,ComputerUnrestricted=ComputerUnrestricted,Indicator=Indicator,ScreenTextForSpeech=ScreenTextForSpeech,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,Briefing=Briefing,MainSessionPath=MainSessionPath,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,ComputerUse=ComputerUse,ComputerSensitive=ComputerSensitive,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,DictationPolish=DictationPolish,DictationFormat=DictationFormat,CaptionPolish=CaptionPolish,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
+        DictationBusyCursor=DictationBusyCursor,ComputerUnrestricted=ComputerUnrestricted,Indicator=Indicator,ScreenTextForSpeech=ScreenTextForSpeech,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,Briefing=Briefing,MainSessionPath=MainSessionPath,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,ComputerUse=ComputerUse,ComputerSensitive=ComputerSensitive,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,DictationPolish=DictationPolish,DictationFormat=DictationFormat,CaptionPolish=CaptionPolish,CaptionLog=CaptionLog,DictationRefinementKeep=DictationRefinementKeep,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
     };
     public RetentionOptions Retention()=>new(TimeSpan.FromHours(DictationKeepHours),TimeSpan.FromDays(DictationKeepFailedDays),DictationCapMb*(1L<<20));
     public PrivacyPolicy Policy()=>new(){ExtraProcesses=BlockProcesses,ExtraDomains=BlockDomains,ExtraTitlePatterns=BlockTitlePatterns};

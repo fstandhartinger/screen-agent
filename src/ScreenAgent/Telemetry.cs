@@ -11,7 +11,7 @@ internal sealed class Telemetry : IDisposable
     readonly TraceQueue queue;
     readonly RollingLog log;
     readonly DeviceClient client;
-    readonly bool upload;
+    readonly bool upload,textLog;
     readonly Func<string?> sid;
     readonly System.Threading.Timer timer;
     int flushing;
@@ -20,7 +20,7 @@ internal sealed class Telemetry : IDisposable
     public Telemetry(AppConfig config,DeviceClient client,Func<string?> sid,string? folder=null,TimeSpan? flushInterval=null)
     {
         string storage=folder??Folder;queue=new(Path.Combine(storage,"trace-queue.jsonl"));log=new(storage);
-        this.client=client;this.sid=sid;upload=config.TraceUpload;
+        this.client=client;this.sid=sid;upload=config.TraceUpload;textLog=config.CaptionLog;
         queue.Load();Diag.Attach(this);
         var interval=flushInterval??TimeSpan.FromSeconds(5);
         timer=new(_=>_=Flush(sid()),null,interval,interval);
@@ -30,6 +30,14 @@ internal sealed class Telemetry : IDisposable
         var clean=TraceSanitizer.Clean(data);var e=new TraceEvent(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),type,clean);
         log.Write(e);
         if(upload)queue.Add(type,clean,e.ts);
+    }
+    // v0.1.16: caption text for the refinement rounds (CaptionSummary, CaptionLog). Only with TraceUpload and CaptionLog on, only caption.* types, only to the Desk.
+    public void Text(string type,Dictionary<string,object?> data)
+    {
+        if(!upload||!textLog||!type.StartsWith("caption.",StringComparison.Ordinal))return;
+        long ts=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        log.Write(new(ts,type,new(){["chars"]=data.Values.OfType<string>().Sum(s=>s.Length)}));   // locally only that it was sent
+        queue.Add(type,TraceSanitizer.CleanText(data),ts);
     }
     // After a crash the next start loads the queue file; this keeps it current (an unpaired device never reaches the flush below).
     public void Persist()=>queue.Save();
