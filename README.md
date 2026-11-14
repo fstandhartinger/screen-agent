@@ -1,4 +1,38 @@
-# Screen Agent v0.1.15 preview
+# Screen Agent v0.1.16 preview
+
+Version 0.1.16 is about the live subtitle while you dictate (Florian, 14 Nov 2026: a stutter showed a word twice, and the subtitle did
+not correct itself while he spoke), and about logs that let us refine it.
+
+**Why it happened.** (1) The subtitle sends the last 6 s every 1.5 s and stitched each answer to the text by looking for an exact run of
+two words among the answer's first four words; when those were heard a little differently ("den Untertiteln" / "dem Untertitel") the
+whole answer was appended, four to six seconds of words twice. (2) Each answer rewrote the last ~15 words, so the live clean-up's
+correction, which was only shown while its words stayed exactly the same, was mostly thrown away or flickered back. (3) The live clean-up
+was never asked to remove stutters, and its prompt knew nothing of the words before. (4) The chunks that are transcribed while you speak
+(three recognisers, what is finally typed) never reached the subtitle, so subtitle and typed text disagreed. (5) One timeout of the
+clean-up switched it off for the rest of the dictation.
+
+**What it does now** (`Core/LiveCaption.cs`). An answer is placed by a word alignment that tolerates a word heard differently, a word cut
+at the edge of the audio and words written as one or two; after a pause longer than a window it is added. Words two answers agree on are
+settled and never rewritten by a later answer. The clean-up gets the last 40 settled words with the words before as context and replaces
+exactly those words; it runs whenever four new words settled, or two that waited 3 s; a timeout only pauses it (three failures: 15 s).
+Each transcribed chunk replaces its part of the subtitle, so subtitle and typed text say the same. Stutters, fillers, cut-off word
+starts and restarts ("ich ich", "wir haben wir haben", "Der Cap- der Caption-Text") leave the subtitle at once; "die Leute, die die
+Regeln kennen", "sehr, sehr" stay. The Desk removes the same from the typed text (`dictationGuard.js dropStutters`).
+
+**Measured** (replay of 18 dictations with the real recogniser and clean-up answers, `tools/CaptionReplay`): wrong words in the subtitle
+against what was meant 7.8 % -> 3.7 %; subtitle against the typed text 4.3 % -> 0 %; subtitle updates showing a doubled word 27 -> 0;
+words changed 3 s or more after they were shown 38 -> 0. Same windows and recogniser cost (about USD 0.0035 per minute of dictation); the
+clean-up goes from about USD 0.0024 to 0.0048 per minute (longer prompt, a few more calls): the whole subtitle about USD 0.006 -> 0.008 per minute.
+
+**Log** (config `CaptionLog`, default on, needs `TraceUpload`): the Desk logs each window's raw text and each clean-up (`caption.log`);
+the app adds `caption.shown {id, items}` (every change of the shown text: `<ms> <w|p|c><kept words> <new words>`), `caption.summary`
+(changed words and how late, doubled words, clean-up answers used, live against typed text with examples), `caption.live` and
+`caption.typed`. Only to the Desk (until the Desk took them they wait in the upload queue file, at most 24 h), never to the local log. The app sends `log=0` with its caption, clean-up and chunk requests when `CaptionLog` or `TraceUpload` is off, and the Desk then keeps no words of them either. **Keep audio for a refinement round:** `"DictationRefinementKeep": true`
+(off by default) keeps each dictation's audio with its caption log in `%APPDATA%\ScreenAgent\refinement` for 14 days (at most 1 GB).
+**Replay:** `node gateway/scripts/caption-report.mjs day.json --out DIR` (agent-desk) turns a device log into replay input;
+`dotnet run --project tools/CaptionReplay -- DIR` compares the 0.1.15 and the 0.1.16 logic on it.
+
+## v0.1.15
 
 Version 0.1.15 fixes one thing: the first ad-hoc dictation press (hold Alt+Win) sometimes said
 "Diktat nicht möglich · kein Textfeld gewählt" although the cursor was in a text field, and the
@@ -430,5 +464,10 @@ Record the observed result, evidence and latency for each row. A blank result is
 | v0.1.15 right after switching windows | Alt+Tab or click into another app and press Alt+Win at once: first press dictates into the new window | |
 | v0.1.15 no target | Click the desktop or the taskbar, press Alt+Win: "kein Programm im Vordergrund · ins Textfeld klicken, dann erneut drücken"; no recording | |
 | v0.1.15 admin window | An elevated window (e.g. admin PowerShell): "Fenster läuft als Administrator", not "kein Textfeld" | |
+| v0.1.16 stutter in the subtitle | Dictate 30 s into Notepad and stutter on purpose ("ich ich möchte", "wir haben wir haben"): the subtitle never shows the doubled words; the typed text has none either | |
+| v0.1.16 subtitle corrects itself | Dictate a sentence with "JevBench" and "LeChonk", keep talking 10 s: a misheard name in the subtitle changes to the right spelling within about 2 s while you go on, without the line jumping | |
+| v0.1.16 subtitle = typed text | Dictate 45 s (two chunks): after the first chunk is transcribed (about 25 s in) its part of the subtitle switches to the typed wording; at the end the subtitle and the inserted text read the same | |
+| v0.1.16 log | After a dictation the Desk device log (`desk-trace device`) has `caption.log` (windows with text), `caption.shown`, `caption.summary`, `caption.live`, `caption.typed` for its id | |
+| v0.1.16 refinement keep | With `"DictationRefinementKeep": true` a folder `%APPDATA%\ScreenAgent\refinement\<stamp>-<id>` with `audio.wav` and `caption.json` appears after each dictation; without it none | |
 
 Normal tray **Beenden** requests voice stop and context clear before exit. Force-kill, power loss and permanent network failure cannot guarantee remote cleanup; server expiry remains the fallback.

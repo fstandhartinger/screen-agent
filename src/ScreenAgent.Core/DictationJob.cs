@@ -62,6 +62,8 @@ public sealed class DictationJob
     public int Enqueued=>enqueued;
     public int Done=>done;
     public event Action? Progress;
+    // v0.1.16: the text of all chunks so far, joined like the final text, after each chunk: the live subtitle takes it over (CaptionHost.Settle).
+    public event Action<string>? Joined;
     public DictationJob(string id,string fieldBefore,ChunkSender send,Action<string,Dictionary<string,object?>> log,CancellationToken ct,Func<TimeSpan,CancellationToken,Task>? delay=null)
     {
         this.id=id;this.send=send;this.log=log;this.ct=ct;prior=fieldBefore;this.delay=delay??((t,c)=>Task.Delay(t,c));
@@ -91,8 +93,9 @@ public sealed class DictationJob
                     text=fallback();fromFallback|=!string.IsNullOrWhiteSpace(text);ov=false;
                 }
                 else degraded|=result.Degraded;
-                lock(parts){parts.Add(text??"");overlapped.Add(ov);}
+                string joined;lock(parts){parts.Add(text??"");overlapped.Add(ov);joined=DictationJoin.Join(parts,overlapped);}
                 done++;Progress?.Invoke();
+                try{Joined?.Invoke(joined);}catch(Exception ex){log("dictation.fail",new(){["id"]=id,["stage"]="caption",["reason"]="settle",["exType"]=ex.GetType().Name});}
             }
         }
         catch(OperationCanceledException){failReason??="Abgebrochen";failed++;}   /* kept as failReason; the manager logs it */

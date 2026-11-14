@@ -18,6 +18,20 @@ public static class TraceSanitizer
         return result;
     }
     static string Short(string s)=>s.Length<=120?s:s[..120];
+    // v0.1.16 caption log (config CaptionLog, Florian 14 Nov 2026): the subtitle's own text for the refinement rounds. Only caption.* events, only to the
+    // Desk's trace (which keeps text under "text"/"transcript" up to 4096 characters and redacts it), never to the local rolling log. Bounded here too.
+    public static Dictionary<string,object?> CleanText(Dictionary<string,object?> data)
+    {
+        Dictionary<string,object?> result=[];
+        foreach(var (key,value) in data)
+        {
+            if(result.Count>=40)break;
+            result[key]=value switch{null=>null,bool or int or long or double or float=>value,string s=>Cut(s,key is "text" or "transcript"?4000:990),
+                IEnumerable<string> a=>a.Take(50).Select(x=>Cut(x,990)).ToArray(),_=>Cut(value.ToString()??"",990)};
+        }
+        return result;
+    }
+    static string Cut(string s,int n)=>s.Length<=n?s:s[..n];
 }
 // Batches client events for the Desk trace route. Best effort: a bounded buffer, oldest dropped first.
 public sealed class TraceBuffer(int capacity=500)

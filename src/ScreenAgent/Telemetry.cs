@@ -11,7 +11,7 @@ internal sealed class Telemetry : IDisposable
     readonly TraceQueue queue;
     readonly RollingLog log;
     readonly DeviceClient client;
-    readonly bool upload;
+    readonly bool upload,textLog;
     readonly Func<string?> sid;
     readonly System.Threading.Timer timer;
     int flushing;
@@ -20,7 +20,7 @@ internal sealed class Telemetry : IDisposable
     public Telemetry(AppConfig config,DeviceClient client,Func<string?> sid,string? folder=null,TimeSpan? flushInterval=null)
     {
         string storage=folder??Folder;queue=new(Path.Combine(storage,"trace-queue.jsonl"));log=new(storage);
-        this.client=client;this.sid=sid;upload=config.TraceUpload;
+        this.client=client;this.sid=sid;upload=config.TraceUpload;textLog=config.CaptionLog;
         queue.Load();Diag.Attach(this);
         var interval=flushInterval??TimeSpan.FromSeconds(5);
         timer=new(_=>_=Flush(sid()),null,interval,interval);
@@ -30,6 +30,13 @@ internal sealed class Telemetry : IDisposable
         var clean=TraceSanitizer.Clean(data);var e=new TraceEvent(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),type,clean);
         log.Write(e);
         if(upload)queue.Add(type,clean,e.ts);
+    }
+    // v0.1.16: caption text for the refinement rounds (CaptionSummary, CaptionLog). Only with TraceUpload and CaptionLog on, only caption.* types, only to the Desk.
+    public void Text(string type,Dictionary<string,object?> data)
+    {
+        if(!upload||!textLog||!type.StartsWith("caption.",StringComparison.Ordinal))return;
+        long ts=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();   // memory only here (callers may hold a lock); the queue file holds it until the Desk took it (24 h at most)
+        queue.AddRaw(type,TraceSanitizer.CleanText(data),ts);
     }
     // After a crash the next start loads the queue file; this keeps it current (an unpaired device never reaches the flush below).
     public void Persist()=>queue.Save();
@@ -52,6 +59,8 @@ internal sealed class Telemetry : IDisposable
             {
                 var batch=queue.Peek(99); // the client.batch header is the hundredth event
                 if(batch.Count==0)break;
+                // v0.1.16: caption text events are a few KB each; the Desk takes at most 256 KB per request (a 413 would drop the whole batch)
+                {long bytes=0;int keep=0;foreach(var e in batch){bytes+=System.Text.Json.JsonSerializer.Serialize(e.data).Length+100;if(keep>0&&bytes>180_000)break;keep++;}if(keep<batch.Count)batch=batch.Take(keep).ToList();}
                 // Every batch says which app and session it came from (first event, and as fields the gateway may ignore).
                 var head=new{ts=batch[0].ts,type="client.batch",data=new Dictionary<string,object?>{["app"]=AppInfo.Version,["commit"]=AppInfo.Commit,["session"]=session??"",["n"]=++batchNo,["dropped"]=queue.Dropped}};
                 // main.* remains readable in the local log; upload it under the gateway's accepted client namespace, including queued older events.
