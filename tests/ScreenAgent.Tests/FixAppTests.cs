@@ -150,7 +150,12 @@ public class FixAppTests
         Assert.DoesNotContain("Clipboard",Src("src/ScreenAgent/DictationManager.cs"));
         string app=Src("src/ScreenAgent/AppController.cs");
         Assert.DoesNotContain("InjectRetry",app);
-        Assert.Equal(2,Regex.Matches(app,@"TextInjector\.Bind\(\)").Count);   // the key-down binding and InsertHere (a click): nothing binds by itself for a retry
+        Assert.Equal(1,Regex.Matches(app,@"TextInjector\.Bind\(\)").Count);   // InsertHere (a click)
+        // v0.1.15: key-down binding goes through ResolveTarget (TextInjector.Resolve), called at key-down and once more at the start; nothing binds by itself for a delivery retry.
+        Assert.Equal(1,Regex.Matches(app,@"TextInjector\.Resolve\(").Count);
+        Assert.DoesNotContain("TextInjector.Probe(",app);
+        Assert.Equal(3,Regex.Matches(app,@"ResolveTarget\(").Count);
+        Assert.Equal(2,Regex.Matches(inj,@"\bBind\(\)").Count);   // its definition and Probe
     }
     [Fact] public void AClipboardAnotherProcessHoldsFallsBackToTypingNotToAnException()
     {

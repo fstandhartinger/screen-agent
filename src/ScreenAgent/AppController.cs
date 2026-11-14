@@ -45,6 +45,10 @@ internal sealed class AppController : IDisposable
     string[] ids=[],ocrIds=[],visionIds=[],terms=[];
     readonly RunLog quiet=new(),noticeLog=new(5000);   // noticeLog: the same toast again within 5 s is logged once
     TextInjector.Target? target,audioTarget;
+    // v0.1.15: the field an ad-hoc dictation types into is resolved from key-down on (asked again for ~300 ms, see Core DictationTarget);
+    // the start awaits it. lastReal = the last foreground window that was neither ours nor the shell (fallback when our overlay holds the front).
+    Task<TargetOutcome<TextInjector.Target>?> targetBind=Task.FromResult<TargetOutcome<TextInjector.Target>?>(null);
+    IntPtr lastReal,lastSeenForeground;
     string before="",process="";
     DictationFlow? audio;
     readonly DictationManager dictation;
@@ -107,7 +111,7 @@ internal sealed class AppController : IDisposable
         hook.BindTarget+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>
         {
             if(audio!=null)return;
-            try{target=Native.GetForegroundWindow()==window?TextInjector.Bind():null;if(target!=null&&!TextInjector.Safe(target,config.Policy()))target=null;}catch(Exception ex){target=null;Diag.Fail("dictation-bind",ex);}
+            targetBind=ResolveTarget(window,"key-down");
         }));
         hook.BindDrawing+=window=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>underlying=window));
         hook.Action+=a=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Action(a)));
@@ -115,6 +119,7 @@ internal sealed class AppController : IDisposable
         {
             try
             {
+                TrackForeground();
                 if(client.Paired&&(scopeSent!=config.ComputerUse||config.ComputerUse&&Environment.TickCount64>=scopeRefreshAt)&&!scopePosting&&Environment.TickCount64>=scopeRetryAt)_=PostComputerScope(config.ComputerUse);
                 // Their own guards: a throw in the subtitles or the activity rows must not starve the session logic below (and is logged, once per 30 s per type).
                 try
@@ -359,11 +364,16 @@ internal sealed class AppController : IDisposable
         {
             if(action==ActionKind.DictationStart)
             {
-                string? refused=audio!=null?"already-recording":!hook.Dictating?"key-released":target is null?"no-target":paused||hook.Paused?"paused":!client.Paired?"not-paired":TextInjector.SafeWhy(target,config.Policy()) is {} unsafeWhy?"unsafe-target:"+unsafeWhy:null;
+                var bind=audio!=null?null:await BoundTarget();
+                string? stale=bind?.Target is {} early?TextInjector.SafeWhy(early,config.Policy()):null;
+                // The field moved or answered differently since key-down (focus settling): resolve once more instead of refusing.
+                if(stale is not null&&!DictationTarget.Final(stale)){bind=await ResolveTarget(IntPtr.Zero,"recheck:"+stale);stale=null;}
+                target=bind?.Target;
+                string? refused=audio!=null?"already-recording":!hook.Dictating?"key-released":bind is null?"no-target":bind.Refused is {} why?why:paused||hook.Paused?"paused":!client.Paired?"not-paired":stale is not null?"unsafe-target:"+stale:null;
                 if(refused!=null)
                 {
-                    telemetry.Event("dictation.refused",new(){["why"]=refused,["process"]=SafeProcess(target)});
-                    Notice(refused switch{"already-recording"=>"Diktat läuft schon","key-released"=>"Diktat nicht gestartet · Taste zu früh losgelassen","no-target"=>"Diktat nicht möglich · kein Textfeld gewählt","paused"=>"Diktat nicht möglich · pausiert","not-paired"=>"Diktat nicht möglich · nicht mit dem Desk verbunden",_=>"Diktat nicht möglich · dieses Feld ist geschützt (Passwort oder erhöhtes Fenster)"},Level.Warn,"refused:"+refused);
+                    telemetry.Event("dictation.refused",new(){["why"]=refused,["process"]=bind?.Last.Process??SafeProcess(target),["window"]=bind?.Last.Window.ToString(),["attempts"]=bind?.Attempts,["ms"]=bind?.Ms,["misses"]=bind is null?null:string.Join(",",bind.Misses)});
+                    Notice(refused switch{"already-recording"=>"Diktat läuft schon","key-released"=>"Diktat nicht gestartet · Taste zu früh losgelassen","paused"=>"Diktat nicht möglich · pausiert","not-paired"=>"Diktat nicht möglich · nicht mit dem Desk verbunden",_=>DictationTarget.Notice(refused)},Level.Warn,"refused:"+refused);
                     return;
                 }
                 audioTarget=target;audioSession=bridge.SessionId;
@@ -402,6 +412,32 @@ internal sealed class AppController : IDisposable
     }
     // HTTP status of a refused Desk call (DeviceClient throws HttpRequestException with it), 0 = none.
     static int StatusOf(Exception ex)=>ex is System.Net.Http.HttpRequestException{StatusCode:{} c}?(int)c:0;
+    // Key-down: find the field, asking again while the foreground settles or the program's accessibility answers late. Runs on the dispatcher.
+    async Task<TargetOutcome<TextInjector.Target>?> ResolveTarget(IntPtr hookWindow,string reason)
+    {
+        try
+        {
+            var outcome=await TextInjector.Resolve(config.Policy(),hookWindow,lastReal);
+            if(outcome.Target is {} t)telemetry.Event("dictation.target",new(){["attempt"]=outcome.Attempts,["ms"]=outcome.Ms,["process"]=outcome.Last.Process,["source"]=outcome.Last.Source,["reason"]=reason,["misses"]=string.Join(",",outcome.Misses),["control"]=TextInjector.Control(t),["hookWindow"]=hookWindow==IntPtr.Zero?null:hookWindow==t.Window});
+            return outcome;
+        }
+        catch(Exception ex){Diag.Fail("dictation-bind",ex);return null;}
+    }
+    // The start waits for the key-down resolution (it normally finished long before the 260 ms hold); never longer than 2 s.
+    async Task<TargetOutcome<TextInjector.Target>?> BoundTarget()
+    {
+        var pending=targetBind;
+        if(await Task.WhenAny(pending,Task.Delay(2000))==pending)return await pending;
+        telemetry.Event("dictation.target.slow",new(){["ms"]=2000});return null;
+    }
+    // Every tick: remember the last foreground window that is neither ours nor the shell (looked up only when the foreground changes).
+    void TrackForeground()
+    {
+        var fg=Native.GetForegroundWindow();
+        if(fg==lastSeenForeground)return;
+        lastSeenForeground=fg;
+        try{if(TextInjector.Kind(fg,out _)==TargetWindow.Real)lastReal=fg;}catch(Exception ex){Diag.Fail("track-foreground",ex);}
+    }
     static string SafeProcess(TextInjector.Target? t){try{return t is null?"":TextInjector.ProcessName(t.Window);}catch{return "";}   /* the window is gone: no name */ }
     // "In aktuelles Feld einfügen" in the dictation window: the field that has the focus now (the window never takes it from his program). He clicked, so this field is his
     // choice; the usual checks (password, elevated window, blocked list) still apply inside Inject. A retry never gets here by itself.

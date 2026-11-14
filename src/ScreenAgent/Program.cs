@@ -37,6 +37,7 @@ internal static class Program
             if(args.FirstOrDefault()=="--selftest-draw")return DrawSelftests.Draw();
             if(args.FirstOrDefault()=="--selftest-frame")return DrawSelftests.Frame(args[1]);
             if(args.FirstOrDefault()=="--selftest-dictation")return DictationSelftest.Run(args);
+            if(args.FirstOrDefault()=="--selftest-dictation-target")return DictationTargetSelftest.Run(args);
             if(args.FirstOrDefault()=="--selftest-dictionary-live")return DictationSelftest.DictionaryLive();
             if(args.FirstOrDefault()=="--selftest-hotkeys")return Selftests.Hotkeys();
             if(args.FirstOrDefault()=="--selftest-windows")return Selftests.Windows();

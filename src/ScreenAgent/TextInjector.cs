@@ -5,7 +5,55 @@ namespace ScreenAgent;
 internal static class TextInjector
 {
     public sealed record Target(IntPtr Window,AutomationElement Element);
+    // --selftest-dictation-target on an elevated CI runner (every window there is elevated, like the test itself: no UIPI boundary). Never set by the app.
+    internal static volatile bool ElevatedPeersForTests;
     public static Target Bind()=>new(Native.GetForegroundWindow(),AutomationElement.FocusedElement);
+    // v0.1.15: one look at the foreground for an ad-hoc dictation (rules in Core DictationTarget). Never throws: a miss is a reason to ask again.
+    public static (TargetProbe Probe,Target? Target) Probe(PrivacyPolicy policy,string source)
+    {
+        IntPtr fg=Native.GetForegroundWindow();
+        var kind=Kind(fg,out string process);
+        if(kind!=TargetWindow.Real||process.Length==0)return (new(kind,process,null,source),null);
+        try
+        {
+            var t=Bind();
+            if(t.Window!=fg)return (new(kind,process,"target-changed",source),null);   // the foreground moved between the two reads
+            string? why=SafeWhy(t,policy);
+            return (new(kind,process,why,source),why is null?t:null);
+        }
+        catch(Exception ex){return (new(kind,process,"error:"+ex.GetType().Name,source),null);}   // focus not readable yet (ElementNotAvailable, COM timeout): asked again
+    }
+    // Key-down resolution (app and --selftest-dictation-target): ask again for ~300 ms; if our own overlay still holds the front, give it back
+    // to the window he was in (the hook's window, else the last real foreground) and look once more.
+    public static async Task<TargetOutcome<Target>> Resolve(PrivacyPolicy policy,IntPtr hookWindow,IntPtr lastReal)
+    {
+        int looks=0;
+        var outcome=await DictationTarget.Resolve(()=>Probe(policy,++looks==1?"foreground":"settled"),ms=>Task.Delay(ms),()=>Environment.TickCount64);
+        if(outcome.Bound||outcome.Last.Window!=TargetWindow.Ours)return outcome;
+        IntPtr back=Kind(hookWindow,out _)==TargetWindow.Real?hookWindow:lastReal;
+        if(back==IntPtr.Zero||!DesktopNative.IsWindow(back)||!GiveFront(back))return outcome;
+        await Task.Delay(60);
+        var again=Probe(policy,"restored");
+        return DictationTarget.Usable(again.Probe)&&again.Target is {} restored?outcome with{Target=restored,Last=again.Probe,Attempts=outcome.Attempts+1,Refused=null}:outcome;
+    }
+    static bool GiveFront(IntPtr h)
+    {
+        uint ft=Native.GetWindowThreadProcessId(Native.GetForegroundWindow(),out _),me=Native.GetCurrentThreadId();bool joined=ft!=0&&ft!=me&&Native.AttachThreadInput(me,ft,true);
+        try{return Native.SetForegroundWindow(h);}finally{if(joined)Native.AttachThreadInput(me,ft,false);}
+    }
+    // Real window, our own overlay, a shell surface or none; process "" when it cannot be read (asked again, never "no field").
+    public static TargetWindow Kind(IntPtr window,out string process)
+    {
+        process="";
+        if(window==IntPtr.Zero)return TargetWindow.None;
+        Native.GetWindowThreadProcessId(window,out uint pid);
+        try{using var p=Process.GetProcessById((int)pid);process=p.ProcessName;}catch(Exception){ /* gone or unreadable: empty name */ }
+        var cls=new System.Text.StringBuilder(256);Native.GetClassName(window,cls,cls.Capacity);
+        long ex=Native.GetWindowLongPtr(window,-20).ToInt64();
+        return DictationTarget.Classify(window,cls.ToString(),process,pid==Environment.ProcessId,(ex&(0x08000000L|0x20L|0x80L))!=0);   // WS_EX_NOACTIVATE|TRANSPARENT|TOOLWINDOW
+    }
+    // For the log only: what kind of element has the focus (Edit, Document, Pane, ...).
+    public static string Control(Target t){try{return t.Element.Current.ControlType.ProgrammaticName.Replace("ControlType.","");}catch(Exception){return "";}   /* element gone */ }
     public static string? Read(AutomationElement root)
     {
         if(root.Current.IsPassword)return null;
@@ -98,7 +146,7 @@ internal static class TextInjector
         try
         {
             if(Native.GetForegroundWindow()!=target.Window)return "target-changed";
-            if(Elevated(target.Window))return "elevated";
+            if(!ElevatedPeersForTests&&Elevated(target.Window))return "elevated";
             if(!Automation.Compare(target.Element,AutomationElement.FocusedElement))return "focus-changed";
             if(target.Element.Current.IsPassword)return "password";
             // Password fields and elevated windows above are the real dictation fences; the config lists (empty by default) can add windows.
