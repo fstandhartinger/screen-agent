@@ -22,6 +22,9 @@ internal static class DictationTargetSelftest
             try
             {
                 var policy=new PrivacyPolicy();
+                // GitHub's runner runs everything elevated, this test included: the elevation fence would refuse every window there.
+                bool selfElevated=SelfElevated();
+                TextInjector.ElevatedPeersForTests=selfElevated;Row("environment",null,new{selfElevated,elevationFence=selfElevated?"off for this test (same integrity level)":"on"});
                 string note=Path.Combine(temp,"sa-dictation-notepad.txt");File.WriteAllText(note,"");
                 string page=Path.Combine(temp,"sa-dictation-field.html");File.WriteAllText(page,"<!doctype html><title>SA Diktat Feld</title><textarea autofocus style='width:90%;height:200px'></textarea>");
                 string? browser=new[]{Environment.GetEnvironmentVariable("ProgramFiles")+@"\Google\Chrome\Application\chrome.exe",Environment.GetEnvironmentVariable("ProgramFiles(x86)")+@"\Google\Chrome\Application\chrome.exe",Environment.GetEnvironmentVariable("ProgramFiles(x86)")+@"\Microsoft\Edge\Application\msedge.exe",Environment.GetEnvironmentVariable("ProgramFiles")+@"\Microsoft\Edge\Application\msedge.exe"}.FirstOrDefault(File.Exists);
@@ -30,9 +33,9 @@ internal static class DictationTargetSelftest
                 {
                     ("notepad",_=>Process.Start(new ProcessStartInfo("notepad.exe",Quote(note)){UseShellExecute=true}),"notepad","sa-dictation-notepad"),
                 };
-                if(browser is not null)programs.Add(("browser",run=>Process.Start(new ProcessStartInfo(browser,$"--user-data-dir={Quote(Path.Combine(temp,"browser"+run))} --no-first-run --no-default-browser-check --disable-features=Translate --app={Quote(new Uri(page).AbsoluteUri)}"){UseShellExecute=false}),Path.GetFileNameWithoutExtension(browser),"SA Diktat Feld"));
+                if(browser is not null)programs.Add(("browser",run=>Process.Start(new ProcessStartInfo(browser,$"--user-data-dir={Quote(Path.Combine(temp,"browser"+run))} --no-first-run --no-default-browser-check --disable-features=Translate --app={Quote(new Uri(page).AbsoluteUri)}"){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true}).Quiet(),Path.GetFileNameWithoutExtension(browser),"SA Diktat Feld"));
                 else Row("browser",null,new{skipped="no Chrome or Edge on this machine"});
-                if(vscode is not null)programs.Add(("vscode",run=>Process.Start(new ProcessStartInfo(vscode,$"--user-data-dir {Quote(Path.Combine(temp,"code"+run))} --extensions-dir {Quote(Path.Combine(temp,"ext"+run))} --disable-workspace-trust --skip-welcome --skip-release-notes --new-window {Quote(vsFile)}"){UseShellExecute=false}),Path.GetFileNameWithoutExtension(vscode),"sa-dictation-vscode"));
+                if(vscode is not null)programs.Add(("vscode",run=>Process.Start(new ProcessStartInfo(vscode,$"--user-data-dir {Quote(Path.Combine(temp,"code"+run))} --extensions-dir {Quote(Path.Combine(temp,"ext"+run))} --disable-workspace-trust --skip-welcome --skip-release-notes --new-window {Quote(vsFile)}"){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true}).Quiet(),Path.GetFileNameWithoutExtension(vscode),"sa-dictation-vscode"));
                 else Row("vscode",null,new{skipped="no VS Code exe given (argument or SA_VSCODE_EXE)"});
                 IntPtr keep=IntPtr.Zero;Process? keepProc=null;
                 foreach(var (name,start,proc,title) in programs)
@@ -83,7 +86,7 @@ internal static class DictationTargetSelftest
                     Close(keepProc);
                 }
                 // A window without a text field (a form with one button, another process): reported; it binds like before 0.1.15.
-                var form=Process.Start(new ProcessStartInfo("powershell.exe","-NoProfile -Command \"Add-Type -A System.Windows.Forms; $f=New-Object Windows.Forms.Form; $f.Text='SA ohne Feld'; $b=New-Object Windows.Forms.Button; $b.Text='OK'; $f.Controls.Add($b); [void]$f.ShowDialog()\""){UseShellExecute=false,CreateNoWindow=true});
+                var form=Process.Start(new ProcessStartInfo("powershell.exe","-NoProfile -Command \"Add-Type -A System.Windows.Forms; $f=New-Object Windows.Forms.Form; $f.Text='SA ohne Feld'; $b=New-Object Windows.Forms.Button; $b.Text='OK'; $f.Controls.Add($b); [void]$f.ShowDialog()\""){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true}).Quiet();
                 var (fh,fowner)=await Open(form,"powershell","SA ohne Feld");
                 if(fh!=IntPtr.Zero)
                 {
@@ -105,6 +108,8 @@ internal static class DictationTargetSelftest
         app.Run();return exit;
     }
     [System.Runtime.InteropServices.DllImport("user32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)] static extern IntPtr FindWindow(string? cls,string? title);
+    static bool SelfElevated(){using var id=System.Security.Principal.WindowsIdentity.GetCurrent();return new System.Security.Principal.WindowsPrincipal(id).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);}
+    static Process? Quiet(this Process? p){if(p is not null){p.OutputDataReceived+=(_,_)=>{};p.ErrorDataReceived+=(_,_)=>{};p.BeginOutputReadLine();p.BeginErrorReadLine();}return p;}
     static string Quote(string s)=>"\""+s+"\"";
     // The 0.1.14 bind: one read at the chord; any miss is "no-target".
     static (bool Bound,string Why) Legacy(IntPtr hookWindow,PrivacyPolicy policy)

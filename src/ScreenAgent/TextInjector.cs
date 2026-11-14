@@ -5,6 +5,8 @@ namespace ScreenAgent;
 internal static class TextInjector
 {
     public sealed record Target(IntPtr Window,AutomationElement Element);
+    // --selftest-dictation-target on an elevated CI runner (every window there is elevated, like the test itself: no UIPI boundary). Never set by the app.
+    internal static volatile bool ElevatedPeersForTests;
     public static Target Bind()=>new(Native.GetForegroundWindow(),AutomationElement.FocusedElement);
     // v0.1.15: one look at the foreground for an ad-hoc dictation (rules in Core DictationTarget). Never throws: a miss is a reason to ask again.
     public static (TargetProbe Probe,Target? Target) Probe(PrivacyPolicy policy,string source)
@@ -144,7 +146,7 @@ internal static class TextInjector
         try
         {
             if(Native.GetForegroundWindow()!=target.Window)return "target-changed";
-            if(Elevated(target.Window))return "elevated";
+            if(!ElevatedPeersForTests&&Elevated(target.Window))return "elevated";
             if(!Automation.Compare(target.Element,AutomationElement.FocusedElement))return "focus-changed";
             if(target.Element.Current.IsPassword)return "password";
             // Password fields and elevated windows above are the real dictation fences; the config lists (empty by default) can add windows.

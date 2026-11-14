@@ -88,4 +88,11 @@ public class DictationTargetTests
         Assert.Equal(TargetWindow.Real,DictationTarget.Classify(W,"Chrome_WidgetWin_1","Code - Insiders",false,false));
         Assert.Equal(TargetWindow.Real,DictationTarget.Classify(W,"Notepad","notepad",false,false));
     }
+    // The elevation fence is only ever switched off by the selftest on an elevated CI runner, never by the app.
+    [Fact] public void ElevationFenceSwitchIsSelftestOnly()
+    {
+        string root=AppContext.BaseDirectory;while(!File.Exists(Path.Combine(root,"README.md")))root=Path.GetDirectoryName(root)!;
+        var setters=Directory.GetFiles(Path.Combine(root,"src"),"*.cs",SearchOption.AllDirectories).Where(f=>System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(f),@"ElevatedPeersForTests\s*=[^=]")).Select(Path.GetFileName).ToArray();
+        Assert.Equal(["DictationTargetSelftest.cs"],setters);
+    }
 }
