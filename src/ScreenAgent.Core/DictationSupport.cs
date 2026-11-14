@@ -36,23 +36,31 @@ public sealed class GapWatch(double toleranceSeconds=0.5)
 // The end of a dictation's subtitle for the trace (caption.summary): the live text and the typed text side by side, and the measures of CaptionLog.
 public static class CaptionSummary
 {
-    public static Dictionary<string,object?> Build(DictationCaptions d,string typed,long nowMs)
+    // The measures (cheap, under the host's lock); the live text comes out for the comparison and the text parts, which run outside the lock.
+    public static Dictionary<string,object?> Build(DictationCaptions d,string typed,long nowMs,out string live)
     {
-        var log=d.Log;var live=string.Join(' ',d.Live.Display());
-        var (missing,extra,finalWords,examples)=CaptionLog.Compare(live,typed);
+        var log=d.Log;live=string.Join(' ',d.Live.Display());
         return new()
         {
             ["id"]=d.Id,["ms"]=nowMs-d.StartedMs,["windows"]=d.Live.Windows,["appended"]=d.Live.Appended,["updates"]=log.Updates,
             ["firstShownMs"]=log.FirstShownMs,["changed"]=log.Changed,["changedWindow"]=log.ChangedBy['w'],["changedPolish"]=log.ChangedBy['p'],["changedChunk"]=log.ChangedBy['c'],
-            ["changedLate"]=log.ChangedLate,["correctionAgeMs"]=log.MedianCorrectionAgeMs,["repeatsShown"]=log.RepeatsShown,["repeatsLive"]=Disfluency.Repeats(d.Live.Display()),
+            ["changedLate"]=log.ChangedLate,["correctionAgeMs"]=log.MedianCorrectionAgeMs,["repeatsShown"]=log.RepeatsShown,["repeatsLive"]=Disfluency.Repeats(StitchWords.Split(live)),
             ["repeatsRaw"]=Disfluency.Repeats(d.Live.Words),["repeatsTyped"]=Disfluency.Repeats(StitchWords.Split(typed)),
             ["polishAsked"]=log.PolishAsked,["polishUsed"]=log.PolishUsed,["polishDropped"]=log.PolishDropped,["polishFailed"]=log.PolishFailed,["chunks"]=log.Chunks,["chunksPlaced"]=log.ChunksPlaced,
-            ["liveWords"]=StitchWords.Split(live).Length,["typedWords"]=finalWords,["missingInTyped"]=missing,["extraInTyped"]=extra,["diffs"]=examples
+            ["__live"]=live
         };
+    }
+    // Live against typed text: on the last 1,500 words of each (the alignment is quadratic; a 60-minute dictation must not cost seconds and hundreds of MB).
+    public static void AddComparison(Dictionary<string,object?> data,string live,string typed)
+    {
+        static string Last(string t){var w=StitchWords.Split(t);return w.Length<=1500?t:string.Join(' ',w[^1500..]);}
+        var (missing,extra,finalWords,examples)=CaptionLog.Compare(Last(live),Last(typed));
+        data["liveWords"]=StitchWords.Split(live).Length;data["typedWords"]=StitchWords.Split(typed).Length;data["missingInTyped"]=missing;data["extraInTyped"]=extra;data["diffs"]=examples;
+        if(finalWords<StitchWords.Split(typed).Length)data["comparedWords"]=finalWords;
     }
     // The two texts themselves in parts of at most 3,500 characters (the Desk keeps an event of at most 8 KB): caption.live {id, n, of, transcript} and
     // caption.typed {id, n, of, text}; at most 12 parts each (a longer dictation keeps its end).
-    public static List<(string Type,Dictionary<string,object?> Data)> Texts(DictationCaptions d,string typed)
+    public static List<(string Type,Dictionary<string,object?> Data)> Texts(string id,string live,string typed)
     {
         var outp=new List<(string,Dictionary<string,object?>)>();
         void Parts(string type,string key,string text)
@@ -60,9 +68,9 @@ public static class CaptionSummary
             var parts=new List<string>();
             for(int i=0;i<text.Length;i+=3500)parts.Add(text.Substring(i,Math.Min(3500,text.Length-i)));
             if(parts.Count>12)parts=parts[^12..];
-            for(int n=0;n<parts.Count;n++)outp.Add((type,new(){["id"]=d.Id,["n"]=n+1,["of"]=parts.Count,[key]=parts[n]}));
+            for(int n=0;n<parts.Count;n++)outp.Add((type,new(){["id"]=id,["n"]=n+1,["of"]=parts.Count,[key]=parts[n]}));
         }
-        Parts("caption.live","transcript",string.Join(' ',d.Live.Display()));
+        Parts("caption.live","transcript",live);
         Parts("caption.typed","text",typed);
         return outp;
     }

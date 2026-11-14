@@ -23,9 +23,11 @@ internal sealed partial class DeviceClient : IDisposable
     readonly string tokenPath;
     public bool Paired=>device is not null&&device.expiresAt>DateTimeOffset.UtcNow;
     public string? DeviceId=>device?.deviceId;
+    // v0.1.16: may the Desk keep the words of captions, live clean-ups and chunks in its log (CaptionLog and TraceUpload)? Sent as log=0/1.
+    readonly bool textLog;
     public DeviceClient(AppConfig config,HttpMessageHandler? handler=null,string? tokenPath=null)
     {
-        origin=new Uri(config.DeskUrl).GetLeftPart(UriPartial.Authority);
+        origin=new Uri(config.DeskUrl).GetLeftPart(UriPartial.Authority);textLog=config.CaptionLog&&config.TraceUpload;
         this.tokenPath=tokenPath??Path.Combine(ScreenConfig.Folder,"device.bin");
         http=new(handler??new HttpClientHandler{AllowAutoRedirect=false}){BaseAddress=new Uri(config.DeskUrl.TrimEnd('/')+"/"),Timeout=TimeSpan.FromSeconds(75)};
         try{device=JsonSerializer.Deserialize<DeviceToken>(ProtectedData.Unprotect(File.ReadAllBytes(this.tokenPath),null,DataProtectionScope.CurrentUser));if(device?.origin!=origin)device=null;}
@@ -177,6 +179,7 @@ internal sealed partial class DeviceClient : IDisposable
         using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(r.Chunk.WavBytes);audio.Headers.ContentType=new("audio/wav");
         form.Add(audio,"audio","dictation.wav");form.Add(new StringContent(JsonSerializer.Serialize(baseContext with{fieldBefore=r.FieldBefore})),"context");
         if(!r.Only)form.Add(new StringContent(JsonSerializer.Serialize(new{dictationId=r.DictationId,index=r.Chunk.Index,final=r.Chunk.Final})),"chunk");
+        form.Add(new StringContent(textLog?"1":"0"),"log");
         using var reply=await RawContent(HttpMethod.Post,"api/device/dictate",form,ct);
         return Parse(reply);
     }
@@ -189,6 +192,7 @@ internal sealed partial class DeviceClient : IDisposable
         using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(wav);audio.Headers.ContentType=new("audio/wav");
         form.Add(audio,"audio","caption.wav");form.Add(new StringContent(JsonSerializer.Serialize(new{visibleIds,recentTerms})),"context");
         if(!string.IsNullOrEmpty(dictation)){form.Add(new StringContent(dictation),"dictation");form.Add(new StringContent(seq.ToString(System.Globalization.CultureInfo.InvariantCulture)),"seq");}
+        form.Add(new StringContent(textLog?"1":"0"),"log");
         using var reply=await RawContent(HttpMethod.Post,"api/device/caption",form,ct);
         var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
         double? cost=obj&&j!.Value.TryGetProperty("usage",out var u)&&u.ValueKind==JsonValueKind.Object&&u.TryGetProperty("cost",out var c)&&c.ValueKind==JsonValueKind.Number?c.GetDouble()
@@ -202,9 +206,8 @@ internal sealed partial class DeviceClient : IDisposable
     // v0.1.16: before = the subtitle words right before the live piece (context for the clean-up, not part of the answer); dictation = its id for the Desk's log.
     public async Task<PolishReply> Polish(string text,string mode,string process,string fieldBefore,CancellationToken ct,bool format=false,string? before=null,string? dictation=null)
     {
-        object body=before is null&&dictation is null?new{mode,text,format,context=new{process,fieldBefore}}
-            :before is null?new{mode,text,format,dictation,context=new{process,fieldBefore}}
-            :dictation is null?new{mode,text,format,context=new{process,fieldBefore,before}}:new{mode,text,format,dictation,context=new{process,fieldBefore,before}};
+        var body=new Dictionary<string,object?>{["mode"]=mode,["text"]=text,["format"]=format,["log"]=textLog,["context"]=before is null?new Dictionary<string,object?>{["process"]=process,["fieldBefore"]=fieldBefore}:new Dictionary<string,object?>{["process"]=process,["fieldBefore"]=fieldBefore,["before"]=before}};
+        if(dictation is not null)body["dictation"]=dictation;
         using var reply=await Raw(HttpMethod.Post,"api/device/polish",body,ct);
         var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
         string t=obj&&j!.Value.TryGetProperty("text",out var tx)&&tx.ValueKind==JsonValueKind.String?tx.GetString()??"":"";

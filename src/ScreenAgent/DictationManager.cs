@@ -143,7 +143,7 @@ internal sealed class DictationManager : IDisposable
         try
         {
             using var cts=CancellationTokenSource.CreateLinkedTokenSource(life.Token);cts.CancelAfter(DictationPolish.Budget(o.Text));
-            var r=await client.Polish(o.Text,mode,process,fieldBefore.Length>500?fieldBefore[^500..]:fieldBefore,cts.Token,config.DictationFormat);
+            var r=await client.Polish(o.Text,mode,process,fieldBefore.Length>500?fieldBefore[^500..]:fieldBefore,cts.Token,config.DictationFormat,dictation:id);
             bool ok=r.Status is >=200 and <300&&DictationPolish.Accept(o.Text,r.Text);
             Log("dictation.polish",new(){["id"]=id,["mode"]=mode,["status"]=r.Status,["code"]=r.Code??"",["ok"]=ok,["changed"]=r.Changed,["breaks"]=ok&&DictationLayout.HasBreaks(r.Text),["ms"]=clock.ElapsedMilliseconds,["chars"]=o.Text.Length});
             return ok?o with{Text=r.Text.Trim()}:o;
@@ -260,7 +260,6 @@ internal sealed class DictationManager : IDisposable
         catch(Exception ex){Fail(m,"Verarbeitung abgebrochen","deliver",0,ex.GetType().Name,null,false,null,ex);flow.Capture.Dispose();return;}
         finally{lock(active)active.Remove(flow);}
         flow.ResultText=o.Text;
-        CaptionDone(flow,o.Text);
         // The disk refused part of it and the transcription failed: what only reached memory goes to a file now, and the memory stays alive for the retry of this run.
         bool keepMemory=!o.Complete&&!flow.Rec.DiskOk;
         if(keepMemory)
@@ -272,6 +271,7 @@ internal sealed class DictationManager : IDisposable
         }
         else flow.Capture.Dispose();
         await Finish(m,o,flow.Process,flow.Captions.Text,inject,false,flow);
+        if(captions.Enabled)_=Task.Run(()=>CaptionDone(flow,o.Text));   // after the text is in: the summary and a refinement keep never delay typing
     }
     // v0.1.16: the subtitle's log and measures to the Desk (config CaptionLog), and with DictationRefinementKeep the audio and the log on disk for a refinement round.
     void CaptionDone(DictationFlow flow,string typed)

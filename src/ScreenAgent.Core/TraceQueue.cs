@@ -41,6 +41,11 @@ public sealed class TraceQueue(string path,int capacity=1000,TimeSpan? maxAge=nu
         while(events.Count>capacity){events.RemoveAt(0);Dropped++;}
         if(events.Count!=before)dirty=true;
     }
+    // v0.1.16: data already bounded by TraceSanitizer.CleanText (caption text); Add would strip it again.
+    public void AddRaw(string type,Dictionary<string,object?> data,long ts)
+    {
+        lock(gate){events.Add(new(ts,type,data));dirty=true;if(events.Count>capacity){events.RemoveAt(0);Dropped++;}}
+    }
     public void Add(string type,Dictionary<string,object?>? data,long ts)
     {
         lock(gate){events.Add(new(ts,type,TraceSanitizer.Clean(data)));dirty=true;if(events.Count>capacity){events.RemoveAt(0);Dropped++;}}

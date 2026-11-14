@@ -35,9 +35,8 @@ internal sealed class Telemetry : IDisposable
     public void Text(string type,Dictionary<string,object?> data)
     {
         if(!upload||!textLog||!type.StartsWith("caption.",StringComparison.Ordinal))return;
-        long ts=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        log.Write(new(ts,type,new(){["chars"]=data.Values.OfType<string>().Sum(s=>s.Length)}));   // locally only that it was sent
-        queue.Add(type,TraceSanitizer.CleanText(data),ts);
+        long ts=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();   // memory only here (callers may hold a lock); the queue file holds it until the Desk took it (24 h at most)
+        queue.AddRaw(type,TraceSanitizer.CleanText(data),ts);
     }
     // After a crash the next start loads the queue file; this keeps it current (an unpaired device never reaches the flush below).
     public void Persist()=>queue.Save();
@@ -60,6 +59,8 @@ internal sealed class Telemetry : IDisposable
             {
                 var batch=queue.Peek(99); // the client.batch header is the hundredth event
                 if(batch.Count==0)break;
+                // v0.1.16: caption text events are a few KB each; the Desk takes at most 256 KB per request (a 413 would drop the whole batch)
+                {long bytes=0;int keep=0;foreach(var e in batch){bytes+=System.Text.Json.JsonSerializer.Serialize(e.data).Length+100;if(keep>0&&bytes>180_000)break;keep++;}if(keep<batch.Count)batch=batch.Take(keep).ToList();}
                 // Every batch says which app and session it came from (first event, and as fields the gateway may ignore).
                 var head=new{ts=batch[0].ts,type="client.batch",data=new Dictionary<string,object?>{["app"]=AppInfo.Version,["commit"]=AppInfo.Commit,["session"]=session??"",["n"]=++batchNo,["dropped"]=queue.Dropped}};
                 // main.* remains readable in the local log; upload it under the gateway's accepted client namespace, including queued older events.

@@ -26,7 +26,7 @@ internal sealed class CaptionHost : IDisposable
     readonly List<DictationCaptions> dictations=[];   // the dictations whose own text the answers are added to (live ones and ones that ended a moment ago)
     DictationCaptions? current;                      // the dictation the subtitle shows (null: a voice session)
     // v0.1.12: the live clean-up of the subtitle while he dictates (config CaptionPolish). v0.1.16: a timeout no longer switches it off; no key or budget does,
-    // three failures in a row pause it 15 s. It runs on a steady beat (every new settled words, and at least every 2 s while there are any).
+    // three failures in a row pause it 15 s. It runs on a steady beat (four new settled words, or two that waited 3 s).
     readonly bool polishOn;bool polishOff;long polishPausedUntil,lastPolishAt;int polishFailures;
     public CaptionHost(AppConfig config,DeviceClient client,Telemetry telemetry,System.Windows.Threading.Dispatcher ui,Func<(string[] Ids,string[] Terms)> context)
     {
@@ -119,8 +119,8 @@ internal sealed class CaptionHost : IDisposable
         {
             long now=Environment.TickCount64;
             if(active&&now-statsAt>=60000){statsAt=now;telemetry.Event("caption.stats",stats.Snapshot(policy));}
-            // the steady beat of the clean-up: settled words that waited 2 s go even when fewer than three
-            if(active&&PolishAllowed(now)&&now-lastPolishAt>=2000)
+            // the steady beat of the clean-up: settled words that waited 3 s go even when fewer than four (at least two)
+            if(active&&PolishAllowed(now)&&now-lastPolishAt>=3000)
             {
                 LiveCaption.PolishRequest? beat=null;DictationCaptions? d;
                 lock(gate){d=current;if(d is not null&&d.Accepts(now))beat=d.Live.NextPolish(force:true);}
@@ -202,8 +202,8 @@ internal sealed class CaptionHost : IDisposable
         catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="polish"}));}
         long now=Environment.TickCount64;bool ok=status is >=200 and <300;
         if(ok)polishFailures=0;
-        else if(status==429||code is "caption-budget" or "no-key"){polishOff=true;telemetry.Event("caption.polish.off",new(){["status"]=status,["code"]=code??""});}
-        else if(++polishFailures>=3){polishFailures=0;polishPausedUntil=now+15000;telemetry.Event("caption.polish.pause",new(){["status"]=status,["code"]=code??""});}
+        else if(code is "caption-budget" or "no-key"){polishOff=true;telemetry.Event("caption.polish.off",new(){["status"]=status,["code"]=code??""});}
+        else if(status==429||++polishFailures>=3){polishFailures=0;polishPausedUntil=now+15000;telemetry.Event("caption.polish.pause",new(){["status"]=status,["code"]=code??""});}   // a rate limit or three failures: 15 s pause
         string? shown=null;LiveCaption.PolishRequest? next=null;
         lock(gate)
         {
@@ -234,8 +234,10 @@ internal sealed class CaptionHost : IDisposable
     // The dictation is over and its text typed (or not): the rest of its log and the summary with the measures go to the Desk. Returns the summary.
     public Dictionary<string,object?> Summary(DictationCaptions d,string typed)
     {
-        Dictionary<string,object?> data;List<(string Type,Dictionary<string,object?> Data)> texts;
-        lock(gate){FlushLog(d);data=CaptionSummary.Build(d,typed,Environment.TickCount64);texts=CaptionSummary.Texts(d,typed);}
+        Dictionary<string,object?> data;List<(string Type,Dictionary<string,object?> Data)> texts;List<string>? items;var flushed=new List<List<string>>();
+        lock(gate){for(items=d.Log.Take();items is not null;items=d.Log.Take())flushed.Add(items);data=CaptionSummary.Build(d,typed,Environment.TickCount64,out var live);texts=CaptionSummary.Texts(d.Id,live,typed);}
+        foreach(var batch in flushed)telemetry.Text("caption.shown",new(){["id"]=d.Id,["items"]=batch});
+        CaptionSummary.AddComparison(data,(string)data["__live"]!,typed);data.Remove("__live");
         telemetry.Text("caption.summary",data);
         foreach(var (type,part) in texts)telemetry.Text(type,part);
         return data;

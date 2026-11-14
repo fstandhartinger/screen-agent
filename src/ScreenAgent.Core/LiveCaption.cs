@@ -73,7 +73,7 @@ public static class WordAlign
                 case 2:ii--;break;
                 case 3:kk--;break;
                 case 4:atob[ii-2]=kk-1;atob[ii-1]=kk-1;matches++;ii-=2;kk--;break;
-                default:atob[ii-1]=kk-2;matches++;ii--;kk-=2;break;
+                default:atob[ii-1]=kk-1;matches++;ii--;kk-=2;break;   // one word of a = two of b: it ends where the second ends
             }
         }
         aStart=ii;bStart=kk;   // a[..ii] stands before the aligned part, b[..kk] was skipped
@@ -99,56 +99,69 @@ public static class Disfluency
     // a doubled article is a word of its own ("die Leute, die die Regeln kennen"); some words are doubled on purpose ("sehr, sehr", "nein, nein")
     static readonly HashSet<string> LegitDouble=new(StringComparer.Ordinal){"die","der","das","den","dem","des","sehr","ganz","viel","viele","nein","ja","bitte","klar","okay","immer","schnell","lange","weit","haha"};
     public static bool Legit(string key)=>LegitDouble.Contains(key);
+    static readonly HashSet<string> Articles=new(StringComparer.Ordinal){"die","der","das","den","dem","des"};
+    // one word twice across a comma is a stutter only for these small words ("Ich, ich möchte"); "Wenn das so ist, ist es gut" is German
+    static readonly HashSet<string> CommaStutter=new(StringComparer.Ordinal){"ich","wir","du","er","es","man","und","aber","also","dann","dass","wenn","weil","oder","mit","in","im","auf","für","zu","von","bei","an","ein","eine","einen","einem","einer","so","noch"};
     // protect: words before this index stay as they are (they came from a transcribed chunk: the typed text); a repeat across the border loses its second copy.
     public static List<string> Clean(IReadOnlyList<string> words,out int removed,int protect=0)
     {
         var w=new List<string>(words.Count);removed=0;
         for(int i=0;i<words.Count;i++){if(i>=protect&&WordMatch.Filler(StitchWords.Key(words[i]))){removed++;continue;}w.Add(words[i]);}
         protect=Math.Min(protect,w.Count);
-        bool again=true;
-        while(again)
+        // one pass; after a removal it goes back three words only (a repeat can only form there): linear, not a restart from the beginning
+        for(int i=Math.Max(0,protect-3);i<w.Count;)
         {
-            again=false;
-            for(int i=Math.Max(0,protect-3);i<w.Count&&!again;i++)
-            {
-                string k=StitchWords.Key(w[i]);if(k.Length==0)continue;
-                // "Dik- Diktat": a word cut off with a dash that the next word completes
-                if(i>=protect&&i+1<w.Count&&w[i].EndsWith('-')&&!w[i].EndsWith("--")&&k.Length>=2&&StitchWords.Key(w[i+1]).StartsWith(k,StringComparison.Ordinal)&&StitchWords.Key(w[i+1]).Length>k.Length)
-                {w.RemoveAt(i);removed++;again=true;break;}
-                // a restart: "Der Cap- der Caption-Text", "die dick die Diktatfunktion": a word, a cut-off start, the same word again and the whole word
-                if(i>=protect&&i+3<w.Count&&StitchWords.Key(w[i+2])==k&&CutStart(StitchWords.Key(w[i+1]),StitchWords.Key(w[i+3]),w[i+1].EndsWith('-')))
-                {
-                    bool cap=char.IsUpper(w[i][0])&&char.IsLower(w[i+2][0]);
-                    w.RemoveRange(i,2);removed+=2;if(cap)w[i]=char.ToUpperInvariant(w[i][0])+w[i][1..];
-                    again=true;break;
-                }
-                for(int n=3;n>=1&&!again;n--)
-                {
-                    if(i+2*n>w.Count||i+2*n<=protect)continue;
-                    bool same=true;
-                    for(int j=0;j<n&&same;j++){string x=StitchWords.Key(w[i+j]),y=StitchWords.Key(w[i+n+j]);same=x.Length>0&&x==y&&!x.All(char.IsDigit);}   // figures may repeat ("11 11")
-                    if(!same||n==1&&LegitDouble.Contains(k)&&!ArticleStutter(w,i))continue;
-                    if(i<protect)
-                    {
-                        if(i+n<protect)continue;   // both copies belong to the typed text
-                        w.RemoveRange(i+n,n);removed+=n;again=true;continue;
-                    }
-                    // the first copy goes; a capital it had at the start of a sentence moves to the copy that stays
-                    bool cap=char.IsUpper(w[i][0])&&char.IsLower(w[i+n][0]);
-                    w.RemoveRange(i,n);removed+=n;
-                    if(cap)w[i]=char.ToUpperInvariant(w[i][0])+w[i][1..];
-                    again=true;
-                }
-            }
+            int cut=Step(w,i,protect);
+            if(cut<0){i++;continue;}
+            removed+=cut;i=Math.Max(Math.Max(0,protect-3),i-3);
         }
         return w;
+    }
+    // A sentence ends with this word: the next one is never a stutter of it ("Ich mache das. Das dauert", "Zeit. Zeit ist knapp").
+    static bool Ends(string word)=>word.Length>0&&".!?;:…".Contains(word[^1]);
+    // One removal at i, if any; returns how many words went, or -1.
+    static int Step(List<string> w,int i,int protect)
+    {
+        string k=StitchWords.Key(w[i]);if(k.Length==0)return -1;
+        // "Dik- Diktat": a word cut off with a dash that the next word completes
+        if(i>=protect&&i+1<w.Count&&w[i].EndsWith('-')&&!w[i].EndsWith("--")&&k.Length>=2&&StitchWords.Key(w[i+1]).StartsWith(k,StringComparison.Ordinal)&&StitchWords.Key(w[i+1]).Length>k.Length)
+        {w.RemoveAt(i);return 1;}
+        // a restart: "Der Cap- der Caption-Text", "die dick die Diktatfunktion": a word, a cut-off start, the same word again and the whole word
+        if(i>=protect&&i+3<w.Count&&!Ends(w[i])&&!Ends(w[i+1])&&StitchWords.Key(w[i+2])==k&&CutStart(StitchWords.Key(w[i+1]),StitchWords.Key(w[i+3]),w[i+1].EndsWith('-')))
+        {
+            bool cap=char.IsUpper(w[i][0])&&char.IsLower(w[i+2][0]);
+            w.RemoveRange(i,2);if(cap)w[i]=char.ToUpperInvariant(w[i][0])+w[i][1..];
+            return 2;
+        }
+        for(int n=3;n>=1;n--)
+        {
+            if(i+2*n>w.Count||i+2*n<=protect)continue;
+            bool same=!Ends(w[i+n-1]);   // the first copy must not end a sentence
+            for(int j=0;j<n&&same;j++){string x=StitchWords.Key(w[i+j]),y=StitchWords.Key(w[i+n+j]);same=x.Length>0&&x==y&&!x.All(char.IsDigit);}   // figures may repeat ("11 11")
+            if(!same)continue;
+            if(n==1&&LegitDouble.Contains(k)&&!(Articles.Contains(k)&&ArticleStutter(w,i)))continue;
+            if(n==1&&",;:".Contains(w[i][^1])&&!CommaStutter.Contains(k))continue;
+            if(i<protect)
+            {
+                if(i+n<protect)continue;   // both copies belong to the typed text
+                w.RemoveRange(i+n,n);return n;
+            }
+            // the first copy goes; a capital it had at the start of a sentence moves to the copy that stays
+            bool cap=char.IsUpper(w[i][0])&&char.IsLower(w[i+n][0]);
+            w.RemoveRange(i,n);
+            if(cap)w[i]=char.ToUpperInvariant(w[i][0])+w[i][1..];
+            return n;
+        }
+        return -1;
     }
     // "dick" before "Diktatfunktion": the start of the word, cut off (a dash, or at most one letter off and at most 5 letters when there is no dash)
     static bool CutStart(string frag,string whole,bool dash)
     {
         if(frag.Length<2||whole.Length<=frag.Length+1)return false;
+        if(dash)return whole.StartsWith(frag,StringComparison.Ordinal);
+        if(frag.Length>4)return false;   // "die Frauen die Frauenärzte": a whole word is not a cut-off start
         if(whole.StartsWith(frag,StringComparison.Ordinal))return true;
-        if(dash||frag.Length>5||frag.Length<3)return false;
+        if(frag.Length<3)return false;
         for(int len=frag.Length-1;len<=frag.Length+1;len++)if(WordMatch.Distance(frag,whole[..len])<=1)return true;   // "dick" / "Dik(tat)"
         return false;
     }
@@ -166,13 +179,13 @@ public static class Disfluency
     // Immediate repeats left in a text (the measure for the log and the evaluation): "ich ich", "wir haben wir haben"; doubled articles do not count.
     public static int Repeats(IReadOnlyList<string> words)
     {
-        int count=0;var keys=words.Select(StitchWords.Key).Where(k=>k.Length>0&&!WordMatch.Filler(k)).ToArray();
+        int count=0;var raw=words.Where(x=>{var k=StitchWords.Key(x);return k.Length>0&&!WordMatch.Filler(k);}).ToArray();var keys=raw.Select(StitchWords.Key).ToArray();
         for(int i=0;i<keys.Length;i++)
             for(int n=1;n<=3;n++)
             {
                 if(i+2*n>keys.Length)break;
-                bool same=true;for(int j=0;j<n&&same;j++)same=keys[i+j]==keys[i+n+j];
-                if(same&&!(n==1&&LegitDouble.Contains(keys[i]))){count++;i+=2*n-1;break;}
+                bool same=!Ends(raw[i+n-1]);for(int j=0;j<n&&same;j++)same=keys[i+j]==keys[i+n+j];
+                if(same&&!(n==1&&LegitDouble.Contains(keys[i])&&!(Articles.Contains(keys[i])&&ArticleStutter(raw,i)))&&!(n==1&&",;:".Contains(raw[i][^1])&&!CommaStutter.Contains(keys[i]))){count++;i+=2*n-1;break;}
             }
         return count;
     }
@@ -198,20 +211,28 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     public void AddWindow(string text,double audioEnd=double.NaN,double seconds=double.NaN)
     {
         var w=StitchWords.Split(text);
-        if(w.Length==0)return;
+        if(w.Length==0||w.All(x=>StitchWords.Key(x).Length==0))return;   // "..." alone: nothing heard
         Windows++;
         double overlap=double.IsNaN(audioEnd)||double.IsNaN(seconds)||lastWindowEnd<0?double.PositiveInfinity:lastWindowEnd-(audioEnd-seconds);
         if(!double.IsNaN(audioEnd))lastWindowEnd=audioEnd;
         if(words.Count==0){words.AddRange(w);return;}
+        // the first seconds: this window holds all the audio so far, so it is the newest reading of everything not settled (no word is doubled)
+        if(!double.IsNaN(audioEnd)&&!double.IsNaN(seconds)&&audioEnd-seconds<=0.05&&Committed==0)
+        {
+            int same=0;
+            while(same<words.Count&&same<w.Length-2&&StitchWords.Key(words[same])==StitchWords.Key(w[same])&&StitchWords.Key(w[same]).Length>0)same++;
+            words.Clear();words.AddRange(w);Commit(same);Trim();return;
+        }
         if(overlap<=0.3){Commit(words.Count);words.AddRange(w);Appended++;Trim();return;}   // a pause longer than a window: nothing of it was heard before
         // only the words the overlapping audio can hold are compared: about 3.5 words a second, a few more for safety (no match far back in the text)
         int tailLen=double.IsInfinity(overlap)?40:Math.Clamp((int)Math.Ceiling(overlap*3.5)+6,6,40);
         int baseAt=Math.Max(0,words.Count-tailLen);
         var tail=words.Skip(baseAt).Select(StitchWords.Key).ToList();var wk=w.Select(StitchWords.Key).ToList();
         var r=WordAlign.Overlap(tail,wk);
-        if(r is null||r.Matches<(w.Length<=2?1:2)||r.Score<1)
+        if(r is null||r.Matches<(w.Length<=2||tail.Count<=2?1:2)||r.Score<1)
         {
-            Commit(words.Count);words.AddRange(w);Appended++;Trim();return;
+            // nothing in common although the audio overlaps (a recogniser's invention, noise): added, but not settled, so the next window can still put it right
+            words.AddRange(w);Appended++;Trim();return;
         }
         // words in front of the window's audio are settled; the window cannot speak for them any more
         Commit(baseAt+r.AStart);
@@ -258,11 +279,13 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         if(s.Length==0)return 0;
         var keys=words.Select(StitchWords.Key).ToList();
         // where does the chunk text end in the live text? its last words against the live words after the part settled before
-        int from=Math.Max(0,Settled-5);
-        var suffix=s.Skip(Math.Max(0,s.Length-25)).Select(StitchWords.Key).ToList();
+        int from=Math.Max(0,Settled-5),fresh=Math.Max(0,s.Length-Settled);
+        // only as many of the chunk's last words as can lie in the searched live words (the 5 before the old border and the new ones)
+        var suffix=s.Skip(Math.Max(0,s.Length-Math.Min(25,5+fresh))).Select(StitchWords.Key).ToList();
         int end=WordAlign.EndOf(keys.Skip(from).ToList(),suffix);
         int how=end<0?2:1;
-        end=end<0?words.Count:from+end;   // no match: the chunk text takes everything; the next window adds what follows
+        // no match: as many live words as the chunk added are taken as its part (word for word), the rest stays
+        end=end<0?Math.Min(words.Count,Settled+fresh):from+end;
         int tailCommitted=Math.Max(0,Committed-end);
         var rest=words.Skip(end).ToList();
         words.Clear();words.AddRange(s);words.AddRange(rest);
@@ -274,11 +297,11 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     // The next clean-up request when at least minNew settled words are new (any with force): the last maxWordsPer settled words, also those cleaned before,
     // so the model sees a stutter or a name with enough words around it (measured 14 Nov: pieces of 3 to 6 words came back unchanged 156 of 169 times),
     // and the words before them as context. Words from the chunks are never sent. Null: nothing to do.
-    public PolishRequest? NextPolish(int minNew=3,int maxWordsPer=40,bool force=false)
+    public PolishRequest? NextPolish(int minNew=4,int maxWordsPer=40,bool force=false)
     {
         if(PolishBusy)return null;
         int to=Committed,fresh=Math.Max(PolishedTo,Settled);
-        if(to-fresh<(force?1:minNew))return null;
+        if(to-fresh<(force?2:minNew))return null;   // measured on his recordings: 3 / 1 word gave 23 calls a minute, 4 / 2 about 17
         int from=Math.Max(Settled,to-maxWordsPer);
         var slice=words.Skip(from).Take(to-from).ToArray();
         string before=string.Join(' ',words.Skip(Math.Max(0,from-40)).Take(from-Math.Max(0,from-40)));
@@ -308,7 +331,13 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     }
     // What the subtitle shows: the whole text without stutters and fillers (the overlay cuts it to its last characters).
     public List<string> Display()=>Disfluency.Clean(words,out _,Settled);   // the chunks' words exactly as they will be typed
-    public string Last(int maxChars)=>Tail(string.Join(' ',Display()),maxChars);
+    // The overlay's last characters: only the end of the text is cleaned (a voice session's text can hold thousands of words).
+    public string Last(int maxChars)
+    {
+        int start=Math.Max(Settled,words.Count-Math.Max(60,maxChars/2));
+        if(start<=Settled)return Tail(string.Join(' ',Display()),maxChars);
+        return Tail(string.Join(' ',Disfluency.Clean(words.Skip(start).ToList(),out _)),maxChars);
+    }
     public static string Tail(string t,int maxChars)
     {
         if(t.Length<=maxChars)return t;

@@ -120,13 +120,13 @@ static class Program
             },w.At);
         }
         if(settle)foreach(var ch in c.Chunks)q.Enqueue(()=>{chunkParts.Add(ch.Text);int how=live.Settle(DictationJoin.Join(chunkParts,chunkParts.Select(_=>false).ToList()));if(how>0){log.Chunks++;if(how==1)log.ChunksPlaced++;}Update(ch.At,'c');},ch.At);
-        // the 2 s beat of the clean-up (new only)
-        if(isNew)for(double t=2;t<=end;t+=2)q.Enqueue(()=>{},t);
+        // the 3 s beat of the clean-up (new only), checked every second like the app's timer
+        if(isNew)for(double t=1;t<=end;t+=1)q.Enqueue(()=>{},t);
         double now=0;
         while(q.TryDequeue(out var act,out var t))
         {
             now=t;act();
-            if(isNew&&polish is not null&&t<=end&&t-lastPolish>=2&&!live.PolishBusy)AskPolish(t,true);
+            if(isNew&&polish is not null&&t<=end&&t-lastPolish>=3&&!live.PolishBusy)AskPolish(t,true);
         }
         var shown=Shown();string shownText=string.Join(' ',shown);
         var refKeys=Keys(c.Reference);var typedKeys=Keys(c.Typed);var shownKeys=Keys(shownText);

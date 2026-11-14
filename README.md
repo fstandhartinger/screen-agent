@@ -14,7 +14,7 @@ clean-up switched it off for the rest of the dictation.
 **What it does now** (`Core/LiveCaption.cs`). An answer is placed by a word alignment that tolerates a word heard differently, a word cut
 at the edge of the audio and words written as one or two; after a pause longer than a window it is added. Words two answers agree on are
 settled and never rewritten by a later answer. The clean-up gets the last 40 settled words with the words before as context and replaces
-exactly those words; it runs whenever three new words settled and at least every 2 s, a timeout only pauses it (three failures: 15 s).
+exactly those words; it runs whenever four new words settled, or two that waited 3 s; a timeout only pauses it (three failures: 15 s).
 Each transcribed chunk replaces its part of the subtitle, so subtitle and typed text say the same. Stutters, fillers, cut-off word
 starts and restarts ("ich ich", "wir haben wir haben", "Der Cap- der Caption-Text") leave the subtitle at once; "die Leute, die die
 Regeln kennen", "sehr, sehr" stay. The Desk removes the same from the typed text (`dictationGuard.js dropStutters`).
@@ -27,7 +27,7 @@ clean-up goes from about USD 0.0024 to 0.0048 per minute (longer prompt, a few m
 **Log** (config `CaptionLog`, default on, needs `TraceUpload`): the Desk logs each window's raw text and each clean-up (`caption.log`);
 the app adds `caption.shown {id, items}` (every change of the shown text: `<ms> <w|p|c><kept words> <new words>`), `caption.summary`
 (changed words and how late, doubled words, clean-up answers used, live against typed text with examples), `caption.live` and
-`caption.typed`. Only to the Desk, never to the local log. **Keep audio for a refinement round:** `"DictationRefinementKeep": true`
+`caption.typed`. Only to the Desk (until the Desk took them they wait in the upload queue file, at most 24 h), never to the local log. The app sends `log=0` with its caption, clean-up and chunk requests when `CaptionLog` or `TraceUpload` is off, and the Desk then keeps no words of them either. **Keep audio for a refinement round:** `"DictationRefinementKeep": true`
 (off by default) keeps each dictation's audio with its caption log in `%APPDATA%\ScreenAgent\refinement` for 14 days (at most 1 GB).
 **Replay:** `node gateway/scripts/caption-report.mjs day.json --out DIR` (agent-desk) turns a device log into replay input;
 `dotnet run --project tools/CaptionReplay -- DIR` compares the 0.1.15 and the 0.1.16 logic on it.

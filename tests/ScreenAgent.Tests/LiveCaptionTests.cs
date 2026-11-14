@@ -23,7 +23,7 @@ public class LiveCaptionTests
     {
         var c=new LiveCaption();
         c.AddWindow("ich möchte dass die Diktatfunktion",4,4);
-        c.AddWindow("chte dass die Diktatfunktion besser wird und schneller",5.5,6);
+        c.AddWindow("chte dass die Diktatfunktion besser wird und schneller",7,6);
         Assert.Equal("ich möchte dass die Diktatfunktion besser wird und schneller",Shown(c));
     }
     [Fact]
@@ -145,6 +145,8 @@ public class LiveCaptionTests
         Assert.Equal("der Hund der der Katze folgt",Clean("der Hund der der Katze folgt"));
         Assert.Equal("ich gehe in die Stadt",Clean("ich gehe in die Stadt"));
         Assert.Equal("die Nummer ist 11 11",Clean("die Nummer ist 11 11"));
+        Assert.Equal("wenn das der Fall ist, ist es gut",Clean("wenn das der Fall ist, ist es gut"));
+        Assert.Equal("Ich möchte",Clean("Ich, ich möchte"));
         // words from a transcribed chunk stay as they will be typed; a repeat across the border loses the live copy
         Assert.Equal("der neue Worker, der neue Worker für",string.Join(' ',Disfluency.Clean(StitchWords.Split("der neue Worker, der neue Worker für"),out _,6)));
         Assert.Equal("wir haben das",string.Join(' ',Disfluency.Clean(StitchWords.Split("wir haben wir haben das"),out _,2)));
@@ -187,10 +189,11 @@ public class LiveCaptionTests
         var d=new DictationCaptions("ab12cd34",0);
         string longText=string.Join(' ',Enumerable.Range(0,1500).Select(i=>"wort"+i));
         d.Live.AddWindow(longText,6,6);d.Log.Update(10,'w',d.Live.Display());
-        var data=CaptionSummary.Build(d,longText+" ende",1000);
+        var data=CaptionSummary.Build(d,longText+" ende",1000,out var live);
+        CaptionSummary.AddComparison(data,(string)data["__live"]!,longText+" ende");data.Remove("__live");
         Assert.True(System.Text.Json.JsonSerializer.Serialize(TraceSanitizer.CleanText(data)).Length<7000);
         Assert.Equal(1,data["extraInTyped"]);
-        var parts=CaptionSummary.Texts(d,longText);
+        var parts=CaptionSummary.Texts(d.Id,live,longText);
         Assert.All(parts,p=>Assert.True(System.Text.Json.JsonSerializer.Serialize(TraceSanitizer.CleanText(p.Data)).Length<4000));
         Assert.Equal(longText,string.Concat(parts.Where(p=>p.Type=="caption.typed").Select(p=>(string)p.Data["text"]!)));
     }
@@ -210,5 +213,55 @@ public class LiveCaptionTests
             Assert.Equal(1,new RefinementStore(Path.Combine(root,"refinement"),TimeSpan.Zero).Sweep(DateTimeOffset.UtcNow.AddMinutes(1)));
         }
         finally{try{Directory.Delete(root,true);}catch(IOException){}}
+    }
+    [Fact]
+    public void Review_findings_14_Nov()
+    {
+        string Clean(string t)=>string.Join(' ',Disfluency.Clean(StitchWords.Split(t),out _));
+        // a sentence end is never a stutter
+        foreach(var keep in new[]{"Ich mache das. Das dauert nicht lange.","Wir brauchen mehr Zeit. Zeit ist knapp.","Ich bin fertig. Fertig.","das ist sehr sehr gut","Ja ja genau","Er sagte nein nein nein",
+            "Sie kennen die Frauen die Frauenärzte behandeln","Wir brauchen ein Konzept ein Konzeptpapier"})
+            Assert.Equal(keep,Clean(keep));
+        // the first seconds: growing windows from the start of the audio never double a word
+        var c=new LiveCaption();c.AddWindow("Hallo Welt",1.5,1.5);c.AddWindow("Hallo Wald heute machen wir",3,3);
+        Assert.Equal("Hallo Wald heute machen wir",string.Join(' ',c.Display()));
+        var c2=new LiveCaption();c2.AddWindow("ich möchte",1.5,1.5);c2.AddWindow("ach möchte heute etwas sagen",3,3);
+        Assert.Equal("ach möchte heute etwas sagen",string.Join(' ',c2.Display()));
+        // a chunk that adds one word does not throw the newer live words away
+        var c3=new LiveCaption();
+        var all=Enumerable.Range(0,120).Select(i=>"w"+i).ToArray();
+        c3.AddWindow(string.Join(' ',all),60,6);
+        Assert.Equal(1,c3.Settle(string.Join(' ',all.Take(60))));
+        c3.Settle(string.Join(' ',all.Take(61)));
+        Assert.Equal(120,c3.Words.Count);
+        // a window of punctuation only is nothing
+        var c4=new LiveCaption();c4.AddWindow("eins zwei drei",3,3);c4.AddWindow("...",4.5,4.5);
+        Assert.Equal("eins zwei drei",string.Join(' ',c4.Display()));
+        // an invented window is not settled: the next window still corrects what came before
+        var c5=new LiveCaption();
+        c5.AddWindow("wir schauen uns die Jeff Bench Ergebnisse an",6,6);
+        c5.AddWindow("Vielen Dank.",7.5,6);
+        Assert.Equal(0,c5.Committed>8?1:0);
+        // a long voice-session text: the overlay's end is cheap and right
+        var v=new LiveCaption(4000);
+        v.AddWindow(string.Join(' ',Enumerable.Range(0,3000).Select(i=>i%37==0?"ich ich":"w"+i)),6,6);
+        var sw=System.Diagnostics.Stopwatch.StartNew();for(int i=0;i<20;i++)v.Last(110);
+        Assert.True(sw.ElapsedMilliseconds<500,$"{sw.ElapsedMilliseconds} ms");
+        Assert.DoesNotContain("ich ich",v.Last(110));
+    }
+    [Fact]
+    public void Caption_text_survives_the_trace_queue()
+    {
+        string file=Path.Combine(Path.GetTempPath(),"capref-q-"+Guid.NewGuid().ToString("N")+".jsonl");
+        try
+        {
+            var q=new TraceQueue(file);
+            var data=TraceSanitizer.CleanText(new(){["id"]="ab12cd34",["n"]=1,["of"]=1,["text"]=new string('x',3000),["items"]=Enumerable.Range(0,40).Select(i=>"1500 w0 "+new string('y',300)).ToArray()});
+            q.AddRaw("caption.typed",data,DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            var e=q.Peek(1)[0];
+            Assert.Equal(3000,((string)e.data!["text"]!).Length);
+            Assert.Equal(40,((string[])e.data["items"]!).Length);
+        }
+        finally{File.Delete(file);}
     }
 }
