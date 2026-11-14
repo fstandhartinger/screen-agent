@@ -1,0 +1,51 @@
+name: Dictation target (first Alt+Win press)
+on:
+  push:
+    branches: ['dictation/**']
+  pull_request:
+    paths:
+      - 'src/ScreenAgent/TextInjector.cs'
+      - 'src/ScreenAgent/AppController.cs'
+      - 'src/ScreenAgent/DictationTargetSelftest.cs'
+      - 'src/ScreenAgent.Core/DictationTarget.cs'
+      - '.github/workflows/dictation-target.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  target:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        run: dotnet publish src/ScreenAgent/ScreenAgent.csproj -c Release -o publish -p:SourceRevisionId=${{ github.sha }}
+      - name: VS Code Insiders (portable archive, latest)
+        shell: pwsh
+        run: |
+          $code = Join-Path $PWD 'e2e-vscode/vscode'
+          New-Item -ItemType Directory -Force $code | Out-Null
+          $zip = Join-Path $PWD 'e2e-vscode/vscode-insiders.zip'
+          Invoke-WebRequest -Uri 'https://update.code.visualstudio.com/latest/win32-x64-archive/insider' -OutFile $zip -UseBasicParsing
+          & 7z x -y "-o$code" $zip | Out-Null
+          if (-not (Test-Path (Join-Path $code 'Code - Insiders.exe'))) { throw 'VS Code Insiders archive did not unpack as expected' }
+          "SA_VSCODE_EXE=$(Join-Path $code 'Code - Insiders.exe')" | Out-File -Append $env:GITHUB_ENV
+      - name: Key-down target against Notepad, a browser field, VS Code, the taskbar, our overlay, a window without a field
+        shell: pwsh
+        run: |
+          . ./ci/invoke-sa.ps1
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $out = Invoke-SA --selftest-dictation-target $env:SA_VSCODE_EXE
+          $out | Set-Content artifacts/dictation-target.json
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw 'Dictation target selftest failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dictation-target
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn

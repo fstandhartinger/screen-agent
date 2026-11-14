@@ -1,4 +1,38 @@
-# Screen Agent v0.1.14 preview
+# Screen Agent v0.1.15 preview
+
+Version 0.1.15 fixes one thing: the first ad-hoc dictation press (hold Alt+Win) sometimes said
+"Diktat nicht möglich · kein Textfeld gewählt" although the cursor was in a text field, and the
+second press worked (device trace 14 Nov 2026 13:45, VS Code Insiders, process name empty).
+
+**Why it happened.** The app looked for the field exactly once, when the chord completed. Any
+momentary miss in that one look counted as "no field": the window in front still changing, a
+Chromium/Electron program such as VS Code or a browser waking its accessibility tree and naming a
+different focused element on the second read, an elevated or password field (also reported as
+"kein Textfeld"). Nothing was logged about why.
+
+**What it does now.** From key-down the app asks again for about 300 ms (7 looks at most) while
+the answer can still change: no window or a shell surface in front (taskbar, desktop, Start, Alt+Tab),
+our own subtitle or notice in front (the front goes back to the window you were in), an empty process
+name, a focus that is still settling or not readable yet. The start (260 ms later) waits for that
+result. Only a reason that waiting cannot change ends early: password field, window running as
+administrator, a blocked window. Each refusal says what to do:
+
+- "Diktat nicht möglich · kein Programm im Vordergrund · ins Textfeld klicken, dann erneut drücken"
+- "Diktat nicht möglich · das Textfeld antwortet nicht · hineinklicken, dann erneut drücken"
+- "Diktat nicht möglich · Passwortfeld" / "· Fenster läuft als Administrator" / "· dieses Fenster ist für Diktat gesperrt"
+
+**Log.** `dictation.target {attempt, ms, process, source (foreground | settled | restored), misses,
+control, hookWindow}` for every bound start, and `dictation.refused {why, process, window, attempts, ms,
+misses}`. The next device trace shows whether the first press holds and how often a second look was needed.
+
+**Unchanged on purpose.** A window without a text field (a button, a file list) still binds like
+before: the app does not judge control types, which would refuse terminals and editors that report
+odd types; the dictation history keeps the text. **Test:** `--selftest-dictation-target [vscode exe]`
+(workflow "Dictation target"): Notepad, a browser field and VS Code, each started fresh twice (the
+0.1.14 read and the new one, both as the first accessibility touch), the taskbar, foreground settling,
+our overlay in front, a window without a field.
+
+## v0.1.14
 
 Version 0.1.14 is about computer control that really works, and about speech that knows what
 is on the screen. It answers the session of 9 Nov 2026: "verwende den Computer, um auf Senden zu
@@ -293,7 +327,7 @@ Florian's decision of 4 Nov 2026: full computer control, no confirmations, no si
 
 The native WASAPI recorder produces 16 kHz, 16-bit mono WAV, written to disk from the first sample (v0.1.7, next section). During a Desk session it requires a mic-mute acknowledgement within 500 ms before recording; after completion/discard it requests acknowledged unmute and retries every two seconds while the note shows **Desk-Mikro stumm**. Capture is independent of pending transcription; immutable clips are transcribed and inserted in recording order. Dictation sends the process, at most 500 preceding field characters, visible confirmed IDs and dictionary terms. The Desk reconciles Groq/OpenAI/Google transcripts. Google processes highlight images; Desk voice uses the chosen voice provider. No vendor credentials are stored in this app.
 
-Target HWND is captured at chord key-down. UIA binding happens on the UI thread and refuses a changed HWND. Before insertion the app waits for modifiers up and revalidates HWND, UIA element, password status and elevation. A changed or unsafe target gets **no** clipboard copy and nothing typed: the text goes to a window that stays until you close it (see below). Short text and terminal targets use Unicode SendInput; long non-terminal text uses clipboard paste, restoring the clipboard after 400 ms only if its sequence is still ours; when another program holds the clipboard (a clipboard manager, RDP) the text is typed instead. All newlines become spaces and controls are stripped; Enter is never sent. Spoken newline commands are not interpreted in this preview.
+Target HWND is captured at chord key-down. UIA binding happens on the UI thread; since v0.1.15 it asks again for about 300 ms while the foreground or the focus settles (see the top of this file) instead of refusing on the first miss. Before insertion the app waits for modifiers up and revalidates HWND, UIA element, password status and elevation. A changed or unsafe target gets **no** clipboard copy and nothing typed: the text goes to a window that stays until you close it (see below). Short text and terminal targets use Unicode SendInput; long non-terminal text uses clipboard paste, restoring the clipboard after 400 ms only if its sequence is still ours; when another program holds the clipboard (a clipboard manager, RDP) the text is typed instead. All newlines become spaces and controls are stripped; Enter is never sent. Spoken newline commands are not interpreted in this preview.
 
 Correction learning excludes terminals, password fields, unreadable fields and ambiguous insertion spans. It polls the same safe UIA target for at most 45 seconds, requires a stable 1–3-word letters-only replacement, counts at most once per independent insertion, and promotes on the second sighting. Pending pairs survive restarts at `%APPDATA%\ScreenAgent\learn-pending.json`. A failed promotion retains the pair. Open Desk **/device** to inspect the learned-term list and delete a term; verify that it disappears from subsequent dictionary results.
 
@@ -391,5 +425,10 @@ Record the observed result, evidence and latency for each row. A blank result is
 | Highlight across two windows | One highlight with crop and whole-screen context reaches the agent; the agent says what was marked | |
 | Exclusion lists empty / with entries | Empty: every window is captured. With an entry: a matching foreground window gives no frame, a matching background window is black | |
 | Lock screen | "Bildschirm gesperrt", no frame while locked, frames resume after unlocking | |
+| v0.1.15 first Alt+Win press, VS Code Insiders | After 5+ minutes in VS Code without dictating, click into the editor, hold Alt+Win and speak: the FIRST press dictates; trace shows `dictation.target` (note attempt, misses) and no `dictation.refused` | |
+| v0.1.15 first press, Chrome text field and Notepad | Same in a Chrome text field (e.g. a chat box) and in Notepad: first press dictates | |
+| v0.1.15 right after switching windows | Alt+Tab or click into another app and press Alt+Win at once: first press dictates into the new window | |
+| v0.1.15 no target | Click the desktop or the taskbar, press Alt+Win: "kein Programm im Vordergrund · ins Textfeld klicken, dann erneut drücken"; no recording | |
+| v0.1.15 admin window | An elevated window (e.g. admin PowerShell): "Fenster läuft als Administrator", not "kein Textfeld" | |
 
 Normal tray **Beenden** requests voice stop and context clear before exit. Force-kill, power loss and permanent network failure cannot guarantee remote cleanup; server expiry remains the fallback.
