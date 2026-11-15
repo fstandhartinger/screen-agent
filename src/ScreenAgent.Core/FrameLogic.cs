@@ -8,7 +8,7 @@ public readonly record struct FrameDecision(FrameVerdict Verdict,FrameReason Rea
 // A change that has to wait for the gap makes the next capture due as soon as the gap is over, so the agent's picture is at most one interval old.
 public sealed class FramePlanner(int intervalMs=4000,int minGapMs=2000)
 {
-    bool started,pending;
+    bool started,pending,captured;
     long lastCaptureAt,lastSentAt,lastSentForeground;
     byte[]? lastSent;
     public int IntervalMs=>intervalMs;
@@ -16,10 +16,10 @@ public sealed class FramePlanner(int intervalMs=4000,int minGapMs=2000)
     // A video or animation changes every picture: after 6 sends in a row without a quiet one the gap doubles, up to 16 s, so the hourly budget is not gone in minutes. A quiet frame resets it. A direct question ignores it.
     int busyRun;
     long Gap=>busyRun<6?minGapMs:Math.Min(16000,minGapMs*(1L<<Math.Min(3,busyRun/6)));
-    public void Reset(){started=false;pending=false;busyRun=0;lastCaptureAt=lastSentAt=lastSentForeground=0;lastSent=null;}
+    public void Reset(){started=false;pending=false;captured=false;busyRun=0;lastCaptureAt=lastSentAt=lastSentForeground=0;lastSent=null;}
     // Is it time to look at the screen at all? Cheap: no capture needed to answer.
-    public bool CaptureDue(long now,long foreground,bool fresh)=>fresh||!started||foreground!=lastSentForeground&&now-lastCaptureAt>=minGapMs||pending&&now-lastSentAt>=Gap||now-lastCaptureAt>=intervalMs;
-    public void Captured(long now,long foreground){lastCaptureAt=now;}
+    public bool CaptureDue(long now,long foreground,bool fresh)=>fresh||!started&&!captured||foreground!=lastSentForeground&&now-lastCaptureAt>=minGapMs||pending&&now-lastSentAt>=Gap||now-lastCaptureAt>=intervalMs;
+    public void Captured(long now,long foreground){captured=true;lastCaptureAt=now;}
     public FrameDecision Decide(long now,byte[] grid,long foreground,bool fresh)
     {
         if(fresh)return new(FrameVerdict.Send,FrameReason.Fresh);

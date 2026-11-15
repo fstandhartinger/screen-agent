@@ -58,7 +58,11 @@ internal sealed class AppController : IDisposable
     Task audioQueue=Task.CompletedTask;
     readonly Telemetry telemetry;
     readonly FramePlanner planner;
-    string? freshId,commandsSid;
+    readonly LatestFrameSlot<PendingFrame> frameSlot=new();
+    readonly DeskSessionGate sessionGate=new();
+    readonly FrameSkipCounter frameSkips=new();
+    sealed record PendingFrame(Bitmap Image,CaptureInfo Info,IntPtr Foreground,byte[] Grid,System.Drawing.Rectangle Monitor,string Sid,CancellationToken Token);
+    string? freshId,commandsSid,briefingSid;
     readonly MainAgentPrompt prompts;
     readonly PromptChannel promptChannel;
     readonly BriefingCollector briefing;
@@ -68,6 +72,7 @@ internal sealed class AppController : IDisposable
     internal CanvasPanel? CanvasForTests=>canvas;
     bool canvasNoted;
     readonly ActivityOverlay? activity;
+    readonly StepLineOverlay stepLine=new();
     readonly FeedbackGate feedback;
     readonly StartupTimeline startupTimeline=new();
     bool micMuted,manualSession,prevVoice,prevActive,hookDeadHandled;
@@ -94,7 +99,7 @@ internal sealed class AppController : IDisposable
         // Computer use: off until he allows it in the tray. The executor owns the run, the policy and the confirmations (see ComputerAgent).
         computerOverlay=new ComputerOverlay();
         computer=new(async (url,body)=>{using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(10));using var reply=await client.Raw(HttpMethod.Post,url,body,cts.Token);return reply.Ok||reply.Status is 404 or 409;},
-            (type,data)=>telemetry.Event(type,data),inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host,config.ComputerSensitive){Unrestricted=config.ComputerUnrestricted},computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
+            Trace,inputGate,new ComputerPolicy(config.Policy(),new Uri(config.DeskUrl).Host,config.ComputerSensitive){Unrestricted=config.ComputerUnrestricted},computerOverlay,hook,()=>bridge.SessionId,()=>bridge.VoiceOn,()=>config.ComputerUse,()=>micMuted,
             text=>bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,Level.Active,"computer"))),new ChromeCdp.ConnectOptions(),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ScreenAgent","logs","computer.log"),bridge.Dispatcher);
         // The drawing panel waits while a prompt is typed (it could take the focus back), and opens when the prompt is over.
@@ -133,6 +138,8 @@ internal sealed class AppController : IDisposable
                 catch(Exception ex){TickFailed("captions",ex);}   // logged: tick.error
                 try{activity?.Tick();}
                 catch(Exception ex){TickFailed("activity",ex);}   // logged: tick.error
+                try{stepLine.Tick(bridge.VoiceOn);}
+                catch(Exception ex){TickFailed("step-line",ex);}   // logged: tick.error
                 if(pendingClear is {} pending&&!clearing&&clearRetry.Ready(Environment.TickCount64))_=ClearContext(pending,pendingWhy??"stop");
                 if(needsUnmute&&audio is null&&!unmuting&&audioQueue.IsCompleted&&Environment.TickCount64>=unmuteRetryAt){unmuteRetryAt=Environment.TickCount64+2000;_=Unmute();}
                 if(!hook.Healthy)
@@ -292,12 +299,17 @@ internal sealed class AppController : IDisposable
     void Trace(string type,Dictionary<string,object?> data)
     {
         telemetry.Event(type,data);
-        if(activity is not null&&ActivityLocal.FromTrace(type,data) is {} e)bridge.Dispatcher.BeginInvoke(new System.Action(()=>OnActivity(e,true)));
+        if(ActivityLocal.FromTrace(type,data) is {} e)bridge.Dispatcher.BeginInvoke(new System.Action(()=>OnActivity(e,true)));
+        if(type.StartsWith("computer.",StringComparison.Ordinal))
+        {
+            var copy=new Dictionary<string,object?>(data);
+            bridge.Dispatcher.BeginInvoke(new System.Action(()=>{if(!disposed&&bridge.VoiceOn)stepLine.Computer(type,copy);}));
+        }
     }
     void OnActivity(ActivityNote e,bool local)
     {
-        if(activity is null||disposed)return;
-        try{if(activity.Present(e))telemetry.Event("activity.shown",new(){["phase"]=e.Phase,["tool"]=e.Tool,["local"]=local});}
+        if(disposed||!bridge.VoiceOn)return;
+        try{stepLine.Present(e);if(activity?.Present(e)==true)telemetry.Event("activity.shown",new(){["phase"]=e.Phase,["tool"]=e.Tool,["local"]=local});}
         catch(Exception ex){telemetry.Event("activity.error",Redact.Of(ex,new(){["type"]=ex.GetType().Name}));}
     }
     // Desk voice follows the session; see VoiceSync for why a stop is only sent after a start.
@@ -338,7 +350,7 @@ internal sealed class AppController : IDisposable
         finally{clearing=false;}
     }
     string? pendingClear,pendingWhy;
-    void ForgetLocal(){ids=ocrIds=visionIds=[];ocrGrid=null;planner.Reset();bridge.Screen([]);briefing.NoteScreenText(null);}
+    void ForgetLocal(){frameSlot.Clear()?.Image.Dispose();ids=ocrIds=visionIds=[];ocrGrid=null;planner.Reset();bridge.Screen([]);briefing.NoteScreenText(null);}
     async Task Unmute()
     {
         if(unmuting)return;
@@ -351,13 +363,14 @@ internal sealed class AppController : IDisposable
     Task PostScreen(string sid,object body,CancellationToken ct)=>screenWrites.Enqueue(()=>
     {
         ct.ThrowIfCancellationRequested();
+        if(body is ScreenPayload payload)body=payload with{frameVersion=versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())};
         return client.Post("api/device/session/"+Uri.EscapeDataString(sid)+"/screen",body,ct);
     });
     void Reset(string why="stop")
     {
         _=ClearContext(contextSid??bridge.SessionId,why);
-        epoch.Cancel();epoch.Dispose();epoch=new();ocrRunning=false;ocrGen++;capturedAt=0;lastForeground=IntPtr.Zero;learner.Cancel();
-        locked=excluded=false;quiet.Break();freshId=null;commandsSid=null;
+        epoch.Cancel();epoch.Dispose();epoch=new();frameSlot.Clear()?.Image.Dispose();sessionGate.Reset();stepLine.Clear();ocrRunning=false;ocrGen++;capturedAt=0;lastForeground=IntPtr.Zero;learner.Cancel();
+        locked=excluded=false;quiet.Break();freshId=null;commandsSid=null;briefingSid=null;
         foreach(var d in drawings)d.Close();drawings.Clear();
         // A dictation is independent of the session: a session that ends or changes does not cut his words. Pause and a dead keyboard hook end it, and it is delivered.
         if(why is "paused" or "error")QueueAudio(ActionKind.DictationStop);
@@ -509,7 +522,7 @@ internal sealed class AppController : IDisposable
         if(voice!=prevVoice)
         {
             telemetry.Event("client.voice",new(){["on"]=voice,["manual"]=manualSession});prevVoice=voice;if(!voice)micMuted=false;
-            if(voice)canvas?.SessionStarted();else{canvas?.HidePanel(false);activity?.Clear();}   // a closed panel stays closed until the next voice session; at the end of a session it goes away
+            if(voice)canvas?.SessionStarted();else{canvas?.HidePanel(false);activity?.Clear();stepLine.Clear();frameSlot.Clear()?.Image.Dispose();sessionGate.Reset();}   // a closed panel stays closed until the next voice session; at the end of a session it goes away
         }
         if(active!=prevActive)
         {
@@ -572,9 +585,12 @@ internal sealed class AppController : IDisposable
         {
             try
             {
+                if(!sessionGate.CanPoll(bridge.VoiceRegistered,Environment.TickCount64)){await Task.Delay(250,ct);continue;}
                 using var reply=await client.Raw(HttpMethod.Get,"api/device/session/"+Uri.EscapeDataString(sid)+"/commands",null,ct);
+                if(ct.IsCancellationRequested||bridge.SessionId!=sid)return;
+                if(reply.Ok)sessionGate.Accepted();
                 // The page says voice is on before the gateway has its session (connecting), and a dialog can end: wait, the loop ends with VoiceOn.
-                if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="commands"});await Task.Delay(3000,ct);continue;}
+                if(reply.Status==409&&reply.Stop||reply.Code=="no-session"){sessionGate.NoSession(Environment.TickCount64);FrameSkipped("no-session");await Task.Delay(1500,ct);continue;}
                 if(reply.Ok&&reply.Json is {} cj){if(ComputerWire.Parse(cj.RootElement,out string why) is {} cc)computer.Handle(sid,cc);else if(why.Length>0)telemetry.Event("computer.refused",new(){["rule"]="malformed",["reason"]=why});}
                 if(reply.Ok&&reply.Json is {} bj&&BriefingCommand.Parse(bj.RootElement) is {} briefingId)_=briefing.Request(sid,briefingId,ct);   // answered by a POST of its own, next to whatever else the reply carries
                 if(reply.Ok&&reply.Json is {} pj&&PromptCommand.Parse(pj.RootElement) is {} request)_=promptChannel.Handle(sid,request,ct);   // typing runs on its own; the long poll is parked again at once
@@ -612,15 +628,19 @@ internal sealed class AppController : IDisposable
     {
         var fg=Native.GetForegroundWindow();long now=Environment.TickCount64;
         bool voice=bridge.VoiceOn;
-        if(!voice&&(planner.Started||commandsSid!=null||freshId!=null)){planner.Reset();freshId=null;commandsSid=null;}
+        if(!voice&&(planner.Started||commandsSid!=null||freshId!=null)){planner.Reset();freshId=null;commandsSid=null;briefingSid=null;}
+        if(voice&&Active&&commandsSid!=bridge.SessionId)
+        {commandsSid=bridge.SessionId;_=CommandLoop(commandsSid!,epoch.Token);}
+        bool ready=sessionGate.CanSend(bridge.VoiceRegistered,now);
+        if(voice&&!ready){FrameSkipped("no-session");return;}
+        if(voice&&Active&&briefingSid!=bridge.SessionId){briefingSid=bridge.SessionId;_=briefing.Start(briefingSid!,epoch.Token);}
         bool frames=config.SendFrames&&voice&&now>=frameBackoffUntil;
         bool idsDue=!(fg==lastForeground&&now-capturedAt<config.IntervalMs&&!schedule.RenewalDue(now));
-        bool frameDue=frames&&planner.CaptureDue(now,(long)fg,freshId!=null);
+        bool frameDue=frames&&planner.CaptureDue(now,(long)fg,freshId!=null&&!frameSlot.InFlight);
         if(busy||!schedule.Ready(now)||!Active||drawings.Count>0||!(idsDue||frameDue))return;
         if(voice&&fg!=lastForeground)_=screenText.Start("foreground",epoch.Token,"");
         busy=true;capturedAt=now;lastForeground=fg;planner.Captured(now,(long)fg);
         var ct=epoch.Token;string sid=bridge.SessionId!;contextSid=sid;
-        if(voice&&commandsSid!=sid){commandsSid=sid;_=CommandLoop(sid,ct);_=briefing.Start(sid,ct);}   // also without frames: prompts for the Main Agent arrive on this channel
         try
         {
             if(pendingClear is {} oldSid){pendingClear=null;await ClearContext(oldSid,pendingWhy??"stop");if(pendingClear!=null)throw new HttpRequestException();}
@@ -639,7 +659,12 @@ internal sealed class AppController : IDisposable
                 await PostScreen(sid,DevicePayloads.Screen(ids,window.Process,versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())),ct);
                 schedule.Success(Environment.TickCount64);
             }
-            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)await SendFrame(frame,info,fg,grid,monitor,sid,ct);
+            if(frames&&Active&&!ct.IsCancellationRequested&&bridge.SessionId==sid)
+            {
+                if(frameSlot.InFlight)FrameSkipped("in-flight");
+                frameSlot.Offer(new(new Bitmap(frame),info,fg,grid,monitor,sid,ct))?.Image.Dispose();
+                _=DrainFrames();
+            }
         }
         catch(OperationCanceledException){ /* cancelled: the session or call ended */ }
         catch(Exception ex){schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",Redact.Of(ex,new(){["where"]="watch",["status"]=StatusOf(ex)}));await ClearContext(sid,"error");Notice("Desk/Registry nicht erreichbar",Level.Warn,"watch-failed",ex);}
@@ -702,6 +727,27 @@ internal sealed class AppController : IDisposable
         bool changed=!merged.SequenceEqual(ids);ids=merged;bridge.Screen(ids);
         if(changed)telemetry.Event("screen.ids",new(){["ids"]=merged,["count"]=merged.Length,["process"]=process,["source"]=source});
     }
+    void FrameSkipped(string reason)
+    {
+        int count=frameSkips.Note(reason,Environment.TickCount64);
+        if(count>0)telemetry.Event("screen.frame.skipped",new(){["reason"]=reason,["count"]=count});
+    }
+    async Task DrainFrames()
+    {
+        while(frameSlot.TryTake(out var next))
+        {
+            var f=next!;
+            using var image=f.Image;
+            try
+            {
+                if(Active&&bridge.VoiceOn&&!f.Token.IsCancellationRequested&&bridge.SessionId==f.Sid&&sessionGate.CanSend(bridge.VoiceRegistered,Environment.TickCount64)&&Environment.TickCount64>=frameBackoffUntil)
+                    await SendFrame(f.Image,f.Info,f.Foreground,f.Grid,f.Monitor,f.Sid,f.Token);
+            }
+            catch(OperationCanceledException){ /* old session: the pending picture was cleared by Reset */ }
+            catch(Exception ex){schedule.Failure(Environment.TickCount64);telemetry.Event("screen.error",Redact.Of(ex,new(){["where"]="frame",["status"]=StatusOf(ex)}));}
+            finally{frameSlot.Complete();}
+        }
+    }
     // One screenshot to the vision model: change test against the last SENT frame, encode in memory, send with the ids known now.
     async Task SendFrame(Bitmap frame,CaptureInfo info,IntPtr fg,byte[] grid,System.Drawing.Rectangle monitor,string sid,CancellationToken ct)
     {
@@ -712,19 +758,28 @@ internal sealed class AppController : IDisposable
         quiet.Break();
         int masked=info.Windows.Count(w=>w.Blocked);
         var (jpeg,width,height)=await Task.Run(()=>FrameJpeg.Encode(frame),ct);
-        if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg&&!fresh)return;
+        if(!Active||ct.IsCancellationRequested||bridge.SessionId!=sid||Native.GetForegroundWindow()!=fg&&!fresh||!privacy.Allowed(fg))return;
         await GiveFeedback(frame,monitor,ScreenshotFeedback.Of(decision.Reason));   // after the capture, before the upload: he sees the moment the agent looks
         string? url=window.Url is {} u&&(u.StartsWith("http://")||u.StartsWith("https://"))?(u.Length>300?u[..300]:u):null;
         var body=new Dictionary<string,object?>
         {
-            ["deviceId"]=client.DeviceId,["frameVersion"]=versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),["jpeg"]=Convert.ToBase64String(jpeg),
+            ["deviceId"]=client.DeviceId,["jpeg"]=Convert.ToBase64String(jpeg),
             ["process"]=window.Process.Length>100?window.Process[..100]:window.Process,["title"]=window.Title.Length>200?window.Title[..200]:window.Title,
             ["masked"]=Math.Min(200,masked),["ids"]=ids,["reason"]=decision.Reason.ToString().ToLowerInvariant()
         };
         if(url!=null)body["url"]=url;
         if(fresh)body["commandId"]=command;
-        using var reply=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/frame",body,ct);
-        freshId=null;
+        RawReply? answer=null;
+        await screenWrites.Enqueue(async ()=>
+        {
+            ct.ThrowIfCancellationRequested();
+            if(!Active||!bridge.VoiceOn||bridge.SessionId!=sid||!sessionGate.CanSend(bridge.VoiceRegistered,Environment.TickCount64)||!privacy.Allowed(fg))return;
+            body["frameVersion"]=versions.Next(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            answer=await client.Raw(HttpMethod.Post,"api/device/session/"+Uri.EscapeDataString(sid)+"/frame",body,ct);
+        });
+        using var reply=answer;
+        if(reply is null||ct.IsCancellationRequested||!Active||!bridge.VoiceOn||bridge.SessionId!=sid)return;
+        if(freshId==command)freshId=null;
         string vision=reply.Json is {} j&&j.RootElement.ValueKind==System.Text.Json.JsonValueKind.Object&&j.RootElement.TryGetProperty("vision",out var v)&&v.ValueKind==System.Text.Json.JsonValueKind.String?v.GetString()??"":"";
         if(reply.Ok)
         {
@@ -736,7 +791,7 @@ internal sealed class AppController : IDisposable
             return;
         }
         // 409 no-session: the gateway has no session yet or any more; nothing is sent until it does. stale-frame: drop it and carry on. Not sent = not the reference.
-        if(reply.Status==409&&(reply.Stop||reply.Code=="no-session")){frameBackoffUntil=Environment.TickCount64+3000;telemetry.Event("screen.wait",new(){["why"]="no-session",["via"]="frame"});return;}
+        if(reply.Status==409&&(reply.Stop||reply.Code=="no-session")){sessionGate.NoSession(Environment.TickCount64);FrameSkipped("no-session");return;}
         if(reply.Status==429){frameBackoffUntil=Environment.TickCount64+Math.Clamp(reply.RetryAfter,2,60)*1000L;}
         telemetry.Event("screen.frame",new(){["decision"]="skipped",["why"]="rejected",["status"]=reply.Status,["code"]=reply.Code??"",["bytes"]=jpeg.Length});
     }
@@ -830,7 +885,7 @@ internal sealed class AppController : IDisposable
     public void Dispose()
     {
         _=ClearContext(contextSid??bridge.SessionId);_=bridge.Voice(false,config.VoiceProvider);
-        disposed=true;BusyCursor.Set(false);computer.Dispose();computerOverlay.Dispose();canvas?.Terminate();activity?.Close();ScreenFlash.CloseCurrent();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
+        disposed=true;BusyCursor.Set(false);computer.Dispose();computerOverlay.Dispose();canvas?.Terminate();activity?.Close();stepLine.Close();frameSlot.Clear()?.Image.Dispose();ScreenFlash.CloseCurrent();timer.Stop();epoch.Cancel();learner.Cancel();dictation.Dispose();captions.Dispose();audio=null;
         // After the dictation and the captions are gone: their last events (dictation.fail stage=shutdown) are in the queue the flush and the final save see.
         telemetry.Event("client.app.stop");_=telemetry.Flush(contextSid??bridge.SessionId);telemetry.Dispose();
         foreach(var d in drawings)d.Close();drawings.Clear();tray.Visible=false;tray.Dispose();epoch.Dispose();

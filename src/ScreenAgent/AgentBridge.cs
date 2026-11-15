@@ -19,6 +19,7 @@ internal sealed class AgentBridge : Window
     TaskCompletionSource<bool>? voiceAck;
     bool requestedVoice;
     public bool VoiceOn {get;private set;}
+    public bool VoiceRegistered {get;private set;}
     public static volatile bool AllowMicForTests;
     public static string TestBrowserArgs="";
     // How long WebView2 gets to start with the window hidden before it is shown off-screen (see StartHidden). The start-up probe varies it.
@@ -110,7 +111,7 @@ internal sealed class AgentBridge : Window
             ResizeBrowser();
             ReadyMs=startup.ElapsedMilliseconds;InitStage="ready";Mark("controller");
             browser.ProcessFailed+=(_,e)=>Diag.Event("webview.process.failed",new(){["kind"]=e.ProcessFailedKind.ToString(),["reason"]=e.Reason.ToString(),["exit"]=e.ExitCode,["stage"]=InitStage});
-            browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri)){e.Cancel=true;Diag.Event("nav.blocked",new(){["host"]=Uri.TryCreate(e.Uri,UriKind.Absolute,out var blocked)?blocked.Host:"?"});}else{SessionId=null;SessionChanged?.Invoke();}};
+            browser.NavigationStarting+=(_,e)=>{if(!Trusted(e.Uri)){e.Cancel=true;Diag.Event("nav.blocked",new(){["host"]=Uri.TryCreate(e.Uri,UriKind.Absolute,out var blocked)?blocked.Host:"?"});}else{SessionId=null;VoiceRegistered=false;SessionChanged?.Invoke();}};
             browser.WebMessageReceived+=(_,e)=>
             {
                 if(!Trusted(e.Source))return;
@@ -127,6 +128,7 @@ internal sealed class AgentBridge : Window
                             if(m.TryGetProperty("on",out var voiceOn)&&voiceOn.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)
                             {
                                 VoiceOn=voiceOn.GetBoolean();
+                                VoiceRegistered=VoiceOn&&m.TryGetProperty("state",out var voiceState)&&voiceState.ValueKind==System.Text.Json.JsonValueKind.String&&DeskSessionGate.RegisteredState(voiceState.GetString());
                                 if(VoiceOn==requestedVoice)voiceAck?.TrySetResult(true);
                                 else if(m.TryGetProperty("state",out var state)&&state.GetString()=="error")voiceAck?.TrySetResult(false);
                             }
@@ -393,7 +395,7 @@ internal sealed class AgentBridge : Window
     public void Screen(string[] ids)=>browser?.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="screen",ids}));
     public void Disconnect()
     {
-        pairing?.Cancel();pairStatus=null;SessionId=null;VoiceOn=false;client.Disconnect();
+        pairing?.Cancel();pairStatus=null;SessionId=null;VoiceOn=false;VoiceRegistered=false;client.Disconnect();
         browser?.CookieManager.DeleteCookies("desk_s",origin.AbsoluteUri);OpenPairing();SessionChanged?.Invoke();
     }
     // Selftests answer every request of a browser with one synthetic page (the drawing panel's browser as well); the product never sets it.
