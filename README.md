@@ -1,4 +1,14 @@
-# Screen Agent v0.1.16 preview
+# Screen Agent v0.1.17 preview
+
+## v0.1.17
+
+Choose the conversation voice in the tray: right-click Screen Agent → **Stimme** → a voice, or
+**Standard (Desk)** to use the Desk default. Choices are saved separately for each configured voice provider
+in `VoiceNames` in config.json. Gemini Fast uses the Gemini catalog. During a conversation a new choice
+applies to the next conversation; otherwise the companion page reloads immediately. If the voice catalog
+cannot be loaded, the menu offers only **Standard (Desk)**.
+
+## v0.1.16
 
 Version 0.1.16 is about the live subtitle while you dictate (Florian, 14 Nov 2026: a stutter showed a word twice, and the subtitle did
 not correct itself while he spoke), and about logs that let us refine it.

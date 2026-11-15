@@ -36,7 +36,8 @@ internal sealed class AppController : IDisposable
     bool? scopeSent;bool scopePosting;long scopeRetryAt,scopeRefreshAt;   // the gateway keeps the scope in memory only: re-posted every 2 min, after a failed poll and at every new session
     string? contextSid;
     long unmuteRetryAt;
-    bool voiceSyncing;
+    bool voiceSyncing,voiceChoicePending,voicesLoading;
+    readonly System.Windows.Forms.ToolStripMenuItem voiceItem=new("Stimme");
     IntPtr lastForeground,underlying,ocrForeground;
     byte[]? ocrGrid;
     bool ocrRunning;
@@ -163,6 +164,7 @@ internal sealed class AppController : IDisposable
         sessionItem.Click+=(_,_)=>hook.SetSession(!hook.Session);menu.Items.Add(sessionItem);
         pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
         computerItem.Checked=config.ComputerUse;computerItem.Click+=(_,_)=>_=SetComputer(!config.ComputerUse);menu.Items.Add(computerItem);
+        FillVoices([]);voiceItem.DropDownOpening+=(_,_)=>_=LoadVoices();menu.Items.Add(voiceItem);
         menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset("stop");bridge.Disconnect();});
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Wörterbuch bearbeiten …",null,(_,_)=>DictionaryWindow.Open(client,()=>terms=[]));
@@ -194,6 +196,43 @@ internal sealed class AppController : IDisposable
         else if(new HotkeyBindings(config.Hotkeys).CollidesWithWispr)Balloon("Achtung: Strg+Win als Diktat-Taste ist auch die Wispr-Taste. Ändere „Hotkeys“ in config.json (Beispiel: Alt+Win), sonst stören sich beide.","wispr-collision");
         else if(!client.Paired)Balloon($"Screen Agent läuft im Tray (Symbol unten rechts, evtl. unter ^). Rechtsklick → Desk öffnen, um das Gerät zu verbinden. Danach: {chord} startet und beendet das Gespräch.","first-run");
         dictation.Startup();
+    }
+    void FillVoices(VoiceChoice[] choices)
+    {
+        voiceItem.DropDownItems.Clear();
+        config.VoiceNames.TryGetValue(config.VoiceProvider,out var selected);
+        void Add(string text,string? id,string? note=null)
+        {
+            var item=new System.Windows.Forms.ToolStripMenuItem(text){Checked=selected==id,ToolTipText=note??""};
+            item.Click+=(_,_)=>ChooseVoice(id);voiceItem.DropDownItems.Add(item);
+        }
+        Add("Standard (Desk)",null);
+        foreach(var choice in choices)Add(choice.Label.Replace("&","&&"),choice.Id,choice.Note);
+    }
+    async Task LoadVoices()
+    {
+        if(voicesLoading||disposed)return;
+        voicesLoading=true;FillVoices([]);
+        try
+        {
+            using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var choices=await client.Voices(config.VoiceProvider,timeout.Token);
+            if(!disposed)FillVoices(choices);
+        }
+        catch(Exception ex){if(!disposed)Diag.Fail("voice-catalog",ex); /* Standard remains usable offline */}
+        finally{voicesLoading=false;}
+    }
+    void ChooseVoice(string? id)
+    {
+        var names=new Dictionary<string,string>(config.VoiceNames);
+        if(id is null)names.Remove(config.VoiceProvider);else names[config.VoiceProvider]=id;
+        try{ScreenConfig.SetVoiceNames(names);}
+        catch(Exception ex){Notice("Stimme konnte nicht gespeichert werden",Level.Warn,"voice-config",ex);return;}
+        config.VoiceNames.Clear();foreach(var pair in names)config.VoiceNames[pair.Key]=pair.Value;
+        bool running=hook.Session||bridge.VoiceOn||voiceSyncing;
+        voiceChoicePending=running;
+        if(!running)bridge.ReloadVoiceChoice();
+        Balloon(running?"Stimme gespeichert. Sie gilt ab dem nächsten Gespräch.":"Stimme gespeichert. Sie gilt für das nächste Gespräch.","voice-choice");
     }
     void TickFailed(string where,Exception ex)
     {
@@ -264,6 +303,10 @@ internal sealed class AppController : IDisposable
     // Desk voice follows the session; see VoiceSync for why a stop is only sent after a start.
     async Task SyncVoice()
     {
+        if(voiceChoicePending&&!hook.Session&&!bridge.VoiceOn&&!voiceSyncing)
+        {
+            voiceChoicePending=false;bridge.ReloadVoiceChoice();
+        }
         var step=voice.Next(Active,bridge.VoiceOn,Environment.TickCount64,voiceSyncing);
         voiceFailed=voice.Failed;
         if(step==VoiceStep.None)return;

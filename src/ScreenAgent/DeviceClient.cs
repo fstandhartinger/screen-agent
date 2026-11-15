@@ -151,6 +151,12 @@ internal sealed partial class DeviceClient : IDisposable
         int retry=response.Headers.RetryAfter?.Delta is {} d?(int)d.TotalSeconds:0;
         return new((int)response.StatusCode,json,retry);
     }
+    public async Task<VoiceChoice[]> Voices(string provider,CancellationToken ct)
+    {
+        using var response=await Send(HttpMethod.Get,"api/voices",null,ct);
+        using var json=await Read<JsonDocument>(response,ct);
+        return VoiceChoices.Catalog(json.RootElement,provider);
+    }
     public async Task<string[]> Dictionary(CancellationToken ct)
     {
         using var r=await Send(HttpMethod.Get,"api/device/dictionary",null,ct);

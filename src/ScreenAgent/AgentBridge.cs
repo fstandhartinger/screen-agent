@@ -261,7 +261,14 @@ internal sealed class AgentBridge : Window
         cookie.Expires=DateTimeOffset.FromUnixTimeMilliseconds(session.expiresAt).UtcDateTime;
         browser.CookieManager.AddOrUpdateCookie(cookie);
         // client/cv/cc: the web client maps these into the voice start message (client:{app,version,commit,device}, entry:{path:"screen-agent"}).
-        browser.Navigate(new Uri(origin,"/?companion=1&voice="+Uri.EscapeDataString(config.VoiceProvider)+"&client=screen-agent&cv="+Uri.EscapeDataString(AppInfo.Version)+"&cc="+Uri.EscapeDataString(AppInfo.Commit)+"&device=windows").AbsoluteUri);
+        browser.Navigate(VoiceChoices.CompanionUrl(config,AppInfo.Version,AppInfo.Commit).AbsoluteUri);
+        SessionChanged?.Invoke();
+    }
+    public void ReloadVoiceChoice()
+    {
+        if(browser is null||!client.Paired||VoiceOn)return;
+        SessionId=null;
+        browser.Navigate(VoiceChoices.CompanionUrl(config,AppInfo.Version,AppInfo.Commit).AbsoluteUri);
         SessionChanged?.Invoke();
     }
     async Task StartPairing()
