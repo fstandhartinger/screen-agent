@@ -16,6 +16,15 @@ internal static class ScreenConfig
         }
         return config;
     }
+    public static void SetVoiceNames(Dictionary<string,string> names)
+    {
+        string file=Path.Combine(Folder,"config.json");
+        var node=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        // Replace a differently cased key too (config parsing is case insensitive).
+        foreach(var key in node.Select(k=>k.Key).Where(k=>string.Equals(k,"VoiceNames",StringComparison.OrdinalIgnoreCase)).ToArray())node.Remove(key);
+        node["VoiceNames"]=JsonSerializer.SerializeToNode(names);
+        string temp=file+".tmp";File.WriteAllText(temp,node.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));File.Move(temp,file,true);
+    }
     // Only this one key is rewritten, everything else in config.json stays as the user wrote it.
     public static void SetComputerUse(bool on)
     {

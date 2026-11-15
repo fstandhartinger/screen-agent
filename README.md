@@ -1,4 +1,26 @@
-# Screen Agent v0.1.16 preview
+# Screen Agent v0.1.17 preview
+
+## v0.1.17
+
+Choose the conversation voice in the tray: right-click Screen Agent → **Stimme** → a voice, or
+**Standard (Desk)** to use the Desk default. Choices are saved separately for each configured voice provider
+in `VoiceNames` in config.json. Gemini Fast uses the Gemini catalog. During a conversation a new choice
+applies to the next conversation; otherwise the companion page reloads immediately. If the voice catalog
+cannot be loaded, the menu offers only **Standard (Desk)**.
+
+Screen uploads now allow one active request and one waiting capture. A newer capture replaces the waiting one;
+unchanged screens still stay local. OCR context writes and frame uploads are sent in order so an OCR update
+cannot overtake a frame while vision is working. Session calls wait until the companion has finished connecting;
+a missing session retries after a short pause. `screen.frame.skipped` reports `in-flight` and `no-session`
+counts at most once per reason every 30 seconds.
+
+During a voice conversation a compact, click-through line near the bottom of the primary screen shows the
+current activity even when the canvas is minimised. Computer runs add **Schritt n** and the latest action/result.
+It remains while a tool runs, then fades out four seconds after the last activity. It is separate from the
+optional activity rows, inset from the purple control frame, and shown only when Windows confirms screenshot
+exclusion. The line never takes focus or enters the screen context sent to the Desk.
+
+## v0.1.16
 
 Version 0.1.16 is about the live subtitle while you dictate (Florian, 14 Nov 2026: a stutter showed a word twice, and the subtitle did
 not correct itself while he spoke), and about logs that let us refine it.

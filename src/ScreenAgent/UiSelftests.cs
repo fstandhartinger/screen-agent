@@ -80,6 +80,30 @@ internal static class UiSelftests
             await Task.Delay(3200);overlay.Tick();
             Case("done-rows-are-gone-after-2-9-s-the-failure-stays",!overlay.Texts.Any(t=>t.Contains("ms"))&&overlay.Texts.Any(t=>t.EndsWith("· kein Fenster")),new{texts=overlay.Texts});
             overlay.Clear();Case("clear-hides-the-window",!overlay.IsVisible);
+            // This line has its own lifetime and remains visible with no canvas or activity rows.
+            var step=new StepLineOverlay();
+            try
+            {
+                var sh=new System.Windows.Interop.WindowInteropHelper(step).Handle;
+                step.Present(new("step-test","start","Lese den Gesprächsverlauf","",0,""));
+                await Task.Delay(300);
+                var sr=WindowRect(sh);
+                Native.GetWindowDisplayAffinity(sh,out uint sa);
+                long sx=Native.GetWindowLongPtr(sh,-20).ToInt64();
+                var primary=System.Windows.Forms.Screen.PrimaryScreen!.Bounds;
+                Case("step-line-visible-without-canvas-or-rows",step.IsVisible&&step.Text=="Lese den Gesprächsverlauf"&&!overlay.IsVisible);
+                Case("step-line-click-through-and-excluded",step.CaptureExcluded&&sa==0x11&&(sx&0x20)!=0&&(sx&0x08000000)!=0);
+                Case("step-line-inset-from-purple-frame",sr.Left>primary.Left+5&&sr.Right<primary.Right-5&&sr.Bottom<primary.Bottom-5&&sr.Top>primary.Top+primary.Height/2,new{rect=new{sr.X,sr.Y,sr.Width,sr.Height}});
+                Case("step-line-never-takes-focus",Native.GetForegroundWindow()==fgBefore);
+                double hidden=Share(Inner(sr),DarkPx);
+                Native.SetWindowDisplayAffinity(sh,0);await Task.Delay(300);
+                double shown=Share(Inner(sr),DarkPx);
+                Native.SetWindowDisplayAffinity(sh,0x11);
+                Case("step-line-not-in-screenshot",hidden<0.005&&shown>0.15,new{excluded=hidden,control=shown});
+                step.Tick(false);Case("step-line-cleared-at-voice-end",!step.IsVisible);
+            }
+            finally{step.Close();}
+
         }
         finally{try{overlay?.Close();under.Close();}catch{ }}
     });
