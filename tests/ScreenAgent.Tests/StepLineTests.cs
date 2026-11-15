@@ -8,7 +8,7 @@ public class StepLineTests
     {
         var s=new StepLine();s.Activity(Note("a","start","Lese Verlauf"),100);
         Assert.Equal("Lese Verlauf",s.View(60000,true).Text);
-        s.Activity(Note("a","done"),61000);Assert.Equal("Lese Verlauf",s.View(64600,true).Text);
+        s.Activity(new("a","done","","read_history",0,""),61000);Assert.Equal("Lese Verlauf",s.View(64600,true).Text);
         Assert.InRange(s.View(64800,true).Opacity,.49,.51);Assert.Equal("",s.View(65000,true).Text);
     }
     [Fact]public void EndingOneOfTwoToolsKeepsTheOtherVisible()

@@ -15,7 +15,8 @@ public sealed class StepLine
     public void Activity(ActivityNote note,long now)
     {
         if(!computer)last="";
-        string text=Clean(note.Label.Length>0?note.Label:note.Tool);
+        string text=Clean(note.Label);
+        if(text.Length==0)text=running.TryGetValue(note.Id,out var saved)?saved:Clean(note.Tool);
         if(note.Phase=="start")running[note.Id]=text;
         else if(note.Phase is "done" or "fail")
         {
