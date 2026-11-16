@@ -440,6 +440,23 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         bool changed=end!=nw.Count||!words.Skip(r.From).Take(end).SequenceEqual(nw);
         Put(r.From,end,nw,r.FromAudio,Math.Max(r.FromAudio,r.ToAudio));
         int to=r.From+nw.Count;Revisions++;
+        // an open answer heard a little further than its Shown: a window may have added the same last words meanwhile. That repeat behind it goes
+        // (a cut-off last word of the answer takes the window's fuller form).
+        if(r.Open)
+        {
+            for(int k=Math.Min(6,Math.Min(nw.Count,words.Count-to));k>=2;k--)
+            {
+                bool same=true;
+                for(int i=0;i<k&&same;i++)
+                {
+                    string x=StitchWords.Key(words[to-k+i]),y=StitchWords.Key(words[to+i]);
+                    same=WordMatch.Score(x,y)>0||i==k-1&&x.Length>=2&&y.Length>=2&&(x.StartsWith(y,StringComparison.Ordinal)||y.StartsWith(x,StringComparison.Ordinal));   // the last word may be cut off
+                }
+                if(!same)continue;
+                if(StitchWords.Key(words[to+k-1]).Length>StitchWords.Key(words[to-1]).Length)words[to-1]=words[to+k-1];
+                Put(to,k,[],0,0);break;
+            }
+        }
         if(r.Open){RevisedTo=to;RevisedAudio=r.ToAudio;Dirty=to<words.Count;}
         else{Confirmed=RevisedTo=to;AnchorAudio=r.ToAudio;RevisedAudio=Math.Max(RevisedAudio,r.ToAudio);Dirty=true;}
         Committed=Math.Min(words.Count,Math.Max(Committed,to-(r.Open?2:0)));PolishedTo=Math.Max(PolishedTo,Math.Min(Committed,to));
