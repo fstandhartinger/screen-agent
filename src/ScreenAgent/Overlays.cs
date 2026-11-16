@@ -21,6 +21,12 @@ internal static class OverlayStyle
     static readonly HashSet<string> refusedLogged=[];
     // capture.exclusion-failed {window}: a window that would show up in the next screenshot is not shown. Once per kind of window.
     public static void RefusedOnce(string window){lock(refusedLogged){if(!refusedLogged.Add(window))return;}Diag.Event("capture.exclusion-failed",new(){["window"]=window});}
+    // WS_EX_TRANSPARENT on or off: the status note takes clicks only while it carries the microphone controls.
+    public static void SetClickThrough(Window w,bool on)
+    {
+        var h=new WindowInteropHelper(w).Handle;long ex=Native.GetWindowLongPtr(h,-20).ToInt64();
+        Native.SetWindowLongPtr(h,-20,(IntPtr)(on?ex|0x20L:ex&~0x20L));
+    }
     // WS_EX_TRANSPARENT: mouse input goes to whatever is below.
     public static void MakeClickThrough(Window w)
     {
@@ -28,30 +34,95 @@ internal static class OverlayStyle
         Native.SetWindowLongPtr(h,-20,(IntPtr)(Native.GetWindowLongPtr(h,-20).ToInt64()|0x20L));
     }
 }
-// Small status note in the bottom-right corner. It is click-through, never takes focus, has no taskbar button and is
-// on screen only while a session runs or for a few seconds after something happened. It steps aside (fades) when the
-// mouse comes near, so it cannot be in the way of the app underneath. The tray icon carries the state the rest of the time.
+// Small status note in the bottom-right corner. It never takes focus and has no taskbar button; it is on screen only while a session runs
+// or for a few seconds after something happened. Without a voice session it is click-through and steps aside (fades) when the mouse comes
+// near, so it cannot be in the way of the app underneath. While a voice session runs it carries two controls on its left: the microphone
+// (click = mute/unmute, same switch as the hotkey) and a small arrow that opens the list of microphones. Then it takes clicks and stays solid.
 internal sealed class StatusToast : Window
 {
     readonly TextBlock label=new(){Foreground=Brushes.White,FontFamily=new System.Windows.Media.FontFamily("Segoe UI"),FontSize=12,TextWrapping=TextWrapping.Wrap,VerticalAlignment=VerticalAlignment.Center};
     readonly System.Windows.Shapes.Ellipse dot=new(){Width=8,Height=8,Margin=new Thickness(0,0,7,0),VerticalAlignment=VerticalAlignment.Center};
     readonly System.Windows.Threading.DispatcherTimer near=new(){Interval=TimeSpan.FromMilliseconds(150)};
+    static readonly System.Windows.Media.FontFamily Glyphs=new("Segoe Fluent Icons, Segoe MDL2 Assets");
+    const string MicGlyph="\uE720",MicOffGlyph="\uEC54",ChevronGlyph="\uE70E";   // Microphone, MicOff, ChevronUp (the list opens upwards)
+    static readonly SolidColorBrush Idle=Frozen(System.Windows.Media.Color.FromArgb(0,0,0,0)),Hover=Frozen(System.Windows.Media.Color.FromArgb(70,255,255,255)),MutedBack=Frozen(System.Windows.Media.Color.FromRgb(200,50,50));
+    readonly TextBlock micGlyph=new(){FontFamily=Glyphs,FontSize=14,Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center,Text=MicGlyph};
+    readonly Border micBox,pickBox;
+    readonly StackPanel controls=new(){Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,8,0),Visibility=Visibility.Collapsed};
+    bool micShown,micMuted;
+    // Raised on the UI thread. MicItems is asked each time the list opens: (name, menu text, selected); name null = Windows default.
+    public event System.Action? MuteClicked;
+    public event System.Action<string?>? MicPicked;
+    public Func<IReadOnlyList<(string? Name,string Text,bool Selected)>>? MicItems;
+    public bool MicShown=>micShown;
+    static SolidColorBrush Frozen(System.Windows.Media.Color c){var b=new SolidColorBrush(c);b.Freeze();return b;}
+    static Border Control(UIElement child,string tip)
+    {
+        var b=new Border{Background=Idle,CornerRadius=new CornerRadius(5),Padding=new Thickness(5,3,5,3),Margin=new Thickness(0,0,2,0),Child=child,ToolTip=tip,Cursor=System.Windows.Input.Cursors.Hand,VerticalAlignment=VerticalAlignment.Center};
+        return b;
+    }
     public StatusToast()
     {
         WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.NoResize;AllowsTransparency=true;Background=Brushes.Transparent;
         Topmost=true;ShowInTaskbar=false;ShowActivated=false;Focusable=false;SizeToContent=SizeToContent.WidthAndHeight;
-        var row=new StackPanel{Orientation=Orientation.Horizontal};row.Children.Add(dot);row.Children.Add(label);
-        Content=new Border{Background=new SolidColorBrush(System.Windows.Media.Color.FromArgb(225,34,34,40)),CornerRadius=new CornerRadius(8),Padding=new Thickness(10,5,12,5),MaxWidth=420,Child=row};
-        SourceInitialized+=(_,_)=>OverlayStyle.Apply(this,true);
+        micBox=Control(micGlyph,"Mikrofon stumm / an");
+        pickBox=Control(new TextBlock{FontFamily=Glyphs,FontSize=9,Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center,Text=ChevronGlyph},"Mikrofon wählen");
+        foreach(var b in new[]{micBox,pickBox})
+        {
+            var box=b;
+            box.MouseEnter+=(_,_)=>box.Background=box==micBox&&micMuted?MutedBack:Hover;
+            box.MouseLeave+=(_,_)=>box.Background=box==micBox&&micMuted?MutedBack:Idle;
+        }
+        micBox.MouseLeftButtonUp+=(_,e)=>{e.Handled=true;MuteClicked?.Invoke();};
+        pickBox.MouseLeftButtonUp+=(_,e)=>{e.Handled=true;OpenPicker();};
+        controls.Children.Add(micBox);controls.Children.Add(pickBox);
+        var row=new StackPanel{Orientation=Orientation.Horizontal};row.Children.Add(controls);row.Children.Add(dot);row.Children.Add(label);
+        Content=new Border{Background=new SolidColorBrush(System.Windows.Media.Color.FromArgb(225,34,34,40)),CornerRadius=new CornerRadius(8),Padding=new Thickness(10,5,12,5),MaxWidth=480,Child=row};
+        SourceInitialized+=(_,_)=>{OverlayStyle.Apply(this,!micShown);};
         SizeChanged+=(_,_)=>Place();
         near.Tick+=(_,_)=>
         {
             if(!IsVisible)return;
+            if(micShown){Opacity=1;return;}   // the controls must stay where his mouse goes
             var h=new WindowInteropHelper(this).Handle;
             if(!Native.GetWindowRect(h,out var r))return;
             var c=System.Windows.Forms.Cursor.Position;int pad=24;
             Opacity=c.X>=r.Left-pad&&c.X<=r.Right+pad&&c.Y>=r.Top-pad&&c.Y<=r.Bottom+pad?0.12:1;
         };
+    }
+    // Called from the status update: the controls are there while a voice session runs; muted turns the microphone red.
+    public void ShowMic(bool show,bool muted)
+    {
+        if(show==micShown&&muted==micMuted)return;
+        bool clickChange=show!=micShown;
+        micShown=show;micMuted=muted;
+        controls.Visibility=show?Visibility.Visible:Visibility.Collapsed;
+        micGlyph.Text=muted?MicOffGlyph:MicGlyph;
+        micBox.Background=muted?MutedBack:micBox.IsMouseOver?Hover:Idle;
+        micBox.ToolTip=muted?"Mikrofon ist stumm · klicken zum Einschalten":"Mikrofon an · klicken zum Stummschalten";
+        if(clickChange)
+        {
+            var h=new WindowInteropHelper(this).Handle;
+            if(h!=IntPtr.Zero)OverlayStyle.SetClickThrough(this,!show);
+            if(show)Opacity=1;
+            if(!show&&pickBox.ContextMenu is {IsOpen:true} open)open.IsOpen=false;
+        }
+    }
+    void OpenPicker()
+    {
+        IReadOnlyList<(string? Name,string Text,bool Selected)> items;
+        try{items=MicItems?.Invoke()??[];}
+        catch(Exception ex){Diag.Fail("mic-list",ex);items=[];}   // the menu then says that no microphone was found
+        var menu=new ContextMenu{PlacementTarget=pickBox,Placement=System.Windows.Controls.Primitives.PlacementMode.Top};
+        if(items.Count==0)menu.Items.Add(new MenuItem{Header=new TextBlock{Text="Kein Mikrofon gefunden"},IsEnabled=false});
+        foreach(var it in items)
+        {
+            var name=it.Name;
+            var item=new MenuItem{Header=new TextBlock{Text=it.Text},IsChecked=it.Selected};   // a TextBlock header: an underscore in a device name is no access key
+            item.Click+=(_,_)=>MicPicked?.Invoke(name);
+            menu.Items.Add(item);
+        }
+        pickBox.ContextMenu=menu;menu.IsOpen=true;
     }
     public static System.Windows.Media.Color Colour(Level level)=>level switch
     {

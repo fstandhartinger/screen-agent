@@ -82,7 +82,7 @@ internal sealed class CaptionHost : IDisposable
     {
         try
         {
-            var c=new WasapiCapture();c.WaveFormat=new WaveFormat(16000,16,1);
+            var c=MicDevices.Capture();c.WaveFormat=new WaveFormat(16000,16,1);
             c.DataAvailable+=(_,e)=>Feed(e.Buffer,e.BytesRecorded);
             c.RecordingStopped+=(_,_)=>{};
             c.StartRecording();tap=c;
@@ -93,6 +93,8 @@ internal sealed class CaptionHost : IDisposable
             telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="tap",["retryInSeconds"]=30}));tap=null;StopTap();
         }
     }
+    // The microphone choice changed: the open subtitle microphone closes now and the next tick opens the new one.
+    public void ReopenTap(){if(tap is null)return;StopTap();tapRetryAt=0;}
     void StopTap(){var t=tap;tap=null;try{t?.StopRecording();t?.Dispose();}catch(Exception ex){Diag.Fail("caption-stop-tap",ex);}}
     public void Feed(byte[] buffer,int count)
     {

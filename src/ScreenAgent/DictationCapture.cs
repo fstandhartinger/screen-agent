@@ -40,7 +40,7 @@ internal sealed class DictationCapture : IDisposable
     }
     WasapiCapture Open()
     {
-        var prev=capture;var c=new WasapiCapture();c.WaveFormat=new WaveFormat(16000,16,1);capture=c;   // events of any other instance are ignored
+        var prev=capture;var c=MicDevices.Capture();c.WaveFormat=new WaveFormat(16000,16,1);capture=c;   // events of any other instance are ignored
         c.DataAvailable+=(s,e)=>
         {
             if(!ReferenceEquals(s,capture)||e.BytesRecorded<=0)return;

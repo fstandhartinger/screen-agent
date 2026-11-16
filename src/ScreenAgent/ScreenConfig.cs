@@ -25,6 +25,15 @@ internal static class ScreenConfig
         node["VoiceNames"]=JsonSerializer.SerializeToNode(names);
         string temp=file+".tmp";File.WriteAllText(temp,node.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));File.Move(temp,file,true);
     }
+    // Only the microphone key is rewritten; null removes it (Windows default).
+    public static void SetMicrophone(string? name)
+    {
+        string file=Path.Combine(Folder,"config.json");
+        var node=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        foreach(var key in node.Select(k=>k.Key).Where(k=>string.Equals(k,"Microphone",StringComparison.OrdinalIgnoreCase)).ToArray())node.Remove(key);
+        if(name is not null)node["Microphone"]=name;
+        string temp=file+".tmp";File.WriteAllText(temp,node.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));File.Move(temp,file,true);
+    }
     // Only this one key is rewritten, everything else in config.json stays as the user wrote it.
     public static void SetComputerUse(bool on)
     {
