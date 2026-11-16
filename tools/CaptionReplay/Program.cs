@@ -15,12 +15,12 @@ namespace CaptionReplay;
 //   CaptionReplay <evalDir> --modes v116,revise [--polish http://127.0.0.1:8791] [--revise http://127.0.0.1:8792] [--cases a,b] [--out runs]
 // Modes: v116 (windows + live clean-up + chunks: the app today; Settle without audio end, as v0.1.16), v116-nochunk, old (v0.1.15), new / new-nosettle (v0.1.16 = v116 / v116-nochunk).
 // Re-read modes (v0.1.19 seam logic: PauseTracker fed with every 20 ms block, closed re-reads up to a pause, open re-reads from the anchor, maxSeconds 25, Settle with the chunks' audio end and final flag):
-//   revise[-gl|-g38][-nochunk][+newg|+newl][-hostaudio]   sources "mai" (revise2 = "mai,openai");
+//   revise[-gl|-g38][-nochunk][+newg|+newl|+newh]   sources "mai" (revise2 = "mai,openai");
 //   -gl / -g38: the revise server's model is gemini-3.5-flash-lite / gemini-3.8-flash (Google API, text only) instead of the gateway default;  -nochunk: no chunk step (a voice session has none);
-//   +newg / +newl: the chunks come from the gateway run `newg` / `newl` (dictation text by Gemini), default `new` (the model of today);
-//   -f1 / -f2 / -f12: what-ifs of the replay tool, NOT product code: f1 = an open answer whose Shown no longer stands in the words is dropped (instead of replacing a guessed number of words);
-//   f2 = a closed request sends only the tentative words that lie inside its audio (estimated word times up to ToAudio + 0.5 s) as Shown; f12 = both;
-//   -hostaudio: what the host code literally does (CaptionHost.TickRevise sends the ring from FromAudio to NOW, also for a closed re-read whose ToAudio is the pause); default = [FromAudio, ToAudio] as designed.
+//   +newg / +newl / +newh: the chunks come from the gateway run `newg` / `newl` / `newh` (dictation text by Gemini; newh = gemini-3.8-flash + the fast second model gemini-3.5-flash-lite for the last chunk),
+//   default `new` (the model of today).
+// Round 3 (app 86ffb26): the three what-if switches of round 2 (-f1, -f2, -hostaudio) are gone: the product code does what they simulated (the host sends [FromAudio, ToAudio]; a closed request's Shown holds only the
+// words with an estimated time before the pause; an open answer whose Shown stands neither as prefix nor by alignment is dropped), so the main rows replay the code as it is.
 static class Program
 {
     sealed record Window(double At,double From,double To,string Text,int Ms,double Cost);
@@ -30,7 +30,7 @@ static class Program
         public double Joined=>To-From-(Overlap?0.5:0);
     }
     sealed record Case(string Id,double Seconds,string Wav,List<Window> Windows,Dictionary<string,List<ChunkText>> Chunks,Dictionary<string,double> FinalCost);
-    sealed record Mode(string Name,bool OldStitch,string Live,string Sources,string? Chunks,string Model="",bool HostAudio=false,bool F1=false,bool F2=false)
+    sealed record Mode(string Name,bool OldStitch,string Live,string Sources,string? Chunks,string Model="")
     {
         public bool Revise=>Live=="revise";
         public bool Polish=>Live=="polish";
@@ -41,16 +41,15 @@ static class Program
         {
             case "old":return new(m,true,"polish","",null);
             case "new":case "v116":return new(m,false,"polish","","main");
-            case "v116+newg":case "v116+newl":return new(m,false,"polish","",m[5..]);   // control: today's logic with the chunk text of the Gemini typed-text runs
+            case "v116+newg":case "v116+newl":case "v116+newh":return new(m,false,"polish","",m[5..]);   // control: today's logic with the chunk text of the Gemini typed-text runs
             case "new-nosettle":case "v116-nochunk":return new(m,false,"polish","",null);
         }
         if(m.StartsWith("revise"))
         {
             bool two=m.StartsWith("revise2"),nochunk=m.Contains("-nochunk");
             string model=m.Contains("-gl")?"gemini-3.5-flash-lite":m.Contains("-g38")?"gemini-3.8-flash":"";
-            string chunks=m.Contains("+newg")?"newg":m.Contains("+newl")?"newl":"new";
-            var tok=m.Split('+')[0].Split('-');bool f12=tok.Contains("f12");
-            return new(m,false,"revise",two?"mai,openai":"mai",nochunk?null:chunks,model,m.Contains("-hostaudio"),f12||tok.Contains("f1"),f12||tok.Contains("f2"));
+            string chunks=m.Contains("+newg")?"newg":m.Contains("+newl")?"newl":m.Contains("+newh")?"newh":"new";
+            return new(m,false,"revise",two?"mai,openai":"mai",nochunk?null:chunks,model);
         }
         throw new ArgumentException("unknown mode "+m);
     }
@@ -89,7 +88,7 @@ static class Program
             var w=JsonNode.Parse(File.ReadAllText(Path.Combine(dir,"windows",id+".json")))!;
             var windows=w["windows"]!.AsArray().Select(x=>new Window(x!["at"]!.GetValue<double>(),x["from"]!.GetValue<double>(),x["to"]!.GetValue<double>(),x["text"]?.GetValue<string>()??"",x["ms"]?.GetValue<int>()??0,x["cost"]?.GetValue<double>()??0)).OrderBy(x=>x.At).ToList();
             var chunks=new Dictionary<string,List<ChunkText>>();var finalCost=new Dictionary<string,double>();
-            foreach(var gw in new[]{"main","new","newg","newl"})
+            foreach(var gw in new[]{"main","new","newg","newl","newh"})
             {
                 string fp=Path.Combine(dir,"final-"+gw+(tag.Length>0?"-"+tag:""),id+".json");   // --tag rep2: the chunks of a cache-bypassed repeat (final-<gw>-rep2)
                 if(!File.Exists(fp))continue;
@@ -146,7 +145,7 @@ static class Program
         // the host feeds every audio block to the pause tracker (reset at the start of a recording); the replay feeds the 20 ms blocks up to the tick's time
         void FeedPauses(double t){int upto=(int)Math.Floor(t/0.02+1e-9);while(fed<upto&&fed<blocks.Length){pauses.Add((fed+1)*0.02,0.02,blocks[fed]);fed++;}}
         double end=c.Seconds;var chunkParts=new List<string>();var chunkOverlap=new List<bool>();
-        int windows=0,reviseAsked=0,reviseUsed=0,reviseFailed=0,reviseLate=0,reviseNoChange=0,reviseClosed=0,reviseOpen=0,reviseStale=0,reviseModelFailed=0,reviseNotMerged=0,polishUsedLate=0;double audio=0,lastPolish=-10;
+        int windows=0,reviseAsked=0,reviseUsed=0,reviseFailed=0,reviseLate=0,reviseNoChange=0,reviseClosed=0,reviseOpen=0,reviseModelFailed=0,reviseNotMerged=0,polishUsedLate=0;double audio=0,lastPolish=-10;
         var costs=new Dictionary<string,double>{["caption"]=0,["polish"]=0,["revise"]=0,["chunk"]=0,["final"]=0};
         void Call(double t,string kind,int ms,double usd,bool ok,JsonObject? extra=null)
         {
@@ -237,16 +236,8 @@ static class Program
                     var req=rp.Next(live,now,t,speaking,pauses,25);
                     if(req is null)return;
                     reviseAsked++;if(req.Open)reviseOpen++;else reviseClosed++;
-                    // audio of the request: [FromAudio, ToAudio] as designed; -hostaudio: from FromAudio to now (the ring's end), what CaptionHost.TickRevise does
-                    double to=mode.HostAudio&&!req.Open?Math.Round(t,3):req.ToAudio;
-                    string shownSent=req.Shown;
-                    if(mode.F2&&!req.Open)
-                    {
-                        // what-if: only the tentative words that (by the estimated word times) start inside the piece's audio
-                        var sw=StitchWords.Split(req.Shown);int keep=0;
-                        while(keep<sw.Length&&req.From+keep<live.Times.Count&&live.Times[req.From+keep]<req.ToAudio+0.5)keep++;
-                        shownSent=string.Join(' ',sw.Take(Math.Max(1,keep)));
-                    }
+                    // the host sends the audio [FromAudio, ToAudio] (CaptionHost.TickRevise since app 86ffb26) and the request's Shown as NextRevise made it (a closed piece: only the words before its pause)
+                    double to=req.ToAudio;string shownSent=req.Shown;
                     var r=revise(c.Id,req.FromAudio,to,shownSent,req.Before,req.Open,mode.Sources,mode.Model);
                     bool late=r.Ms>6000;double at=t+Math.Min(r.Ms,6000)/1000.0;
                     Call(t,"revise",r.Ms,r.Usd,r.Ok&&!late,new JsonObject{["open"]=req.Open,["merged"]=r.Raw?["merged"]?.GetValue<bool>(),["modelOk"]=r.Raw?["modelOk"]?.GetValue<bool>(),["modelMs"]=r.Raw?["modelMs"]?.GetValue<int>(),["modelReason"]=r.Raw?["modelReason"]?.GetValue<string>(),["from"]=req.FromAudio,["to"]=to});
@@ -256,13 +247,6 @@ static class Program
                         bool ok=r.Ok&&!late;rp.Answered(ok,(long)Math.Round(at*1000),r.Code);
                         if(late)reviseLate++;else if(!r.Ok)reviseFailed++;
                         string? answer=ok?r.Text:null;
-                        if(mode.F1&&answer is not null&&req.Open)
-                        {
-                            // what-if: the words the request showed must still stand in the live words (as a prefix, or their end found by alignment); else the answer is stale
-                            var cur=live.Words.Skip(req.From).Select(StitchWords.Key).ToList();var snap=StitchWords.Split(req.Shown).Select(StitchWords.Key).ToList();
-                            bool stands=snap.Count<=cur.Count&&cur.Take(snap.Count).SequenceEqual(snap)||WordAlign.EndOf(cur,snap.Skip(Math.Max(0,snap.Count-12)).ToList())>=0;
-                            if(!stands){answer=null;reviseStale++;}
-                        }
                         bool used=live.AnswerRevise(req,answer,Math.Min(at,end));
                         if(used){reviseUsed++;Update(at,'r');}else if(ok&&answer is not null)reviseNoChange++;
                     });
@@ -283,7 +267,7 @@ static class Program
         {
             ["windows"]=windows,["audioSec"]=Math.Round(audio,1),["changed"]=log.Changed,["changedLate"]=log.ChangedLate,["changedWindow"]=log.ChangedBy['w'],["changedPolish"]=log.ChangedBy['p'],["changedChunk"]=log.ChangedBy['c'],["changedRevise"]=log.ChangedBy['r'],
             ["correctionAgeMs"]=log.MedianCorrectionAgeMs,["polishAsked"]=log.PolishAsked,["polishUsed"]=log.PolishUsed,["polishDropped"]=log.PolishDropped,["polishFailed"]=log.PolishFailed,
-            ["reviseAsked"]=reviseAsked,["reviseClosed"]=reviseClosed,["reviseStale"]=reviseStale,["reviseOpen"]=reviseOpen,["reviseModelFailed"]=reviseModelFailed,["reviseNotMerged"]=reviseNotMerged,["reviseUsed"]=reviseUsed,["reviseNoChange"]=reviseNoChange,["reviseFailed"]=reviseFailed,["reviseLate"]=reviseLate,["chunks"]=log.Chunks,["chunksPlaced"]=log.ChunksPlaced,
+            ["reviseAsked"]=reviseAsked,["reviseClosed"]=reviseClosed,["reviseOpen"]=reviseOpen,["reviseModelFailed"]=reviseModelFailed,["reviseNotMerged"]=reviseNotMerged,["reviseUsed"]=reviseUsed,["reviseNoChange"]=reviseNoChange,["reviseFailed"]=reviseFailed,["reviseLate"]=reviseLate,["chunks"]=log.Chunks,["chunksPlaced"]=log.ChunksPlaced,
             ["repeatsSeen"]=log.RepeatsShown,["confirmed"]=live.Confirmed,["words"]=shown.Count
         };
         var costObj=new JsonObject();foreach(var (k,v) in costs)costObj[k]=Math.Round(v,6);
