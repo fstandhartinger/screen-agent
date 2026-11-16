@@ -48,6 +48,15 @@ public class LiveCaptionReviseTests
         Assert.Equal("wir haben das JevBench-Ergebnis gestern veröffentlicht und dann",All(c));
     }
     [Fact]
+    public void A_repeat_a_window_added_behind_the_open_answer_goes()
+    {
+        var c=Heard(("wir finden was gut zu bewerben ist",5));
+        var r=c.NextRevise(5,null,minNewSeconds:0)!;
+        c.AddWindow("zu bewerben ist zum Beispiel dass es starke Mod-",7,5);
+        c.AnswerRevise(r,"wir finden, was gut zu bewerben ist, zum Beispiel, dass es starke Mo",7.1);
+        Assert.Equal("wir finden, was gut zu bewerben ist, zum Beispiel, dass es starke Mod-",All(c));
+    }
+    [Fact]
     public void A_failed_or_late_re_read_changes_nothing()
     {
         var c=Heard(("wir haben das Problem gesehen",4));
