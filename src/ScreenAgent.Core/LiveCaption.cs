@@ -192,6 +192,32 @@ public static class Disfluency
 }
 // The live text of one dictation (or voice session): settled words that no window changes any more, then the words the latest window heard.
 // Thread-unsafe; CaptionHost holds its lock around every call.
+// Speech pauses of the recording (v0.1.19): where a re-read may end so that no word is cut. Fed with each audio block's level.
+public sealed class PauseTracker(double minPause=0.45,double speechRms=400)
+{
+    readonly List<double> cuts=[];double silentFrom=-1,heardAt=-1;
+    public IReadOnlyList<double> Cuts=>cuts;
+    public void Add(double audioEnd,double seconds,double rms)
+    {
+        double start=audioEnd-seconds;
+        if(rms>=speechRms)
+        {
+            if(silentFrom>=0&&heardAt>=0&&start-silentFrom>=minPause)cuts.Add(Math.Round(silentFrom+Math.Min(0.25,(start-silentFrom)/2),3));
+            silentFrom=-1;heardAt=audioEnd;
+        }
+        else if(silentFrom<0)silentFrom=start;
+        if(cuts.Count>400)cuts.RemoveRange(0,200);
+    }
+    // The latest pause in (after, before]; a pause still going on counts once it is minPause long.
+    public double? LastCut(double after,double before)
+    {
+        if(silentFrom>=0&&heardAt>=0){double c=silentFrom+0.25;if(c>after&&c<=before&&before-silentFrom>=minPause)return Math.Round(c,3);}
+        for(int i=cuts.Count-1;i>=0;i--)if(cuts[i]<=before){return cuts[i]>after?cuts[i]:null;}
+        return null;
+    }
+    public void Reset(){cuts.Clear();silentFrom=heardAt=-1;}
+}
+public sealed record ReviseRequest(int From,int To,double FromAudio,double ToAudio,string Shown,string Before,int Version,bool Open=true);
 public sealed class LiveCaption(int maxWords=int.MaxValue)
 {
     public sealed record PolishRequest(int From,int To,string[] Keys,string Text,string Before,int Version);
@@ -206,24 +232,35 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     public int Appended {get;private set;}    // windows that matched nothing and were added at the end
     public IReadOnlyList<string> Words=>words;
     public string Raw=>string.Join(' ',words);
-    public void Reset(){words.Clear();Committed=Settled=PolishedTo=0;PolishBusy=false;version++;lastWindowEnd=-1;Windows=Appended=0;}
+    public void Reset(){words.Clear();times.Clear();Committed=Settled=PolishedTo=Confirmed=RevisedTo=0;PolishBusy=ReviseBusy=Dirty=false;RevisedAudio=AnchorAudio=0;version++;lastWindowEnd=-1;Windows=Appended=0;}
+    // v0.1.19: the estimated audio second at which each word starts (parallel to words): where a re-read of the last seconds begins.
+    readonly List<double> times=[];
+    public IReadOnlyList<double> Times=>times;
+    // words from `at` on replaced by nw; their times spread evenly over [t0, t1)
+    void Put(int at,int count,IReadOnlyList<string> nw,double t0,double t1)
+    {
+        words.RemoveRange(at,count);words.InsertRange(at,nw);
+        times.RemoveRange(at,count);times.InsertRange(at,Enumerable.Range(0,nw.Count).Select(k=>t0+(t1-t0)*k/Math.Max(1,nw.Count)));
+    }
+    double TimeAt(int i,double fallback)=>i>=0&&i<times.Count?times[i]:fallback;
     // A window: its text and where its audio ends and how long it is (seconds of the recording). Overlap with the previous window decides whether it is placed or added.
     public void AddWindow(string text,double audioEnd=double.NaN,double seconds=double.NaN)
     {
         var w=StitchWords.Split(text);
         if(w.Length==0||w.All(x=>StitchWords.Key(x).Length==0))return;   // "..." alone: nothing heard
-        Windows++;
+        Windows++;Dirty=true;
+        double t1=double.IsNaN(audioEnd)?Math.Max(0,lastWindowEnd):audioEnd,t0=double.IsNaN(seconds)?t1:Math.Max(0,t1-seconds);
         double overlap=double.IsNaN(audioEnd)||double.IsNaN(seconds)||lastWindowEnd<0?double.PositiveInfinity:lastWindowEnd-(audioEnd-seconds);
         if(!double.IsNaN(audioEnd))lastWindowEnd=audioEnd;
-        if(words.Count==0){words.AddRange(w);return;}
+        if(words.Count==0){Put(0,0,w,t0,t1);return;}
         // the first seconds: this window holds all the audio so far, so it is the newest reading of everything not settled (no word is doubled)
-        if(!double.IsNaN(audioEnd)&&!double.IsNaN(seconds)&&audioEnd-seconds<=0.05&&Committed==0)
+        if(!double.IsNaN(audioEnd)&&!double.IsNaN(seconds)&&audioEnd-seconds<=0.05&&Committed==0&&Confirmed==0)
         {
             int same=0;
             while(same<words.Count&&same<w.Length-2&&StitchWords.Key(words[same])==StitchWords.Key(w[same])&&StitchWords.Key(w[same]).Length>0)same++;
-            words.Clear();words.AddRange(w);Commit(same);Trim();return;
+            Put(0,words.Count,w,t0,t1);RevisedTo=0;Commit(same);Trim();return;
         }
-        if(overlap<=0.3){Commit(words.Count);words.AddRange(w);Appended++;Trim();return;}   // a pause longer than a window: nothing of it was heard before
+        if(overlap<=0.3){Commit(words.Count);Put(words.Count,0,w,t0,t1);Appended++;Trim();return;}   // a pause longer than a window: nothing of it was heard before
         // only the words the overlapping audio can hold are compared: about 3.5 words a second, a few more for safety (no match far back in the text)
         int tailLen=double.IsInfinity(overlap)?40:Math.Clamp((int)Math.Ceiling(overlap*3.5)+6,6,40);
         int baseAt=Math.Max(0,words.Count-tailLen);
@@ -232,7 +269,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         if(r is null||r.Matches<(w.Length<=2||tail.Count<=2?1:2)||r.Score<1)
         {
             // nothing in common although the audio overlaps (a recogniser's invention, noise): added, but not settled, so the next window can still put it right
-            words.AddRange(w);Appended++;Trim();return;
+            Put(words.Count,0,w,t0,t1);Appended++;Trim();return;
         }
         // words in front of the window's audio are settled; the window cannot speak for them any more
         Commit(baseAt+r.AStart);
@@ -260,8 +297,9 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
             if(tail[i]==wk[wi])break;
             keep=baseAt+i+1;wi++;
         }
-        words.RemoveRange(keep,words.Count-keep);
-        words.AddRange(w.Skip(Math.Min(wi,w.Length)));
+        int from=Math.Min(wi,w.Length);
+        Put(keep,words.Count-keep,w.Skip(from).ToArray(),t0+(t1-t0)*from/w.Length,t1);
+        RevisedTo=Math.Min(RevisedTo,keep);
         Trim();
     }
     void Commit(int to){if(to>Committed)Committed=Math.Min(to,words.Count);}
@@ -269,11 +307,12 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     {
         if(words.Count<=maxWords)return;
         int drop=words.Count-maxWords/2;   // an hour-long voice session: the subtitle only needs the end
-        words.RemoveRange(0,drop);Committed=Math.Max(0,Committed-drop);Settled=Math.Max(0,Settled-drop);PolishedTo=Math.Max(0,PolishedTo-drop);version++;
+        words.RemoveRange(0,drop);times.RemoveRange(0,drop);Confirmed=Math.Max(0,Confirmed-drop);RevisedTo=Math.Max(0,RevisedTo-drop);Committed=Math.Max(0,Committed-drop);Settled=Math.Max(0,Settled-drop);PolishedTo=Math.Max(0,PolishedTo-drop);version++;
     }
     // The transcribed chunks so far (joined the way the final text is joined): they replace the live words they cover.
     // Returns 1 when their end was found in the live text, 2 when they replaced all of it (no match), 0 for nothing to do.
-    public int Settle(string joined)
+    // audioEnd: where the chunks' audio ends (seconds of the recording; NaN unknown): the next re-read starts there. final: the last chunk, nothing after it is his.
+    public int Settle(string joined,double audioEnd=double.NaN,bool final=false)
     {
         var s=StitchWords.Split(joined);
         if(s.Length==0)return 0;
@@ -288,9 +327,16 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         end=end<0?Math.Min(words.Count,Settled+fresh):from+end;
         int tailCommitted=Math.Max(0,Committed-end);
         var rest=words.Skip(end).ToList();
-        words.Clear();words.AddRange(s);words.AddRange(rest);
+        double tEnd=TimeAt(end,TimeAt(times.Count-1,0));
+        int Map(int i)=>i>=end?i-end+s.Length:s.Length;   // an index into the old words, after the chunk replaced words[..end]
+        Confirmed=Map(Confirmed);RevisedTo=Math.Max(Confirmed,Map(RevisedTo));
+        Put(0,end,s,TimeAt(0,0),tEnd);
+        if(final)Put(s.Length,words.Count-s.Length,[],0,0);
         Settled=s.Length;Committed=Math.Max(Settled,Settled+tailCommitted);PolishedTo=Math.Max(Settled,Math.Min(PolishedTo-end+Settled,Committed));
         if(PolishedTo<Settled)PolishedTo=Settled;
+        if(!double.IsNaN(audioEnd)&&audioEnd>=AnchorAudio){AnchorAudio=audioEnd;Confirmed=Math.Max(Confirmed,Settled);RevisedTo=Math.Max(RevisedTo,Confirmed);}
+        Confirmed=Math.Min(Confirmed,words.Count);RevisedTo=Math.Min(Math.Max(RevisedTo,Confirmed),words.Count);
+        Dirty=words.Count>Confirmed;
         version++;
         return how;
     }
@@ -319,7 +365,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         if(string.IsNullOrWhiteSpace(polished)||!Accept(r.Text,polished))return false;
         var p=StitchWords.Split(polished.Trim());
         int delta=p.Length-(r.To-r.From);
-        words.RemoveRange(r.From,r.To-r.From);words.InsertRange(r.From,p);
+        Put(r.From,r.To-r.From,p,TimeAt(r.From,0),TimeAt(r.To,TimeAt(r.To-1,0)));
         Committed+=delta;PolishedTo+=delta;
         return true;
     }
@@ -328,6 +374,114 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     {
         int a=DictationPolish.Words(before),b=DictationPolish.Words(after);
         return b>0&&b>=0.75*a-1.5&&b<=1.3*a+4;
+    }
+    // ---- v0.1.19 (Florian, 16 Nov 2026): "regelmäßig nachbetrachtet durch ein Large Language Model ... sobald das LLM es besser verstanden hat, sofort
+    // nachkorrigiert". Every few seconds the audio from the first unconfirmed word to now is heard again by the stronger recognisers and merged with this
+    // text and his context at the gateway (/api/device/revise); the answer replaces the unconfirmed words in place. Sentences the re-read finished a few
+    // seconds ago are confirmed: they never change again (except by the chunk, which is the typed text). The tentative rest shows lighter, and the fast
+    // windows' punctuation is not shown in it (that is where the stray commas and full stops came from).
+    public int Confirmed {get;private set;}       // words[..Confirmed] are final for the subtitle (>= Settled)
+    public int RevisedTo {get;private set;}       // words[Confirmed..RevisedTo] came from the last re-read (its punctuation is shown)
+    public double AnchorAudio {get;private set;}  // audio second where the confirmed words end (a pause or a chunk's end): every re-read starts here
+    public double RevisedAudio {get;private set;} // audio second up to which the last re-read heard
+    public bool ReviseBusy {get;private set;}
+    public bool Dirty {get;private set;}          // a window or chunk changed the words since the last re-read
+    public int Revisions {get;private set;}
+    // Seam rule (v0.1.19, after the replay of 16 Nov showed lost and doubled words where a re-read was placed by estimated word times):
+    // a re-read never starts inside the text. It starts at AnchorAudio, and its answer replaces ALL words after the confirmed ones (up to where later
+    // windows continue). Confirming happens only at a speech pause: a "closed" re-read of [AnchorAudio, pause] becomes the confirmed text, the pause the
+    // next anchor. So both sides of every seam were heard whole, and a misplaced end heals with the next open re-read.
+    public const double CloseAfter=4.0,CloseAge=2.5,ForceCloseAfter=15.0;
+    public double? CloseAt(double audioNow,PauseTracker? pauses,double maxSeconds=25)
+    {
+        if(pauses is null||Confirmed>=words.Count)return null;
+        double span=audioNow-AnchorAudio;
+        var cut=pauses.LastCut(AnchorAudio+(span>ForceCloseAfter?1.0:CloseAfter),audioNow-CloseAge);
+        if(cut is null&&span>maxSeconds)cut=pauses.LastCut(AnchorAudio+1.0,audioNow-0.5)??AnchorAudio+maxSeconds-5;   // no pause for too long: the latest one, else a hard cut
+        return cut;
+    }
+    // The next re-read: closed (up to a pause, becomes confirmed) when there is one to close, else open (from the anchor to audioNow). Null: busy, nothing new.
+    public ReviseRequest? NextRevise(double audioNow,PauseTracker? pauses=null,double maxSeconds=25,double minNewSeconds=2.5)
+    {
+        if(ReviseBusy||!Dirty||Confirmed>=words.Count)return null;
+        double? cut=CloseAt(audioNow,pauses,maxSeconds);
+        if(cut is null&&audioNow-RevisedAudio<minNewSeconds)return null;
+        double to=cut??audioNow,from=Math.Max(AnchorAudio,to-maxSeconds-5);
+        if(to-from<1.0)return null;
+        string before=string.Join(' ',words.Take(Confirmed));if(before.Length>600)before=before[^600..];
+        ReviseBusy=true;
+        // a closed piece is shown only the words that lie before its pause (the model must not take words spoken after it into the piece)
+        int upTo=words.Count;if(cut is not null){upTo=Confirmed;while(upTo<words.Count&&times[upTo]<to)upTo++;}
+        return new(Confirmed,words.Count,Math.Round(from,3),Math.Round(to,3),string.Join(' ',words.Skip(Confirmed).Take(upTo-Confirmed)),before,version,cut is null);
+    }
+    // The answer. Open: it replaces the words after the confirmed ones that were shown when it was asked (r.Shown; words later windows added stay).
+    // Closed: it replaces the words up to the pause (found by alignment, else by the time estimate) and becomes the confirmed text. null/empty/misfit: no change.
+    public bool AnswerRevise(ReviseRequest r,string? text,double audioNow)
+    {
+        ReviseBusy=false;
+        if(string.IsNullOrWhiteSpace(text)||r.Version!=version||Confirmed!=r.From||r.From>words.Count)return false;
+        var nw=StitchWords.Split(text.Trim()).ToList();var nk=nw.Select(StitchWords.Key).ToList();
+        if(nk.All(k=>k.Length==0))return false;
+        var cur=words.Skip(r.From).Select(StitchWords.Key).ToList();
+        int end;
+        if(r.Open)
+        {
+            var snap=StitchWords.Split(r.Shown).Select(StitchWords.Key).ToList();
+            end=snap.Count<=cur.Count&&cur.Take(snap.Count).SequenceEqual(snap)?snap.Count:WordAlign.EndOf(cur,snap.Skip(Math.Max(0,snap.Count-12)).ToList());
+            if(end<0)return false;   // the words it was asked for are gone (a window rewrote them): the next open re-read comes soon
+        }
+        else
+        {
+            int byTime=0;while(byTime<cur.Count&&times[r.From+byTime]<r.ToAudio)byTime++;
+            end=WordAlign.EndOf(cur,nk.Skip(Math.Max(0,nk.Count-8)).ToList());
+            if(end<0||Math.Abs(end-byTime)>Math.Max(4,nw.Count/2))end=byTime;
+        }
+        if(end>=5&&(nw.Count<0.4*end-2||nw.Count>2.5*end+5))return false;   // not the same words: left alone
+        bool changed=end!=nw.Count||!words.Skip(r.From).Take(end).SequenceEqual(nw);
+        Put(r.From,end,nw,r.FromAudio,Math.Max(r.FromAudio,r.ToAudio));
+        int to=r.From+nw.Count;Revisions++;
+        // an open answer heard a little further than its Shown: a window may have added the same last words meanwhile. That repeat behind it goes
+        // (a cut-off last word of the answer takes the window's fuller form).
+        if(r.Open)
+        {
+            for(int k=Math.Min(6,Math.Min(nw.Count,words.Count-to));k>=2;k--)
+            {
+                bool same=true;
+                for(int i=0;i<k&&same;i++)
+                {
+                    string x=StitchWords.Key(words[to-k+i]),y=StitchWords.Key(words[to+i]);
+                    same=WordMatch.Score(x,y)>0||i==k-1&&x.Length>=2&&y.Length>=2&&(x.StartsWith(y,StringComparison.Ordinal)||y.StartsWith(x,StringComparison.Ordinal));   // the last word may be cut off
+                }
+                if(!same)continue;
+                if(StitchWords.Key(words[to+k-1]).Length>StitchWords.Key(words[to-1]).Length)words[to-1]=words[to+k-1];
+                Put(to,k,[],0,0);break;
+            }
+        }
+        if(r.Open){RevisedTo=to;RevisedAudio=r.ToAudio;Dirty=to<words.Count;}
+        else{Confirmed=RevisedTo=to;AnchorAudio=r.ToAudio;RevisedAudio=Math.Max(RevisedAudio,r.ToAudio);Dirty=true;}
+        Committed=Math.Min(words.Count,Math.Max(Committed,to-(r.Open?2:0)));PolishedTo=Math.Max(PolishedTo,Math.Min(Committed,to));
+        return changed;
+    }
+    static readonly char[] OpenEnd=[',','.',';',':','!','?','…'];
+    // What the overlay shows: the confirmed part and the tentative rest (stutters and fillers out), together at most maxChars from the end. Tentative words
+    // from the windows lose their punctuation, the re-read's punctuation stays except at the very end (the sentence is still open).
+    public (string Confirmed,string Tentative) Shown(int maxChars)
+    {
+        int c=Math.Clamp(Confirmed,0,words.Count),start=Math.Max(0,Math.Min(c,words.Count-Math.Max(60,maxChars/2)));
+        var conf=Disfluency.Clean(words.Skip(start).Take(c-start).ToList(),out _,Math.Max(0,Settled-start));
+        var tw=new List<string>(words.Count-c);
+        for(int i=c;i<words.Count;i++)
+        {
+            string w=words[i];
+            if(i>=RevisedTo||i==words.Count-1){string t=w.TrimEnd(OpenEnd);w=t.Length==0||StitchWords.Key(t).Length==0?w:t;}
+            tw.Add(w);
+        }
+        var tent=Disfluency.Clean(tw,out _);
+        if(conf.Count>0&&tent.Count>0&&StitchWords.Key(conf[^1])==StitchWords.Key(tent[0])&&!Disfluency.Legit(StitchWords.Key(tent[0])))tent.RemoveAt(0);   // a repeat across the border
+        string ct=string.Join(' ',conf),tt=string.Join(' ',tent);
+        if(tt.Length>=maxChars)return ("",Tail(tt,maxChars));
+        if(ct.Length+1+tt.Length>maxChars)ct=Tail(ct,maxChars-tt.Length-1);
+        return (ct,tt);
     }
     // What the subtitle shows: the whole text without stutters and fillers (the overlay cuts it to its last characters).
     public List<string> Display()=>Disfluency.Clean(words,out _,Settled);   // the chunks' words exactly as they will be typed
@@ -345,7 +499,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     }
 }
 // What the subtitle showed, for the refinement rounds (Florian, 14 Nov: "falls die Protokolle noch nicht detailliert genug solche Sachen protokollieren").
-// Every change of the shown text as "<ms> <cause><kept words> <new words...>" (cause: w window, p clean-up, c chunk), and at the end the measures:
+// Every change of the shown text as "<ms> <cause><kept words> <new words...>" (cause: w window, p clean-up, c chunk, r re-read), and at the end the measures:
 // repeats on screen, words that were shown and changed later (and how late), live text against the typed text.
 public sealed class CaptionLog
 {
@@ -353,8 +507,8 @@ public sealed class CaptionLog
     readonly List<string> shown=[];readonly List<long> since=[];
     readonly List<Item> pending=[],all=[];
     public IReadOnlyList<Item> All=>all;
-    public int Updates,Changed,ChangedLate,RepeatsShown,PolishAsked,PolishUsed,PolishDropped,PolishFailed,Chunks,ChunksPlaced;
-    public readonly Dictionary<char,int> ChangedBy=new(){['w']=0,['p']=0,['c']=0};
+    public int Updates,Changed,ChangedLate,RepeatsShown,PolishAsked,PolishUsed,PolishDropped,PolishFailed,Chunks,ChunksPlaced,ReviseAsked,ReviseUsed,ReviseFailed;
+    public readonly Dictionary<char,int> ChangedBy=new(){['w']=0,['p']=0,['c']=0,['r']=0};
     readonly List<long> correctionAges=[];
     public long FirstShownMs=-1;
     public IReadOnlyList<string> Shown=>shown;
