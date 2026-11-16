@@ -7,6 +7,8 @@ public sealed class AppConfig
     public int IntervalMs {get;init;}=4000;
     public string VoiceProvider {get;init;}="xai";
     public Dictionary<string,string> VoiceNames {get;init;}=[];
+    // Windows name of the microphone picked in the overlay or tray; null = Windows default (see MicChoice).
+    public string? Microphone {get;set;}
     public bool RetainScreenshots {get;init;}=false;
     public string? UserEmail {get;init;}
     // Optional lists of windows that are never captured (process name prefixes, domains, title regexes). Empty by default: nothing is excluded.
@@ -90,6 +92,7 @@ public sealed class AppConfig
         if(!Uri.TryCreate(c.DeskUrl,UriKind.Absolute,out var uri)||uri.Scheme!="https"||uri.AbsolutePath!="/"||uri.Query!=""||uri.Fragment!=""||uri.UserInfo!="")throw new InvalidDataException("Desk URL must be an HTTPS origin");
         if(c.IntervalMs<1000||c.IntervalMs>60000)throw new InvalidDataException("Interval must be 1000..60000 ms");
         if(!new[]{"default","xai","openai","gemini","gemini-fast"}.Contains(c.VoiceProvider))throw new InvalidDataException("Unbekannter Sprach-Anbieter");
+        if(!MicChoice.Valid(c.Microphone))throw new InvalidDataException("Invalid microphone choice");
         if(c.VoiceNames is null||c.VoiceNames.Any(v=>!VoiceChoices.Providers.Contains(v.Key)||!VoiceChoices.ValidId(v.Value)))throw new InvalidDataException("Invalid voice choice");
         if(c.Indicator is not ("session" or "notices"))throw new InvalidDataException("Indicator must be session or notices");
         if(c.CanvasPanel is not ("auto" or "manual"))throw new InvalidDataException("CanvasPanel must be auto or manual");
@@ -122,7 +125,7 @@ public sealed class AppConfig
     static bool Valid(Dictionary<string,string> keys){try{_=new HotkeyBindings(keys);return true;}catch(InvalidDataException){return false;}   /* invalid keys: the defaults apply, HotkeyNote says so */}
     AppConfig WithHotkeys(Dictionary<string,string> keys,bool migrated,string? note=null)=>new()
     {
-        DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,VoiceNames=new(VoiceNames),RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
+        DeskUrl=DeskUrl,IntervalMs=IntervalMs,VoiceProvider=VoiceProvider,VoiceNames=new(VoiceNames),Microphone=Microphone,RetainScreenshots=RetainScreenshots,UserEmail=UserEmail,
         BlockProcesses=BlockProcesses,BlockDomains=BlockDomains,BlockTitlePatterns=BlockTitlePatterns,
         DictationBusyCursor=DictationBusyCursor,ComputerUnrestricted=ComputerUnrestricted,Indicator=Indicator,ScreenTextForSpeech=ScreenTextForSpeech,SendFrames=SendFrames,TraceUpload=TraceUpload,CanvasPanel=CanvasPanel,Briefing=Briefing,MainSessionPath=MainSessionPath,ActivityOverlay=ActivityOverlay,ScreenshotFeedback=ScreenshotFeedback,MainAgentInputNames=MainAgentInputNames,MainAgentAllowStableCode=MainAgentAllowStableCode,ComputerUse=ComputerUse,ComputerSensitive=ComputerSensitive,LearnThreshold=LearnThreshold,DictationMaxMinutes=DictationMaxMinutes,DictationKeepHours=DictationKeepHours,DictationKeepFailedDays=DictationKeepFailedDays,DictationCapMb=DictationCapMb,Captions=Captions,DictationPolish=DictationPolish,DictationFormat=DictationFormat,CaptionPolish=CaptionPolish,CaptionLog=CaptionLog,DictationRefinementKeep=DictationRefinementKeep,Hotkeys=keys,HotkeysMigrated=migrated,HotkeyNote=note
     };

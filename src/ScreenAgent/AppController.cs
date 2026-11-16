@@ -38,6 +38,7 @@ internal sealed class AppController : IDisposable
     long unmuteRetryAt;
     bool voiceSyncing,voiceChoicePending,voicesLoading;
     readonly System.Windows.Forms.ToolStripMenuItem voiceItem=new("Stimme");
+    readonly System.Windows.Forms.ToolStripMenuItem micItem=new("Mikrofon");
     IntPtr lastForeground,underlying,ocrForeground;
     byte[]? ocrGrid;
     bool ocrRunning;
@@ -111,6 +112,11 @@ internal sealed class AppController : IDisposable
             micMuted=muted;telemetry.Event("hotkey.mute.state",new(){["muted"]=muted,["source"]="page-event"});
             try{captions.Update(audio!=null,bridge.VoiceOn,micMuted);}catch(Exception ex){TickFailed("captions",ex);}   // the subtitle microphone closes now, not on the next tick
         }));
+        // The microphone controls on the status note (bottom right): mute toggle and the list of microphones. The tray has the same list.
+        MicDevices.Chosen=config.Microphone;
+        toast.MuteClicked+=()=>_=ToggleMute("overlay");
+        toast.MicItems=MicMenu;
+        toast.MicPicked+=name=>_=PickMic(name,"overlay");
         if(config.HotkeyNote is {} hotkeyNote)telemetry.Event("config.note",new(){["why"]=hotkeyNote});
         telemetry.Event("client.app",new(){["version"]=AppInfo.Version,["commit"]=AppInfo.Commit,["device"]="windows",["session"]=config.Hotkeys["session"],["dictation"]=config.Hotkeys["dictation"],["dictationToggle"]=config.Hotkeys["dictationToggle"],["mute"]=config.Hotkeys["mute"],["draw"]=config.Hotkeys["draw"],["pause"]=config.Hotkeys["pause"],["frames"]=config.SendFrames,["lists"]=config.Policy().HasLists,["hookHealthy"]=hook.Healthy});
         bridge.SessionChanged+=()=>{voice.PageChanged();voiceFailed=false;Reset();scopeRefreshAt=0;computer.Stop("session");};
@@ -172,6 +178,7 @@ internal sealed class AppController : IDisposable
         pauseItem.Click+=(_,_)=>hook.SetPaused(!hook.Paused);menu.Items.Add(pauseItem);
         computerItem.Checked=config.ComputerUse;computerItem.Click+=(_,_)=>_=SetComputer(!config.ComputerUse);menu.Items.Add(computerItem);
         FillVoices([]);voiceItem.DropDownOpening+=(_,_)=>_=LoadVoices();menu.Items.Add(voiceItem);
+        micItem.DropDownItems.Add("…");micItem.DropDownOpening+=(_,_)=>FillMics();menu.Items.Add(micItem);
         menu.Items.Add("Gerät trennen",null,(_,_)=>{Reset("stop");bridge.Disconnect();});
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Wörterbuch bearbeiten …",null,(_,_)=>DictionaryWindow.Open(client,()=>terms=[]));
@@ -203,6 +210,66 @@ internal sealed class AppController : IDisposable
         else if(new HotkeyBindings(config.Hotkeys).CollidesWithWispr)Balloon("Achtung: Strg+Win als Diktat-Taste ist auch die Wispr-Taste. Ändere „Hotkeys“ in config.json (Beispiel: Alt+Win), sonst stören sich beide.","wispr-collision");
         else if(!client.Paired)Balloon($"Screen Agent läuft im Tray (Symbol unten rechts, evtl. unter ^). Rechtsklick → Desk öffnen, um das Gerät zu verbinden. Danach: {chord} startet und beendet das Gespräch.","first-run");
         dictation.Startup();
+    }
+    // The list both menus show: Windows default first, then every active microphone; the stored choice is ticked (a gone device stays listed so he sees why).
+    IReadOnlyList<(string? Name,string Text,bool Selected)> MicMenu()
+    {
+        var list=new List<(string? Name,string Text,bool Selected)>();
+        string? chosen=config.Microphone;
+        var def=MicDevices.DefaultName();
+        list.Add((null,def is null?"Windows-Standard":"Windows-Standard ("+MicChoice.Short(def,32)+")",chosen is null));
+        var devices=MicDevices.List();
+        foreach(var d in devices.OrderBy(d=>d.Name,StringComparer.CurrentCultureIgnoreCase))list.Add((d.Name,MicChoice.Short(d.Name,48),chosen is not null&&MicChoice.Pick([d],chosen) is not null));
+        if(chosen is not null&&MicChoice.Pick(devices,chosen) is null)list.Add((chosen,MicChoice.Short(chosen,40)+" (nicht verbunden)",true));
+        return list;
+    }
+    void FillMics()
+    {
+        micItem.DropDownItems.Clear();
+        IReadOnlyList<(string? Name,string Text,bool Selected)> items;
+        try{items=MicMenu();}
+        catch(Exception ex){Diag.Fail("mic-list",ex);items=[];}   // shown as "Kein Mikrofon gefunden"
+        if(items.Count==0)micItem.DropDownItems.Add(new System.Windows.Forms.ToolStripMenuItem("Kein Mikrofon gefunden"){Enabled=false});
+        foreach(var it in items)
+        {
+            var name=it.Name;
+            var item=new System.Windows.Forms.ToolStripMenuItem(it.Text.Replace("&","&&")){Checked=it.Selected};
+            item.Click+=(_,_)=>_=PickMic(name,"tray");micItem.DropDownItems.Add(item);
+        }
+    }
+    // Stores the pick, reopens the subtitle microphone, and tells the Desk page (which switches a running voice session live). Then it checks the page really hears the new device.
+    async Task PickMic(string? name,string source)
+    {
+        name=MicChoice.Clean(name);
+        if(!MicChoice.Valid(name)){telemetry.Event("mic.pick.refused",new(){["source"]=source});return;}
+        try{ScreenConfig.SetMicrophone(name);}
+        catch(Exception ex){Notice("Mikrofon konnte nicht gespeichert werden",Level.Warn,"mic-config",ex);return;}
+        config.Microphone=name;MicDevices.Chosen=name;
+        try{captions.ReopenTap();}catch(Exception ex){TickFailed("captions",ex);}   // logged: tick.error
+        bool live=bridge.VoiceOn&&Active;
+        bool page=await bridge.SetMic(name);
+        telemetry.Event("mic.pick",new(){["source"]=source,["default"]=name is null,["live"]=live,["page"]=page});
+        string shown=name is null?"Windows-Standard":MicChoice.Short(name);
+        if(!live){Notice("Mikro: "+shown,Level.Active,"mic-pick");return;}
+        if(!page){Notice("Mikro gespeichert · gilt ab dem nächsten Gespräch",Level.Warn,"mic-page-silent");return;}
+        Notice("Mikro wechselt: "+shown,Level.Busy,"mic-pick");
+        await Task.Delay(1500);
+        if(disposed||!bridge.VoiceOn||!MicChoice.SameName(config.Microphone,name))return;   // the session ended or he picked again meanwhile
+        var label=await bridge.MicLabel();
+        bool ok=name is null?label is not null:MicChoice.Same(label,name);
+        telemetry.Event("mic.switch",new(){["ok"]=ok,["source"]=source});
+        if(ok)Notice("Mikro: "+shown,Level.Active,"mic-switched");
+        else Notice("Mikro nicht gewechselt · Gerät belegt oder getrennt",Level.Warn,"mic-switch-failed");
+    }
+    // A voice session started: make sure the page uses the stored microphone (the page keeps its own copy; config.json is the source).
+    async Task SyncMic()
+    {
+        try
+        {
+            var pref=await bridge.MicPreference();
+            if(!MicChoice.SameName(pref,config.Microphone)){bool ok=await bridge.SetMic(config.Microphone);telemetry.Event("mic.sync",new(){["ok"]=ok,["default"]=config.Microphone is null});}
+        }
+        catch(Exception ex){Diag.Fail("mic-sync",ex);}   // the session runs on the page's own choice
     }
     void FillVoices(VoiceChoice[] choices)
     {
@@ -270,6 +337,7 @@ internal sealed class AppController : IDisposable
         if(st.Level!=shownLevel){shownLevel=st.Level;tray.Icon=TrayIcons.For(st.Level);telemetry.Event("ui.status",new(){["msg"]=st.Text,["level"]=st.Level.ToString()});}
         string tip=st.Text.Length>120?st.Text[..120]:st.Text;
         if(tip!=shownText){shownText=tip;tray.Text=tip;}
+        toast.ShowMic(bridge.VoiceOn&&Active,micMuted);   // the microphone controls on the note: only while a voice session runs
         if(notice)return;   // the notice keeps the toast until it expires
         if(dictation.Status is {} live)   // he is talking, or chunks are still being transcribed: the note says how far, session or not
         {
@@ -384,7 +452,7 @@ internal sealed class AppController : IDisposable
             if(action is ActionKind.DrawStart or ActionKind.DrawStop)data["key"]=config.Hotkeys["draw"];   // the log proves which key drew
             telemetry.Event(HotkeyEvent(action),data);
         }
-        if(action==ActionKind.MuteToggle){_=ToggleMute();return;}
+        if(action==ActionKind.MuteToggle){_=ToggleMute("hotkey");return;}
         if(action==ActionKind.CanvasToggle){ToggleCanvas();return;}
         if(action is ActionKind.DictationStart or ActionKind.DictationStop or ActionKind.DictationDiscard){QueueAudio(action);return;}
         if(action is ActionKind.SessionToggle or ActionKind.PauseToggle)
@@ -522,7 +590,7 @@ internal sealed class AppController : IDisposable
         if(voice!=prevVoice)
         {
             telemetry.Event("client.voice",new(){["on"]=voice,["manual"]=manualSession});prevVoice=voice;if(!voice)micMuted=false;
-            if(voice)canvas?.SessionStarted();else{canvas?.HidePanel(false);activity?.Clear();stepLine.Clear();frameSlot.Clear()?.Image.Dispose();sessionGate.Reset();}   // a closed panel stays closed until the next voice session; at the end of a session it goes away
+            if(voice){canvas?.SessionStarted();_=SyncMic();}else{canvas?.HidePanel(false);activity?.Clear();stepLine.Clear();frameSlot.Clear()?.Image.Dispose();sessionGate.Reset();}   // a closed panel stays closed until the next voice session; at the end of a session it goes away
         }
         if(active!=prevActive)
         {
@@ -537,16 +605,19 @@ internal sealed class AppController : IDisposable
             if(await bridge.MicMuted() is {} now&&now!=micMuted){micMuted=now;telemetry.Event("hotkey.mute.state",new(){["muted"]=now,["source"]="page"});}
         }
     }
-    async Task ToggleMute()
+    // From the hotkey or the microphone button on the status note (source "overlay"): same switch, same notes.
+    async Task ToggleMute(string source)
     {
         // The microphone of the voice session is muted for the whole dictation (so the agent does not hear it). The key must not undo that.
-        if(audio!=null||hook.Dictating){telemetry.Event("hotkey.mute.ignored",new(){["why"]="dictating",["muted"]=micMuted});Notice("Mikro bleibt stumm während des Diktats",Level.Muted,"dictating");return;}
-        if(!Active||!bridge.VoiceOn){telemetry.Event("hotkey.mute.ignored",new(){["why"]="no-session",["active"]=Active,["voice"]=bridge.VoiceOn});Notice("Kein Gespräch aktiv · nichts zu stummschalten",Level.Warn,"no-session");return;}
+        if(audio!=null||hook.Dictating){telemetry.Event("hotkey.mute.ignored",new(){["why"]="dictating",["muted"]=micMuted,["source"]=source});Notice("Mikro bleibt stumm während des Diktats",Level.Muted,"dictating");return;}
+        if(!Active||!bridge.VoiceOn){telemetry.Event("hotkey.mute.ignored",new(){["why"]="no-session",["active"]=Active,["voice"]=bridge.VoiceOn,["source"]=source});Notice("Kein Gespräch aktiv · nichts zu stummschalten",Level.Warn,"no-session");return;}
         var muted=await bridge.ToggleMicMute();
-        if(muted is null){telemetry.Event("hotkey.mute.ignored",new(){["why"]="page-silent"});Notice("Stumm nicht möglich · Desk antwortet nicht",Level.Warn,"page-silent");return;}
+        if(muted is null){telemetry.Event("hotkey.mute.ignored",new(){["why"]="page-silent",["source"]=source});Notice("Stumm nicht möglich · Desk antwortet nicht",Level.Warn,"page-silent");return;}
         micMuted=muted.Value;mutePollAt=Environment.TickCount64+1000;
-        telemetry.Event("hotkey.mute.state",new(){["muted"]=micMuted,["source"]="hotkey"});
+        try{captions.Update(audio!=null,bridge.VoiceOn,micMuted);}catch(Exception ex){TickFailed("captions",ex);}   // the subtitle microphone follows at once
+        telemetry.Event("hotkey.mute.state",new(){["muted"]=micMuted,["source"]=source});
         Notice(micMuted?"Mikro stumm":"Mikro an",micMuted?Level.Muted:Level.Active,"mute-toggle");
+        toast.ShowMic(true,micMuted);
     }
     // The Desk learns the scope only from here; a lost POST is retried every 30 s while the paired app runs.
     void CopyLastDictation()

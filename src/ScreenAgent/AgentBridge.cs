@@ -391,6 +391,12 @@ internal sealed class AgentBridge : Window
     // Global mic mute (Ctrl+Win+Shift+M): the Desk page owns the state (window.__deskVoice, see web voiceController). null = no running voice session or no such API.
     public async Task<bool?> ToggleMicMute()=>ParseBool(await Eval("(()=>{const v=window.__deskVoice;if(!v||!v.toggleMuted)return null;return v.toggleMuted()===false?null:Boolean(v.muted());})()"));
     public async Task<bool?> MicMuted()=>ParseBool(await Eval("(()=>{const v=window.__deskVoice;return v&&v.muted?Boolean(v.muted()):null;})()"));
+    // Microphone picker: the page stores the choice (Windows name, null = default) for every later session and switches a running one live.
+    public async Task<bool> SetMic(string? name)=>ParseBool(await Eval("(()=>{const v=window.__deskVoice;if(!v||!v.setMicLabel)return null;return Boolean(v.setMicLabel("+System.Text.Json.JsonSerializer.Serialize(name)+"));})()"))==true;
+    // Label of the microphone the running session hears (null: no session or an older page).
+    public async Task<string?> MicLabel()=>ParseString(await Eval("(()=>{const v=window.__deskVoice;return v&&v.micLabel?v.micLabel():null;})()"));
+    public async Task<string?> MicPreference()=>ParseString(await Eval("(()=>{const v=window.__deskVoice;return v&&v.micPreference?v.micPreference():null;})()"));
+    static string? ParseString(string? json){if(json is null||!json.StartsWith('"'))return null;try{return System.Text.Json.JsonSerializer.Deserialize<string>(json);}catch(System.Text.Json.JsonException ex){Diag.Fail("mic-label-parse",ex);return null;}}
     static bool? ParseBool(string? json)=>json switch{"true"=>true,"false"=>false,_=>null};
     public void Screen(string[] ids)=>browser?.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="screen",ids}));
     public void Disconnect()
