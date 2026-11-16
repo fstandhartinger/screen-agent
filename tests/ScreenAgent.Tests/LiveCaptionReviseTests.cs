@@ -1,7 +1,7 @@
 using ScreenAgent.Core;
 using Xunit;
 namespace ScreenAgent.Tests;
-// v0.1.17: the subtitle's last seconds re-read by the stronger recognisers + correction model, replaced in place.
+// v0.1.19: the subtitle's last seconds re-read by the stronger recognisers + correction model, replaced in place.
 public class LiveCaptionReviseTests
 {
     static string All(LiveCaption c){var (a,b)=c.Shown(10000);return (a+" "+b).Trim();}

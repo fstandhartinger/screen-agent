@@ -28,7 +28,7 @@ internal sealed class CaptionHost : IDisposable
     // v0.1.12: the live clean-up of the subtitle while he dictates (config CaptionPolish). v0.1.16: a timeout no longer switches it off; no key or budget does,
     // three failures in a row pause it 15 s. It runs on a steady beat (four new settled words, or two that waited 3 s).
     readonly bool polishOn;bool polishOff;long polishPausedUntil,lastPolishAt;int polishFailures;
-    // v0.1.17 (config CaptionRevise): the last seconds re-read by the stronger recognisers with his context; replaces the live clean-up while on.
+    // v0.1.19 (config CaptionRevise): the last seconds re-read by the stronger recognisers with his context; replaces the live clean-up while on.
     readonly bool reviseOn;readonly RevisePolicy revisePolicy=new();int reviseSeq;
     public CaptionHost(AppConfig config,DeviceClient client,Telemetry telemetry,System.Windows.Threading.Dispatcher ui,Func<(string[] Ids,string[] Terms)> context)
     {
@@ -183,7 +183,7 @@ internal sealed class CaptionHost : IDisposable
         }
         finally{sending=false;}
     }
-    // v0.1.17: a re-read of the unconfirmed words, decided by RevisePolicy (every 3.5 s while he speaks, once when he stops). The audio from the
+    // v0.1.19: a re-read of the unconfirmed words, decided by RevisePolicy (every 3.5 s while he speaks, once when he stops). The audio from the
     // request's start to now comes from the 30 s ring; an answer that comes too late or fails changes nothing.
     void TickRevise(long now)
     {

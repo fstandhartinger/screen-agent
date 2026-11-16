@@ -40,7 +40,7 @@ public sealed class CaptionPolicy(int intervalMs=1500,double speechRms=400,int m
     }
     public void NewSession(){Disabled=false;DisabledWhy=null;failures=0;pausedUntil=0;InFlight=false;}
 }
-// v0.1.17: when the subtitle's last seconds are re-read (config CaptionRevise). Every IntervalMs while he speaks, and once more when he stops (the tail);
+// v0.1.19: when the subtitle's last seconds are re-read (config CaptionRevise). Every IntervalMs while he speaks, and once more when he stops (the tail);
 // one in flight; 3 failures in a row pause it 30 s; no key, budget or a switched-off gateway stop it for the session. A failed or late re-read changes
 // nothing: the fast text stays. The app and the replay tool (tools/CaptionReplay) both decide through Next().
 public sealed class RevisePolicy(int intervalMs=3500,int maxFailures=3,int pauseMs=30000,int tailMs=800)

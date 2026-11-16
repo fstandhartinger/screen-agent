@@ -42,7 +42,7 @@ public sealed class AppConfig
     // v0.1.13: light structure in the inserted text (a line break between thoughts, a blank line between topics; same words, no markup). Only where it is pasted.
     public bool DictationFormat {get;init;}=true;
     public bool CaptionPolish {get;init;}=true;
-    // v0.1.17: every few seconds the subtitle's last seconds are heard again by the stronger recognisers and corrected with his context (gateway /api/device/revise);
+    // v0.1.19: every few seconds the subtitle's last seconds are heard again by the stronger recognisers and corrected with his context (gateway /api/device/revise);
     // the better reading replaces the shown words in place. Replaces the live clean-up (CaptionPolish) while on. false = the subtitle of 0.1.16.
     public bool CaptionRevise {get;init;}=true;
     // v0.1.16: the subtitle's text (raw windows at the Desk, what was shown, the typed text, the measures) goes into the Desk's device log for refinement rounds.

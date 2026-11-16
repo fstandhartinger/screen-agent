@@ -208,7 +208,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     public IReadOnlyList<string> Words=>words;
     public string Raw=>string.Join(' ',words);
     public void Reset(){words.Clear();times.Clear();Committed=Settled=PolishedTo=Confirmed=RevisedTo=0;PolishBusy=ReviseBusy=Dirty=false;RevisedAudio=0;version++;lastWindowEnd=-1;Windows=Appended=0;}
-    // v0.1.17: the estimated audio second at which each word starts (parallel to words): where a re-read of the last seconds begins.
+    // v0.1.19: the estimated audio second at which each word starts (parallel to words): where a re-read of the last seconds begins.
     readonly List<double> times=[];
     public IReadOnlyList<double> Times=>times;
     // words from `at` on replaced by nw; their times spread evenly over [t0, t1)
@@ -345,7 +345,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         int a=DictationPolish.Words(before),b=DictationPolish.Words(after);
         return b>0&&b>=0.75*a-1.5&&b<=1.3*a+4;
     }
-    // ---- v0.1.17 (Florian, 16 Nov 2026): "regelmäßig nachbetrachtet durch ein Large Language Model ... sobald das LLM es besser verstanden hat, sofort
+    // ---- v0.1.19 (Florian, 16 Nov 2026): "regelmäßig nachbetrachtet durch ein Large Language Model ... sobald das LLM es besser verstanden hat, sofort
     // nachkorrigiert". Every few seconds the audio from the first unconfirmed word to now is heard again by the stronger recognisers and merged with this
     // text and his context at the gateway (/api/device/revise); the answer replaces the unconfirmed words in place. Sentences the re-read finished a few
     // seconds ago are confirmed: they never change again (except by the chunk, which is the typed text). The tentative rest shows lighter, and the fast

@@ -88,7 +88,7 @@ internal sealed class CaptionOverlay : Window
         if(string.IsNullOrWhiteSpace(text))return;
         if(!AffinityOk){OverlayStyle.RefusedOnce("caption");return;}
         touched=Environment.TickCount64;
-        // v0.1.17: "confirmed\u0001tentative": the confirmed words white, the words that may still change lighter. The pill never shrinks while it shows
+        // v0.1.19: "confirmed\u0001tentative": the confirmed words white, the words that may still change lighter. The pill never shrinks while it shows
         // a text (a correction that is shorter must not make the line jump); it starts narrow again after it faded.
         int sep=text.IndexOf('\u0001');
         if(sep<0)label.Text=text;

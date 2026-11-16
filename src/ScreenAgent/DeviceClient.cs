@@ -206,7 +206,7 @@ internal sealed partial class DeviceClient : IDisposable
         return new(reply.Status,obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"",
             obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0,obj&&j!.Value.TryGetProperty("seconds",out var s)&&s.ValueKind==JsonValueKind.Number?s.GetDouble():0,cost,reply.Code);
     }
-    // v0.1.17: the subtitle's last seconds re-read (gateway /api/device/revise, at most 30 s of WAV): shown = the fast text for this audio, before = the confirmed
+    // v0.1.19: the subtitle's last seconds re-read (gateway /api/device/revise, at most 30 s of WAV): shown = the fast text for this audio, before = the confirmed
     // text before it, turns = his last confirmed sentences. Status, the better reading, whether the model merged it, the cost the gateway measured.
     public sealed record ReviseReply(int Status,string Text,long Ms,bool Merged,double? Cost,string? Code);
     public async Task<ReviseReply> Revise(byte[] wav,string shown,string before,string[] turns,bool open,string[] visibleIds,string[] recentTerms,CancellationToken ct,string? dictation=null,int seq=0)
