@@ -29,7 +29,7 @@ internal sealed class CaptionHost : IDisposable
     // three failures in a row pause it 15 s. It runs on a steady beat (four new settled words, or two that waited 3 s).
     readonly bool polishOn;bool polishOff;long polishPausedUntil,lastPolishAt;int polishFailures;
     // v0.1.19 (config CaptionRevise): the last seconds re-read by the stronger recognisers with his context; replaces the live clean-up while on.
-    readonly bool reviseOn;readonly RevisePolicy revisePolicy=new();int reviseSeq;
+    readonly bool reviseOn;readonly RevisePolicy revisePolicy=new();readonly PauseTracker pauses=new();int reviseSeq;
     public CaptionHost(AppConfig config,DeviceClient client,Telemetry telemetry,System.Windows.Threading.Dispatcher ui,Func<(string[] Ids,string[] Terms)> context)
     {
         this.client=client;this.telemetry=telemetry;this.ui=ui;this.context=context;mode=CaptionModes.Parse(config.Captions);reviseOn=config.CaptionRevise;polishOn=config.CaptionPolish&&!reviseOn;
@@ -55,7 +55,7 @@ internal sealed class CaptionHost : IDisposable
     public DictationCaptions BeginDictation(string id="")
     {
         var d=new DictationCaptions(id,Environment.TickCount64);
-        lock(gate){filled=0;fedBytes=0;dictations.RemoveAll(x=>!x.Accepts(Environment.TickCount64));dictations.Add(d);current=d;}
+        lock(gate){filled=0;fedBytes=0;pauses.Reset();dictations.RemoveAll(x=>!x.Accepts(Environment.TickCount64));dictations.Add(d);current=d;}
         return d;
     }
     public void EndDictation(DictationCaptions d)=>d.End(Environment.TickCount64,EndGraceMs);
@@ -71,7 +71,7 @@ internal sealed class CaptionHost : IDisposable
     void Begin()
     {
         active=true;startedAt=Environment.TickCount64;statsAt=startedAt;
-        lock(gate){filled=0;fedBytes=0;if(!dictating){current=null;voiceText.Reset();}}
+        lock(gate){filled=0;fedBytes=0;pauses.Reset();if(!dictating){current=null;voiceText.Reset();}}
         policy.NewSession();revisePolicy.NewSession();polishOff=false;polishFailures=0;polishPausedUntil=0;
     }
     void End()
@@ -113,6 +113,7 @@ internal sealed class CaptionHost : IDisposable
             }
         }
         double rms=AudioLevel.Rms(System.Runtime.InteropServices.MemoryMarshal.Cast<byte,short>(buffer.AsSpan(0,count&~1)));
+        lock(gate)pauses.Add(fedBytes/(double)Wav.BytesPerSecond,count/(double)Wav.BytesPerSecond,rms);
         long now=Environment.TickCount64;policy.Heard(now,rms);
         if(rms>=400)stats.SpeechSeconds+=count/(double)Wav.BytesPerSecond;
     }
@@ -193,7 +194,7 @@ internal sealed class CaptionHost : IDisposable
             if(current is not null&&!current.Accepts(now))current=null;
             owner=current;if(dictating&&owner is null)return;
             m=Model;double audioNow=fedBytes/(double)Wav.BytesPerSecond,ringStart=audioNow-filled/(double)Wav.BytesPerSecond;
-            req=revisePolicy.Next(m,now,audioNow,policy.Speaking(now),Math.Min(ReviseSeconds,filled/(double)Wav.BytesPerSecond));
+            req=revisePolicy.Next(m,now,audioNow,policy.Speaking(now),pauses,ReviseSeconds);
             if(req is null)return;
             int from=Math.Clamp((int)Math.Round((req.FromAudio-ringStart)*Wav.BytesPerSecond)&~1,0,filled);
             if(filled-from>=Wav.BytesPerSecond)wav=Wav.FromPcm(ring.AsSpan(from,filled-from).ToArray());
@@ -209,7 +210,7 @@ internal sealed class CaptionHost : IDisposable
         {
             var (ids,terms)=context();
             using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(6));
-            r=await client.Revise(wav,req.Shown,req.Before,[],true,ids,terms,cts.Token,owner?.Id,seq);
+            r=await client.Revise(wav,req.Shown,req.Before,[],req.Open,ids,terms,cts.Token,owner?.Id,seq);
         }
         catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="revise"}));}
         long now=Environment.TickCount64;bool ok=r is {Status:>=200 and <300};
@@ -267,12 +268,12 @@ internal sealed class CaptionHost : IDisposable
         if(next is not null){lastPolishAt=now;_=Polish(next,d);}
     }
     // A chunk of the dictation is transcribed (what will be typed): it replaces its part of the subtitle, so both say the same.
-    public void Settle(DictationCaptions d,string joined)
+    public void Settle(DictationCaptions d,string joined,double audioEnd=double.NaN,bool final=false)
     {
         string? shown=null;long now=Environment.TickCount64;
         lock(gate)
         {
-            int how=d.Live.Settle(joined);
+            int how=d.Live.Settle(joined,audioEnd,final);
             if(how==0)return;
             d.Log.Chunks++;if(how==1)d.Log.ChunksPlaced++;
             LogUpdate(d,'c',now);

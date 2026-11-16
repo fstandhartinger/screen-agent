@@ -56,7 +56,7 @@ public class LiveCaptionReviseTests
         Assert.False(c.AnswerRevise(r,null,5));
         Assert.Equal(before,All(c));
         Assert.False(c.ReviseBusy);
-        var r2=c.NextRevise(4,minNewSeconds:0)!;
+        var r2=c.NextRevise(4,null,minNewSeconds:0)!;
         c.Settle("Wir haben das Problem gesehen.");   // a chunk came in between: the answer is for words that are gone
         Assert.False(c.AnswerRevise(r2,"völlig anderer Text hier",6));
         Assert.StartsWith("Wir haben das Problem gesehen.",All(c));
@@ -69,88 +69,100 @@ public class LiveCaptionReviseTests
         Assert.False(c.AnswerRevise(r,"ja",5));
         Assert.Equal("eins zwei drei vier fünf sechs sieben acht",All(c));
     }
+    static PauseTracker Pauses(double total,params (double From,double To)[] silences)
+    {
+        var p=new PauseTracker();
+        for(double t=0.02;t<=total+1e-9;t+=0.02)p.Add(t,0.02,silences.Any(x=>t>x.From&&t<=x.To)?50:3000);
+        return p;
+    }
     [Fact]
-    public void The_overlap_before_the_span_is_left_out()
+    public void A_pause_closes_the_text_before_it_and_the_next_re_read_starts_there()
     {
         var c=new LiveCaption();
-        c.AddWindow("Das ist der erste Satz. Und dann",6,6);
-        var r1=c.NextRevise(6)!;
-        c.AnswerRevise(r1,"Das ist der erste Satz. Und dann",12);   // 12: the first sentence lies well back -> confirmed
-        Assert.Equal(5,c.Confirmed);
-        c.AddWindow("Satz und dann kommt der zweite",9,6);
-        var r2=c.NextRevise(9)!;
-        Assert.Equal(5,r2.From);Assert.True(r2.FromAudio>0);
-        Assert.True(c.AnswerRevise(r2,"Satz. Und dann kommt der Zweite",9.2));
-        Assert.Equal("Das ist der erste Satz. Und dann kommt der Zweite",All(c));
+        c.AddWindow("Das ist der erste Satz und dann",6,6);
+        var p=Pauses(9,(4.6,5.4));   // he paused after "Satz"
+        var r=c.NextRevise(9,p)!;
+        Assert.False(r.Open);Assert.Equal(0,r.FromAudio);Assert.InRange(r.ToAudio,4.6,5.0);
+        Assert.True(c.AnswerRevise(r,"Das ist der erste Satz.",9));
+        Assert.Equal(5,c.Confirmed);Assert.Equal(r.ToAudio,c.AnchorAudio);
+        Assert.Equal("Das ist der erste Satz. und dann",All(c));   // the tentative rest waits for the open re-read
+        var r2=c.NextRevise(9,p,minNewSeconds:0)!;
+        Assert.True(r2.Open);Assert.Equal(c.AnchorAudio,r2.FromAudio);Assert.Equal(5,r2.From);
+        Assert.True(c.AnswerRevise(r2,"Und dann",9.1));
+        Assert.Equal("Das ist der erste Satz. Und dann",All(c));
+        Assert.Equal("Das ist der erste Satz.",c.Shown(10000).Confirmed);
     }
     [Fact]
-    public void Confirmed_words_are_not_changed_by_later_windows_or_re_reads()
+    public void An_open_re_read_replaces_the_whole_tentative_text_so_nothing_is_lost_or_doubled()
     {
         var c=new LiveCaption();
-        c.AddWindow("Das ist erledigt. Jetzt geht es weiter",6,6);
-        var r=c.NextRevise(6)!;
-        c.AnswerRevise(r,"Das ist erledigt. Jetzt geht es weiter",10);
-        Assert.Equal(3,c.Confirmed);
-        var (conf,_)=c.Shown(10000);
-        Assert.Equal("Das ist erledigt.",conf);
-        c.AddWindow("Jetzt geht's weiter mit dem Plan",9,6);
-        var r2=c.NextRevise(9)!;Assert.Equal(3,r2.From);
-        c.AnswerRevise(r2,"Jetzt geht es weiter mit dem Plan",9.5);
-        Assert.StartsWith("Das ist erledigt.",All(c));
+        c.AddWindow("Wir müssen viel offensiver",4,4);
+        c.AddWindow("viel offensiver und positiver vermarkten",7,6);
+        var r=c.NextRevise(7,Pauses(7))!;   // no pause: open, from the start
+        Assert.True(r.Open);Assert.Equal(0,r.FromAudio);
+        c.AnswerRevise(r,"Wir müssen viel offensiver, und positiver vermarkten",7.2);
+        Assert.Equal("Wir müssen viel offensiver, und positiver vermarkten",All(c));
+        Assert.Equal(0,Disfluency.Repeats(c.Words));
     }
     [Fact]
-    public void Tentative_window_words_show_no_punctuation_and_the_open_end_none()
-    {
-        var c=Heard(("wir haben, das. Problem gesehen,",4));
-        var (conf,tent)=c.Shown(200);
-        Assert.Equal("",conf);
-        Assert.Equal("wir haben das Problem gesehen",tent);
-        var r=c.NextRevise(4)!;
-        c.AnswerRevise(r,"Wir haben, wie du weißt, das Problem gesehen,",4.1);
-        Assert.Equal("Wir haben, wie du weißt, das Problem gesehen",c.Shown(200).Tentative);   // the re-read's commas stay, its open end has none
-    }
-    [Fact]
-    public void Shown_keeps_to_the_length_from_the_end()
-    {
-        var c=Heard(("eins zwei drei vier fünf sechs sieben acht neun zehn elf zwölf",6));
-        var (a,b)=c.Shown(20);
-        Assert.True((a+" "+b).Trim().Length<=20);
-        Assert.EndsWith("zwölf",b);
-    }
-    [Fact]
-    public void A_long_sentence_is_confirmed_by_age()
+    public void A_closed_re_read_whose_end_is_misplaced_heals_with_the_next_open_one()
     {
         var c=new LiveCaption();
-        c.AddWindow("eins zwei drei vier fünf sechs",6,6);
-        c.AddWindow("sieben acht neun zehn elf zwölf",12.5,6);
-        c.AddWindow("dreizehn vierzehn fünfzehn sechzehn",19,6);
-        var r=c.NextRevise(19)!;
-        Assert.True(c.AnswerRevise(r,string.Join(' ',c.Words),19.1)==false);   // the same words: nothing changed
-        Assert.True(c.Confirmed>0);   // words more than 12 s back are confirmed although no sentence ended
-        Assert.True(c.Times[c.Confirmed-1]<=19-LiveCaption.ConfirmLong);
+        c.AddWindow("eins zwei drei vier fünf sechs sieben acht",6,6);
+        var p=Pauses(10,(4.4,5.0));
+        var r=c.NextRevise(10,p)!;Assert.False(r.Open);
+        c.AnswerRevise(r,"eins zwei drei vier",10);   // the pause lies after "vier"
+        var r2=c.NextRevise(10,p,minNewSeconds:0)!;
+        c.AnswerRevise(r2,"fünf sechs sieben acht",10.1);
+        Assert.Equal("eins zwei drei vier fünf sechs sieben acht",All(c));
     }
     [Fact]
-    public void The_span_never_exceeds_max_seconds()
+    public void A_chunk_moves_the_anchor_and_the_last_chunk_takes_out_leftovers()
     {
         var c=new LiveCaption();
-        for(int i=1;i<=8;i++)c.AddWindow($"wort{i}a wort{i}b wort{i}c wort{i}d",i*6,6);
-        var r=c.NextRevise(48,maxSeconds:20)!;
-        Assert.True(r.ToAudio-r.FromAudio<=20.01);
-        Assert.True(c.Confirmed>0);
+        c.AddWindow("wir haben decision Models.ai. heute",6,6);
+        c.Settle("Wir haben decisionmodels.io heute",6,final:true);
+        Assert.Equal("Wir haben decisionmodels.io heute",All(c));
+        Assert.Equal(6,c.AnchorAudio);
+        var d=new LiveCaption();
+        d.AddWindow("erster Teil hier und zweiter Teil",8,6);
+        d.Settle("Erster Teil hier",3.5);
+        Assert.Equal(3.5,d.AnchorAudio);Assert.Equal(3,d.Confirmed);Assert.True(d.Dirty);
+        var r=d.NextRevise(8,null,minNewSeconds:0)!;Assert.Equal(3.5,r.FromAudio);Assert.True(r.Open);
     }
     [Fact]
-    public void Policy_sends_on_a_beat_while_speaking_and_once_for_the_tail()
+    public void Without_a_pause_for_too_long_the_span_is_cut()
     {
-        var p=new RevisePolicy();var c=Heard(("wir haben das Problem gesehen",4));
-        var r=p.Next(c,1000,4,true);Assert.NotNull(r);
-        Assert.Null(p.Next(c,1500,4.5,true));   // in flight
-        c.AnswerRevise(r!,"wir haben das Problem gesehen",4.6);p.Answered(true,1600);
+        var c=new LiveCaption();
+        for(int i=1;i<=6;i++)c.AddWindow($"wort{i}a wort{i}b wort{i}c wort{i}d",i*6,6);
+        var r=c.NextRevise(36,Pauses(36),maxSeconds:25)!;
+        Assert.False(r.Open);Assert.True(r.ToAudio-r.FromAudio<=25.01);
+    }
+    [Fact]
+    public void Pause_tracker_finds_the_latest_pause_and_an_ongoing_one()
+    {
+        var p=Pauses(10,(2,3),(5,5.2),(7,8));
+        Assert.Equal(7.25,p.LastCut(0,9)!.Value,1);
+        Assert.Equal(2.25,p.LastCut(0,6)!.Value,1);   // the 0.2 s gap is no pause
+        Assert.Null(p.LastCut(3,6));
+        var q=Pauses(5,(4,5));   // silent since 4 s and still silent
+        Assert.Equal(4.25,q.LastCut(0,5)!.Value,1);
+    }
+    [Fact]
+    public void Policy_sends_on_a_beat_while_speaking_closes_at_pauses_and_once_for_the_tail()
+    {
+        var pol=new RevisePolicy();var c=Heard(("wir haben das Problem gesehen",4));var none=Pauses(4);
+        var r=pol.Next(c,1000,4,true,none);Assert.NotNull(r);Assert.True(r!.Open);
+        Assert.Null(pol.Next(c,1500,4.5,true,none));   // in flight
+        c.AnswerRevise(r,"wir haben das Problem gesehen",4.6);pol.Answered(true,1600);
         c.AddWindow("Problem gesehen und dann",6,6);
-        Assert.Null(p.Next(c,3000,6,true));   // the beat: 3.5 s
-        Assert.Null(p.Next(c,4400,6.4,true));   // the beat has passed but there are only 1.8 s of new audio
-        var tail=p.Next(c,4500,6.5,false);Assert.NotNull(tail);   // he stopped: the tail at once
-        c.AnswerRevise(tail!,"Problem gesehen und dann",6.6);p.Answered(true,4700);
-        Assert.Null(p.Next(c,9000,9,false));   // nothing new: no call in silence
+        Assert.Null(pol.Next(c,3000,6,true,Pauses(6)));   // the beat: 3.5 s
+        var tail=pol.Next(c,4500,6.5,false,Pauses(6.5));Assert.NotNull(tail);   // he stopped: the tail at once
+        c.AnswerRevise(tail!,"Problem gesehen und dann",6.6);pol.Answered(true,4700);
+        Assert.Null(pol.Next(c,9000,9,false,Pauses(9)));   // nothing new: no call in silence
+        c.AddWindow("und dann noch etwas",12,6);
+        var close=pol.Next(c,10000,12,true,Pauses(12,(6.5,8.0)));   // a pause 4 s after the anchor, 2.5 s old: closed at once
+        Assert.NotNull(close);Assert.False(close!.Open);
     }
     [Fact]
     public void Policy_pauses_after_failures_and_stops_without_key()

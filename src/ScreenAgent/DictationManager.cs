@@ -113,7 +113,7 @@ internal sealed class DictationManager : IDisposable
             cts.Cancel();rec.Dispose();Store.Delete(rec.Meta);cts.Dispose();throw;
         }
         var caps=captions.BeginDictation(rec.Meta.Id);
-        job.Joined+=text=>captions.Settle(caps,text);   // what will be typed replaces its part of the subtitle while he still talks
+        job.Joined+=text=>captions.Settle(caps,text,job.JoinedSeconds,job.JoinedFinal);   // what will be typed replaces its part of the subtitle while he still talks
         var flow=new DictationFlow{Capture=capture,Job=job,Cts=cts,Process=process,Captions=caps,FieldBefore=fieldBefore};
         rec.Warning+=w=>ui.BeginInvoke(new System.Action(()=>notice(w,Level.Warn)));
         rec.ChunkReady+=chunk=>
