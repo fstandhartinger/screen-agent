@@ -366,7 +366,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         if(Confirmed>=words.Count)return null;
         RevisedTo=Math.Max(RevisedTo,Confirmed);
         int from=Confirmed;
-        double fromAudio=from==0?0:Math.Max(Math.Max(0,audioNow-maxSeconds),times[from]-0.8);
+        double fromAudio=Math.Max(Math.Max(0,audioNow-maxSeconds),from==0&&times[0]<1.5?0:times[from]-0.8);
         if(audioNow-fromAudio<1.5)return null;
         string before=string.Join(' ',words.Take(from));if(before.Length>600)before=before[^600..];
         ReviseBusy=true;
@@ -454,7 +454,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
     }
 }
 // What the subtitle showed, for the refinement rounds (Florian, 14 Nov: "falls die Protokolle noch nicht detailliert genug solche Sachen protokollieren").
-// Every change of the shown text as "<ms> <cause><kept words> <new words...>" (cause: w window, p clean-up, c chunk), and at the end the measures:
+// Every change of the shown text as "<ms> <cause><kept words> <new words...>" (cause: w window, p clean-up, c chunk, r re-read), and at the end the measures:
 // repeats on screen, words that were shown and changed later (and how late), live text against the typed text.
 public sealed class CaptionLog
 {
@@ -462,8 +462,8 @@ public sealed class CaptionLog
     readonly List<string> shown=[];readonly List<long> since=[];
     readonly List<Item> pending=[],all=[];
     public IReadOnlyList<Item> All=>all;
-    public int Updates,Changed,ChangedLate,RepeatsShown,PolishAsked,PolishUsed,PolishDropped,PolishFailed,Chunks,ChunksPlaced;
-    public readonly Dictionary<char,int> ChangedBy=new(){['w']=0,['p']=0,['c']=0};
+    public int Updates,Changed,ChangedLate,RepeatsShown,PolishAsked,PolishUsed,PolishDropped,PolishFailed,Chunks,ChunksPlaced,ReviseAsked,ReviseUsed,ReviseFailed;
+    public readonly Dictionary<char,int> ChangedBy=new(){['w']=0,['p']=0,['c']=0,['r']=0};
     readonly List<long> correctionAges=[];
     public long FirstShownMs=-1;
     public IReadOnlyList<string> Shown=>shown;

@@ -87,10 +87,25 @@ internal sealed class CaptionOverlay : Window
     {
         if(string.IsNullOrWhiteSpace(text))return;
         if(!AffinityOk){OverlayStyle.RefusedOnce("caption");return;}
-        touched=Environment.TickCount64;label.Text=text;label.Visibility=Visibility.Visible;
+        touched=Environment.TickCount64;
+        // v0.1.17: "confirmed\u0001tentative": the confirmed words white, the words that may still change lighter. The pill never shrinks while it shows
+        // a text (a correction that is shorter must not make the line jump); it starts narrow again after it faded.
+        int sep=text.IndexOf('\u0001');
+        if(sep<0)label.Text=text;
+        else
+        {
+            string conf=text[..sep],tent=text[(sep+1)..];
+            label.Inlines.Clear();
+            if(conf.Length>0)label.Inlines.Add(new System.Windows.Documents.Run(conf));
+            if(tent.Length>0)label.Inlines.Add(new System.Windows.Documents.Run((conf.Length>0?" ":"")+tent){Foreground=Tentative});
+        }
+        label.Visibility=Visibility.Visible;
         if(Visual==DictationVisual.Listening)state.Visibility=Visibility.Collapsed;
         Appear();
+        Dispatcher.BeginInvoke(new System.Action(()=>{if(IsVisible&&Pill.ActualWidth>Pill.MinWidth)Pill.MinWidth=Pill.ActualWidth;}),System.Windows.Threading.DispatcherPriority.Loaded);
     }
+    static readonly SolidColorBrush Tentative=Frozen(System.Windows.Media.Color.FromRgb(168,176,190));
+    static SolidColorBrush Frozen(System.Windows.Media.Color c){var b=new SolidColorBrush(c);b.Freeze();return b;}
     // Waveform while he talks, the circle while the text is on its way, nothing afterwards: the text is in his field by then.
     public void SetVisual(DictationVisual visual,string? detail,LevelRing ring)
     {
@@ -100,7 +115,7 @@ internal sealed class CaptionOverlay : Window
         switch(visual)
         {
             case DictationVisual.Listening:
-                if(was!=DictationVisual.Listening){label.Text="";label.Visibility=Visibility.Collapsed;}   // the words of a new dictation, not the last one's
+                if(was!=DictationVisual.Listening){label.Text="";label.Visibility=Visibility.Collapsed;Pill.MinWidth=0;}   // the words of a new dictation, not the last one's
                 state.Text="Ich höre zu …";state.Visibility=label.Text.Length==0?Visibility.Visible:Visibility.Collapsed;
                 break;
             case DictationVisual.Processing:
@@ -123,7 +138,7 @@ internal sealed class CaptionOverlay : Window
         a.Completed+=(_,_)=>
         {
             bool stale=touched!=at||Visual!=DictationVisual.None;   // new words arrived during the fade: they stay
-            if(!stale){Hide();label.Text="";label.Visibility=Visibility.Collapsed;}
+            if(!stale){Hide();label.Text="";label.Visibility=Visibility.Collapsed;Pill.MinWidth=0;}
             BeginAnimation(OpacityProperty,null);Opacity=1;
             if(stale&&IsVisible)fade.Start();
         };

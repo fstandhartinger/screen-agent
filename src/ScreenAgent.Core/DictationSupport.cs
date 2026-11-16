@@ -43,7 +43,7 @@ public static class CaptionSummary
         return new()
         {
             ["id"]=d.Id,["ms"]=nowMs-d.StartedMs,["windows"]=d.Live.Windows,["appended"]=d.Live.Appended,["updates"]=log.Updates,
-            ["firstShownMs"]=log.FirstShownMs,["changed"]=log.Changed,["changedWindow"]=log.ChangedBy['w'],["changedPolish"]=log.ChangedBy['p'],["changedChunk"]=log.ChangedBy['c'],
+            ["firstShownMs"]=log.FirstShownMs,["changed"]=log.Changed,["changedWindow"]=log.ChangedBy['w'],["changedPolish"]=log.ChangedBy['p'],["changedChunk"]=log.ChangedBy['c'],["changedRevise"]=log.ChangedBy['r'],["reviseAsked"]=log.ReviseAsked,["reviseUsed"]=log.ReviseUsed,["reviseFailed"]=log.ReviseFailed,
             ["changedLate"]=log.ChangedLate,["correctionAgeMs"]=log.MedianCorrectionAgeMs,["repeatsShown"]=log.RepeatsShown,["repeatsLive"]=Disfluency.Repeats(StitchWords.Split(live)),
             ["repeatsRaw"]=Disfluency.Repeats(d.Live.Words),["repeatsTyped"]=Disfluency.Repeats(StitchWords.Split(typed)),
             ["polishAsked"]=log.PolishAsked,["polishUsed"]=log.PolishUsed,["polishDropped"]=log.PolishDropped,["polishFailed"]=log.PolishFailed,["chunks"]=log.Chunks,["chunksPlaced"]=log.ChunksPlaced,

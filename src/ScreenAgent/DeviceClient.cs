@@ -206,6 +206,24 @@ internal sealed partial class DeviceClient : IDisposable
         return new(reply.Status,obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"",
             obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0,obj&&j!.Value.TryGetProperty("seconds",out var s)&&s.ValueKind==JsonValueKind.Number?s.GetDouble():0,cost,reply.Code);
     }
+    // v0.1.17: the subtitle's last seconds re-read (gateway /api/device/revise, at most 30 s of WAV): shown = the fast text for this audio, before = the confirmed
+    // text before it, turns = his last confirmed sentences. Status, the better reading, whether the model merged it, the cost the gateway measured.
+    public sealed record ReviseReply(int Status,string Text,long Ms,bool Merged,double? Cost,string? Code);
+    public async Task<ReviseReply> Revise(byte[] wav,string shown,string before,string[] turns,bool open,string[] visibleIds,string[] recentTerms,CancellationToken ct,string? dictation=null,int seq=0)
+    {
+        using var form=new MultipartFormDataContent();var audio=new ByteArrayContent(wav);audio.Headers.ContentType=new("audio/wav");
+        static string Cut(string t,int max)=>t.Length<=max?t:t[^max..];
+        form.Add(audio,"audio","revise.wav");
+        form.Add(new StringContent(JsonSerializer.Serialize(new{shown=Cut(shown,1500),before=Cut(before,600),turns=turns.TakeLast(6).Select(t=>Cut(t,300)).ToArray(),open,visibleIds,recentTerms})),"context");
+        if(!string.IsNullOrEmpty(dictation)){form.Add(new StringContent(dictation),"dictation");form.Add(new StringContent(seq.ToString(System.Globalization.CultureInfo.InvariantCulture)),"seq");}
+        form.Add(new StringContent(textLog?"1":"0"),"log");
+        using var reply=await RawContent(HttpMethod.Post,"api/device/revise",form,ct);
+        var j=reply.Json?.RootElement;bool obj=j is {ValueKind:JsonValueKind.Object};
+        return new(reply.Status,obj&&j!.Value.TryGetProperty("text",out var t)&&t.ValueKind==JsonValueKind.String?t.GetString()??"":"",
+            obj&&j!.Value.TryGetProperty("ms",out var m)&&m.ValueKind==JsonValueKind.Number?m.GetInt64():0,
+            obj&&j!.Value.TryGetProperty("merged",out var g)&&g.ValueKind==JsonValueKind.True,
+            obj&&j!.Value.TryGetProperty("costUsd",out var c)&&c.ValueKind==JsonValueKind.Number?c.GetDouble():null,reply.Code);
+    }
     // v0.1.12 text clean-up (gateway /api/device/polish): mode "final" for the whole dictation, "live" for the subtitle. Status and text; a refusal never throws.
     public sealed record PolishReply(int Status,string Text,long Ms,int Changed,string? Code);
     // v0.1.13: mode "format" (line breaks only) and format=true with "final" (light structure on top of the clean-up). An older gateway ignores the flag and refuses the mode.

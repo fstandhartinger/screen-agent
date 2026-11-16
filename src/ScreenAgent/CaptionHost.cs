@@ -10,7 +10,7 @@ namespace ScreenAgent;
 // with CaptionLog on (caption.shown, caption.summary; the raw windows are logged by the Desk itself), never to the local log.
 internal sealed class CaptionHost : IDisposable
 {
-    const int WindowSeconds=6,MaxBytes=Wav.BytesPerSecond*WindowSeconds,ShownChars=110;
+    const int WindowSeconds=6,WindowBytes=Wav.BytesPerSecond*WindowSeconds,ReviseSeconds=25,MaxBytes=Wav.BytesPerSecond*30,ShownChars=110;
     readonly DeviceClient client;readonly Telemetry telemetry;readonly System.Windows.Threading.Dispatcher ui;readonly CaptionMode mode;
     readonly Func<(string[] Ids,string[] Terms)> context;
     readonly CaptionPolicy policy=new();readonly CaptionStats stats=new();readonly LiveCaption voiceText=new(4000);
@@ -28,9 +28,11 @@ internal sealed class CaptionHost : IDisposable
     // v0.1.12: the live clean-up of the subtitle while he dictates (config CaptionPolish). v0.1.16: a timeout no longer switches it off; no key or budget does,
     // three failures in a row pause it 15 s. It runs on a steady beat (four new settled words, or two that waited 3 s).
     readonly bool polishOn;bool polishOff;long polishPausedUntil,lastPolishAt;int polishFailures;
+    // v0.1.17 (config CaptionRevise): the last seconds re-read by the stronger recognisers with his context; replaces the live clean-up while on.
+    readonly bool reviseOn;readonly RevisePolicy revisePolicy=new();int reviseSeq;
     public CaptionHost(AppConfig config,DeviceClient client,Telemetry telemetry,System.Windows.Threading.Dispatcher ui,Func<(string[] Ids,string[] Terms)> context)
     {
-        this.client=client;this.telemetry=telemetry;this.ui=ui;this.context=context;mode=CaptionModes.Parse(config.Captions);polishOn=config.CaptionPolish;
+        this.client=client;this.telemetry=telemetry;this.ui=ui;this.context=context;mode=CaptionModes.Parse(config.Captions);reviseOn=config.CaptionRevise;polishOn=config.CaptionPolish&&!reviseOn;
         timer=new(_=>Tick(),null,250,250);
     }
     public bool Enabled=>mode!=CaptionMode.Off;
@@ -70,7 +72,7 @@ internal sealed class CaptionHost : IDisposable
     {
         active=true;startedAt=Environment.TickCount64;statsAt=startedAt;
         lock(gate){filled=0;fedBytes=0;if(!dictating){current=null;voiceText.Reset();}}
-        policy.NewSession();polishOff=false;polishFailures=0;polishPausedUntil=0;
+        policy.NewSession();revisePolicy.NewSession();polishOff=false;polishFailures=0;polishPausedUntil=0;
     }
     void End()
     {
@@ -128,14 +130,15 @@ internal sealed class CaptionHost : IDisposable
                 lock(gate){d=current;if(d is not null&&d.Accepts(now))beat=d.Live.NextPolish(force:true);}
                 if(beat is not null){lastPolishAt=now;_=Polish(beat,d!);}
             }
+            if(active&&reviseOn)TickRevise(now);
             if(!active||sending||!policy.ShouldSend(now))return;
             byte[] pcm;DictationCaptions[] owners;DictationCaptions? owner;double end,seconds;int seq=0;
             lock(gate)
             {
                 if(filled<Wav.BytesPerSecond)return;
-                pcm=ring.AsSpan(0,filled).ToArray();owners=dictations.Where(x=>x.Accepts(now)).ToArray();   // the audio belongs to the dictations live when it was cut
+                int win=Math.Min(filled,WindowBytes);pcm=ring.AsSpan(filled-win,win).ToArray();owners=dictations.Where(x=>x.Accepts(now)).ToArray();   // the audio belongs to the dictations live when it was cut
                 if(current is not null&&!current.Accepts(now))current=null;
-                owner=current;end=fedBytes/(double)Wav.BytesPerSecond;seconds=filled/(double)Wav.BytesPerSecond;
+                owner=current;end=fedBytes/(double)Wav.BytesPerSecond;seconds=win/(double)Wav.BytesPerSecond;
                 if(owner is not null)seq=++owner.Seq;
             }
             sending=true;int id=policy.Begin(now);
@@ -165,7 +168,7 @@ internal sealed class CaptionHost : IDisposable
                     var m=owner?.Live??voiceText;
                     m.AddWindow(r.Text,end,seconds);
                     if(owner is not null){owner.Windows.Add((now-owner.StartedMs,end,r.Text));LogUpdate(owner,'w',now);}
-                    shown=ReferenceEquals(m,Model)?m.Last(ShownChars):null;
+                    shown=ReferenceEquals(m,Model)?Shown(m):null;
                     if(owner is not null&&ReferenceEquals(owner,current)&&PolishAllowed(now))req=m.NextPolish();
                 }
                 foreach(var d in owners)d.Add(r.Text);
@@ -180,6 +183,50 @@ internal sealed class CaptionHost : IDisposable
         }
         finally{sending=false;}
     }
+    // v0.1.17: a re-read of the unconfirmed words, decided by RevisePolicy (every 3.5 s while he speaks, once when he stops). The audio from the
+    // request's start to now comes from the 30 s ring; an answer that comes too late or fails changes nothing.
+    void TickRevise(long now)
+    {
+        ReviseRequest? req;byte[]? wav=null;DictationCaptions? owner;LiveCaption m;int seq;
+        lock(gate)
+        {
+            if(current is not null&&!current.Accepts(now))current=null;
+            owner=current;if(dictating&&owner is null)return;
+            m=Model;double audioNow=fedBytes/(double)Wav.BytesPerSecond,ringStart=audioNow-filled/(double)Wav.BytesPerSecond;
+            req=revisePolicy.Next(m,now,audioNow,policy.Speaking(now),Math.Min(ReviseSeconds,filled/(double)Wav.BytesPerSecond));
+            if(req is null)return;
+            int from=Math.Clamp((int)Math.Round((req.FromAudio-ringStart)*Wav.BytesPerSecond)&~1,0,filled);
+            if(filled-from>=Wav.BytesPerSecond)wav=Wav.FromPcm(ring.AsSpan(from,filled-from).ToArray());
+            seq=++reviseSeq;
+            if(wav is null){m.AnswerRevise(req,null,audioNow);revisePolicy.Answered(true,now);return;}
+        }
+        _=Revise(req,wav,m,owner,seq);
+    }
+    async Task Revise(ReviseRequest req,byte[] wav,LiveCaption m,DictationCaptions? owner,int seq)
+    {
+        long t0=Environment.TickCount64;DeviceClient.ReviseReply? r=null;
+        try
+        {
+            var (ids,terms)=context();
+            using var cts=new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            r=await client.Revise(wav,req.Shown,req.Before,[],true,ids,terms,cts.Token,owner?.Id,seq);
+        }
+        catch(Exception ex){telemetry.Event("caption.error",Redact.Of(ex,new(){["stage"]="revise"}));}
+        long now=Environment.TickCount64;bool ok=r is {Status:>=200 and <300};
+        revisePolicy.Answered(ok,now,r?.Code);
+        if(!ok&&revisePolicy.Disabled)telemetry.Event("caption.revise.off",new(){["status"]=r?.Status??0,["code"]=r?.Code??""});
+        string? shown=null;bool used;
+        lock(gate)
+        {
+            used=m.AnswerRevise(req,ok?r!.Text:null,fedBytes/(double)Wav.BytesPerSecond);
+            if(owner is not null){owner.Log.ReviseAsked++;if(used){owner.Log.ReviseUsed++;LogUpdate(owner,'r',now);}else if(!ok)owner.Log.ReviseFailed++;}
+            if(ReferenceEquals(m,Model))shown=Shown(m);
+        }
+        stats.Revise(ok,used,now-t0,r?.Cost);
+        if(shown is not null)Present(shown);
+    }
+    // What the overlay shows: confirmed words, then the tentative rest (lighter). "\u0001" separates them for the overlay.
+    string Shown(LiveCaption m){if(!reviseOn)return m.Last(ShownChars);var (a,b)=m.Shown(ShownChars);return a.Length==0?"\u0001"+b:b.Length==0?a:a+"\u0001"+b;}
     // One change of a dictation's shown text into its log; a full batch goes to the Desk (caption.shown). Under gate.
     void LogUpdate(DictationCaptions d,char cause,long now)
     {
@@ -212,7 +259,7 @@ internal sealed class CaptionHost : IDisposable
             bool used=d.Live.AnswerPolish(req,text);
             d.Log.PolishAsked++;
             if(used){d.Log.PolishUsed++;LogUpdate(d,'p',now);}else if(text is null)d.Log.PolishFailed++;else d.Log.PolishDropped++;
-            if(used&&ReferenceEquals(d,current))shown=d.Live.Last(ShownChars);
+            if(used&&ReferenceEquals(d,current))shown=Shown(d.Live);
             if(ReferenceEquals(d,current)&&d.Accepts(now)&&PolishAllowed(now))next=d.Live.NextPolish();   // more settled words came in meanwhile
         }
         stats.Polish(ok,now-t0);
@@ -229,7 +276,7 @@ internal sealed class CaptionHost : IDisposable
             if(how==0)return;
             d.Log.Chunks++;if(how==1)d.Log.ChunksPlaced++;
             LogUpdate(d,'c',now);
-            if(ReferenceEquals(d,current))shown=d.Live.Last(ShownChars);
+            if(ReferenceEquals(d,current))shown=Shown(d.Live);
         }
         if(shown is not null)Present(shown);
     }
