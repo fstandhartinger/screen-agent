@@ -63,11 +63,13 @@ public sealed class RevisePolicy(int intervalMs=3500,int maxFailures=3,int pause
     }
     public void NewSession(){Disabled=false;DisabledWhy=null;failures=0;pausedUntil=0;InFlight=false;}
     // The one decision per tick: a request to send (Begin already called) or null. audioNow = seconds of audio fed so far; speaking = speech in the last 2 s.
-    public ReviseRequest? Next(LiveCaption m,long now,double audioNow,bool speaking,double maxSeconds=25)
+    // A pause to close goes after closeMs; an open re-read on the beat while he speaks, and once when he stops (the tail).
+    public ReviseRequest? Next(LiveCaption m,long now,double audioNow,bool speaking,PauseTracker? pauses,double maxSeconds=25,int closeMs=1000)
     {
-        bool tail=!speaking&&m.Dirty;
-        if(!ShouldSend(now,speaking,tail))return null;
-        var r=m.NextRevise(audioNow,maxSeconds,speaking?2.5:0);
+        if(Disabled||InFlight||now<pausedUntil)return null;
+        bool close=m.Dirty&&m.CloseAt(audioNow,pauses,maxSeconds) is not null&&now-lastSendAt>=closeMs;
+        if(!close&&!ShouldSend(now,speaking,!speaking&&m.Dirty))return null;
+        var r=m.NextRevise(audioNow,pauses,maxSeconds,speaking?2.5:0);
         if(r is not null)Begin(now);
         return r;
     }
