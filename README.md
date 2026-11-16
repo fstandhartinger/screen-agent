@@ -20,6 +20,23 @@ It remains while a tool runs, then fades out four seconds after the last activit
 optional activity rows, inset from the purple control frame, and shown only when Windows confirms screenshot
 exclusion. The line never takes focus or enters the screen context sent to the Desk.
 
+## v0.1.19
+
+Version 0.1.19 makes the live subtitle correct itself while you speak (Florian, 16 Nov 2026: wrong words and senseless punctuation in the subtitle,
+while the inserted text was clearly better). Every ~3.5 s while you speak, and once when you stop, the part of the subtitle that is not confirmed yet is
+heard again by the Desk (`/api/device/revise`): the strongest recogniser (MAI-Transcribe-2) over the whole span since the last confirmed word, then a fast
+model that merges that reading with what the subtitle shows and the context (glossary, private names, the app's dictionary, the confirmed text before,
+names on the screen), under the same word guard as the dictation (no new negations or figures, nothing added). The better reading replaces the shown
+words in place. At a speech pause the text before it is re-read once more as a closed piece and becomes **confirmed** (white); the words after it are
+**tentative** (lighter) and carry no punctuation from the fast 6 s windows, and the open end never shows a full stop or comma. A failed or late re-read
+changes nothing; the fast text stays. The subtitle pill no longer shrinks while it shows a text. Config `CaptionRevise` (default true) switches it;
+with it on, the old live clean-up (`CaptionPolish`) is off. `caption.stats` carries `reviseCalls`, `reviseOk`, `reviseUsed`, `reviseAvgMs`, `reviseCostUsd`.
+
+**Measured** (offline replay of 8 real dictations against careful references, `tools/CaptionReplay`; two complete runs): dictation subtitle, wrong words
+on screen for words spoken 2 s ago 4.8 / 4.2 -> 1.7 / 1.8 per 100 (with the Desk's new dictation model), stray punctuation 2.2 / 1.9 -> 0.8 / 1.1 per 100
+shown words; voice session (no chunk step) 6.6 / 6.8 -> 4.9 / 5.1 and 2.7 / 2.9 -> 1.8 / 1.7; first words and word latency unchanged (0.99 s, 1.07 s).
+Full stops at the end of a sentence appear later (after the pause is confirmed, ~5 s). Cost of the subtitle: about USD 2.1 per hour of speech (was 1.5).
+
 ## v0.1.16
 
 Version 0.1.16 is about the live subtitle while you dictate (Florian, 14 Nov 2026: a stutter showed a word twice, and the subtitle did
