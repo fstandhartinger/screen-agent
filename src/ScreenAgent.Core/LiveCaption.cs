@@ -410,7 +410,9 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         if(to-from<1.0)return null;
         string before=string.Join(' ',words.Take(Confirmed));if(before.Length>600)before=before[^600..];
         ReviseBusy=true;
-        return new(Confirmed,words.Count,Math.Round(from,3),Math.Round(to,3),string.Join(' ',words.Skip(Confirmed)),before,version,cut is null);
+        // a closed piece is shown only the words that lie before its pause (the model must not take words spoken after it into the piece)
+        int upTo=words.Count;if(cut is not null){upTo=Confirmed;while(upTo<words.Count&&times[upTo]<to)upTo++;}
+        return new(Confirmed,words.Count,Math.Round(from,3),Math.Round(to,3),string.Join(' ',words.Skip(Confirmed).Take(upTo-Confirmed)),before,version,cut is null);
     }
     // The answer. Open: it replaces the words after the confirmed ones that were shown when it was asked (r.Shown; words later windows added stay).
     // Closed: it replaces the words up to the pause (found by alignment, else by the time estimate) and becomes the confirmed text. null/empty/misfit: no change.
@@ -426,7 +428,7 @@ public sealed class LiveCaption(int maxWords=int.MaxValue)
         {
             var snap=StitchWords.Split(r.Shown).Select(StitchWords.Key).ToList();
             end=snap.Count<=cur.Count&&cur.Take(snap.Count).SequenceEqual(snap)?snap.Count:WordAlign.EndOf(cur,snap.Skip(Math.Max(0,snap.Count-12)).ToList());
-            if(end<0)end=Math.Min(cur.Count,r.To-r.From);
+            if(end<0)return false;   // the words it was asked for are gone (a window rewrote them): the next open re-read comes soon
         }
         else
         {

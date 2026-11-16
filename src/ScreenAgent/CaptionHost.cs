@@ -197,7 +197,8 @@ internal sealed class CaptionHost : IDisposable
             req=revisePolicy.Next(m,now,audioNow,policy.Speaking(now),pauses,ReviseSeconds);
             if(req is null)return;
             int from=Math.Clamp((int)Math.Round((req.FromAudio-ringStart)*Wav.BytesPerSecond)&~1,0,filled);
-            if(filled-from>=Wav.BytesPerSecond)wav=Wav.FromPcm(ring.AsSpan(from,filled-from).ToArray());
+            int to=Math.Clamp((int)Math.Round((req.ToAudio-ringStart)*Wav.BytesPerSecond)&~1,from,filled);   // a closed piece ends at its pause, not now
+            if(to-from>=Wav.BytesPerSecond)wav=Wav.FromPcm(ring.AsSpan(from,to-from).ToArray());
             seq=++reviseSeq;
             if(wav is null){m.AnswerRevise(req,null,audioNow);revisePolicy.Answered(true,now);return;}
         }
