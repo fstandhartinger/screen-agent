@@ -245,7 +245,7 @@ internal sealed class AppController : IDisposable
         try{ScreenConfig.SetMicrophone(name);}
         catch(Exception ex){Notice("Mikrofon konnte nicht gespeichert werden",Level.Warn,"mic-config",ex);return;}
         config.Microphone=name;MicDevices.Chosen=name;
-        try{captions.ReopenTap();}catch(Exception ex){TickFailed("captions",ex);}
+        try{captions.ReopenTap();}catch(Exception ex){TickFailed("captions",ex);}   // logged: tick.error
         bool live=bridge.VoiceOn&&Active;
         bool page=await bridge.SetMic(name);
         telemetry.Event("mic.pick",new(){["source"]=source,["default"]=name is null,["live"]=live,["page"]=page});
