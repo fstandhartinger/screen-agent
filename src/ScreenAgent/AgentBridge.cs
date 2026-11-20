@@ -352,13 +352,13 @@ internal sealed class AgentBridge : Window
         }
         catch{ /* remembering the size is a convenience */ }
     }
-    public async Task<bool> Voice(bool on,string provider)
+    public async Task<bool> Voice(bool on,string provider,string? startupCard=null)
     {
         if(browser is null)return false;
         var ack=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);voiceAck=ack;requestedVoice=on;
         try
         {
-            browser.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="voice",on,provider=provider=="default"?"xai":provider}));
+            browser.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new{type="voice",on,provider=provider=="default"?"xai":provider,startupCard}));
             var clock=Stopwatch.StartNew();
             bool acked=await Task.WhenAny(ack.Task,Task.Delay(2000))==ack.Task;bool ok=acked&&await ack.Task;
             if(!ok)Diag.Event("voice.ack.fail",new(){["on"]=on,["why"]=acked?"error-state":"timeout",["ms"]=clock.ElapsedMilliseconds});

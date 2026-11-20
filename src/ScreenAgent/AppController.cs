@@ -13,6 +13,7 @@ internal sealed class AppController : IDisposable
     readonly StatusToast toast;
     readonly PrivacyCapture privacy;
     readonly ScreenTextSender screenText;
+    readonly ScreenTextSource screenTextSource;
     readonly CorrectionLearner learner;
     readonly DispatcherTimer timer;
     readonly System.Windows.Forms.NotifyIcon tray;
@@ -86,7 +87,8 @@ internal sealed class AppController : IDisposable
         captions=new(config,client,telemetry,bridge.Dispatcher,()=>(ids.ToArray(),terms.Take(30).ToArray()));
         dictation=new(config,client,telemetry,captions,bridge.Dispatcher,(text,level)=>{if(bridge.Dispatcher.CheckAccess())Notice(text,level,"dictation");else bridge.Dispatcher.BeginInvoke(new System.Action(()=>Notice(text,level,"dictation")));},text=>Balloon(text,"dictation"),
             (proc,field)=>new DictationContext(proc,field.Length<=500?field:field[^500..],ids.ToArray(),(string.IsNullOrWhiteSpace(config.UserEmail)?terms.Take(30):terms.Take(29).Prepend(config.UserEmail)).ToArray()),InsertHere);
-        screenText=new(new ScreenTextSource(config.Policy(),()=>!disposed&&client.Paired&&hook.Healthy&&!hook.Paused&&!paused&&drawings.Count==0),client,()=>config.ScreenTextForSpeech,(type,data)=>telemetry.Event(type,data));
+        screenTextSource=new(config.Policy(),()=>!disposed&&client.Paired&&hook.Healthy&&!hook.Paused&&!paused&&drawings.Count==0);
+        screenText=new(screenTextSource,client,()=>config.ScreenTextForSpeech,(type,data)=>telemetry.Event(type,data));
         dictation.Started+=()=>_=screenText.Start("dictation",CancellationToken.None);
         briefing=new(config,client,Trace,()=>bridge.SessionId);
         if(config.ActivityOverlay)activity=new ActivityOverlay(()=>toast.IsVisible?(int)Math.Ceiling(toast.ActualHeight*System.Windows.Media.VisualTreeHelper.GetDpi(toast).DpiScaleY)+6:0);
@@ -391,12 +393,23 @@ internal sealed class AppController : IDisposable
         voiceFailed=voice.Failed;
         if(step==VoiceStep.None)return;
         voiceSyncing=true;
+        var foreground = step == VoiceStep.Start ? Native.GetForegroundWindow() : IntPtr.Zero;
         if(step==VoiceStep.Start)StartMark("voice-request");
         try
         {
             await lifecycle.Enqueue(async ()=>
             {
-                bool ok=await bridge.Voice(step==VoiceStep.Start,config.VoiceProvider);
+                string? startupCard = null;
+                if (step == VoiceStep.Start)
+                {
+                    var current = epoch.Token;
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(current);
+                    deadline.CancelAfter(1200);
+                    try { startupCard = await Task.Run(() => screenTextSource.StartupReference(foreground, deadline.Token), deadline.Token).WaitAsync(deadline.Token); }
+                    catch (Exception) { /* Card capture is optional. */ }
+                    if (!Active || current.IsCancellationRequested) return;
+                }
+                bool ok=await bridge.Voice(step==VoiceStep.Start,config.VoiceProvider,startupCard);
                 voice.Result(step==VoiceStep.Start,ok,Environment.TickCount64);voiceFailed=voice.Failed;
                 if(step==VoiceStep.Start&&!ok)StartMark("voice-unacked");
             });

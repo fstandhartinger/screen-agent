@@ -9,15 +9,15 @@ internal sealed record ScreenTextResult(string Process,string Title,string Text,
 internal sealed class ScreenTextSource
 {
     readonly PrivacyPolicy policy;readonly Func<bool> allowed;
-    static int uiaBusy;
+    static int uiaBusy, selectionBusy;
     public ScreenTextSource(PrivacyPolicy policy,Func<bool> allowed){this.policy=policy;this.allowed=allowed;}
     public bool Current(ScreenTextResult result)=>new PrivacyCapture(policy,allowed,captureAddress:false).Allowed(result.Window);
     public Task<ScreenTextResult?> Capture(string reason,CancellationToken ct)=>Capture(reason,ct,null,null);
-    public Task<ScreenTextResult?> Capture(string reason,CancellationToken ct,string? reusedOcr,Func<ScreenTextResult,Task>? early=null)=>Task.Run(async ()=>
+    public Task<ScreenTextResult?> Capture(string reason,CancellationToken ct,string? reusedOcr,Func<ScreenTextResult,Task>? early=null,IntPtr foreground=default)=>Task.Run(async ()=>
     {
         if(!allowed()||ct.IsCancellationRequested)return null;
         var clock=Stopwatch.StartNew();var fg=Native.GetForegroundWindow();
-        if(fg==IntPtr.Zero)return null;
+        if(fg==IntPtr.Zero || (foreground!=IntPtr.Zero&&foreground!=fg))return null;
         var monitor=System.Windows.Forms.Screen.FromHandle(fg).Bounds;
         var privacy=new PrivacyCapture(policy,()=>allowed()&&!ct.IsCancellationRequested&&Native.GetForegroundWindow()==fg,captureAddress:false);
         using var image=privacy.Capture(monitor,true,false,out var info);
@@ -26,16 +26,73 @@ internal sealed class ScreenTextSource
         bool Valid()=>allowed()&&!ct.IsCancellationRequested&&Native.GetForegroundWindow()==fg;
         ScreenTextResult Result(string uia,string ocr,long um,long om)=>new(window.Process,ScreenTextLogic.Tidy(window.Title) is {} title?title[..Math.Min(200,title.Length)]:"",ScreenTextLogic.Merge(uia,ocr),uia,ocr,um,om,clock.ElapsedMilliseconds,fg);
         var ocrClock=Stopwatch.StartNew();
-        var ocrTask=reusedOcr is not null?Task.FromResult((ScreenTextLogic.Tidy(reusedOcr),0L)):ReadOcr(PrivacyCapture.Png(image),ocrClock,ct);
+        var ocrTask=reusedOcr is not null?Task.FromResult((ScreenTextLogic.Tidy(reusedOcr),0L)):ReadOcr(PrivacyCapture.Png(image),ocrClock,ct,reason=="startup-card" ? 650 : 4000);
         var uiaClock=Stopwatch.StartNew();string uia=await ReadUia(fg,info,ct);long uiaMs=uiaClock.ElapsedMilliseconds;
         if(!Valid())return null;
         if(early is not null&&uia.Split('\n',StringSplitOptions.RemoveEmptyEntries).Length>=10&&!ocrTask.IsCompleted)await early(Result(uia,"",uiaMs,0));
         var (ocr,ocrMs)=await ocrTask;
         return Valid()?Result(uia,ocr,uiaMs,ocrMs):null;
     },ct);
-    static async Task<(string,long)> ReadOcr(byte[] png,Stopwatch clock,CancellationToken ct)
+    internal async Task<string?> StartupReference(IntPtr foreground, CancellationToken ct)
     {
-        try{var result=await Task.Run(()=>Ocr.ReadMemory(png),ct).WaitAsync(TimeSpan.FromSeconds(4),ct);return(ScreenTextLogic.Tidy(result.Text),clock.ElapsedMilliseconds);}
+        if (foreground == IntPtr.Zero) return null;
+        var privacy = new PrivacyCapture(policy, () => allowed() && !ct.IsCancellationRequested);
+        if (!privacy.Allowed(foreground)) return null;
+        var selected = await ReadSelection(foreground, ct);
+        if (!privacy.Allowed(foreground)) return null;
+        var reference = StartupCard.Find(selected, out var ambiguous);
+        if (reference is not null || ambiguous) return reference;
+        reference = StartupCard.Find(UiaDriver.TitleOf(foreground), out ambiguous);
+        if (reference is not null || ambiguous) return reference;
+        try
+        {
+            var screen = await Capture("startup-card", ct, null, null, foreground);
+            if (screen is null || !privacy.Allowed(foreground)) return null;
+            reference = StartupCard.Find(screen.UiaText, out ambiguous);
+            return reference is not null || ambiguous ? reference : StartupCard.Find(screen.OcrText, out _);
+        }
+        catch (OperationCanceledException) { /* The startup capture deadline expired. */ return null; }
+    }
+
+    // UI Automation providers can hang. Deadline and one background lane keep the hotkey responsive.
+    private static async Task<string> ReadSelection(IntPtr foreground, CancellationToken ct)
+    {
+        if (Interlocked.CompareExchange(ref selectionBusy, 1, 0) != 0) return "";
+        var selected = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var element = AutomationElement.FocusedElement;
+                var walker = TreeWalker.RawViewWalker;
+                for (int i = 0; element is not null && i < 8 && !ct.IsCancellationRequested; i++)
+                {
+                    var hwnd = new IntPtr(element.Current.NativeWindowHandle);
+                    if (element.Current.IsPassword || (hwnd != IntPtr.Zero && UiaDriver.Root(hwnd) != foreground)) break;
+                    if (element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern))
+                    {
+                        var ranges = ((TextPattern)pattern).GetSelection();
+                        var text = string.Join("\n", ranges.Take(4).Select(range => range.GetText(256)));
+                        if (!string.IsNullOrWhiteSpace(text)) { selected.TrySetResult(text); break; }
+                    }
+                    element = walker.GetParent(element);
+                }
+            }
+            catch (Exception) { /* UI Automation is optional; try the masked capture next. */ }
+            finally
+            {
+                selected.TrySetResult("");
+                Interlocked.Exchange(ref selectionBusy, 0);
+            }
+        }) { IsBackground = true, Name = "Startup card selection" };
+        thread.SetApartmentState(ApartmentState.MTA);
+        thread.Start();
+        return await Task.WhenAny(selected.Task, Task.Delay(300, ct)) == selected.Task ? await selected.Task : "";
+    }
+
+    static async Task<(string,long)> ReadOcr(byte[] png,Stopwatch clock,CancellationToken ct,int timeoutMs)
+    {
+        try{var result=await Task.Run(()=>Ocr.ReadMemory(png),ct).WaitAsync(TimeSpan.FromMilliseconds(timeoutMs),ct);return(ScreenTextLogic.Tidy(result.Text),clock.ElapsedMilliseconds);}
         catch{ /* OCR is optional; UIA still supplies speech context. */ return("",clock.ElapsedMilliseconds); } // OCR is optional; do not turn a speech hint into a user-visible failure
     }
     // 250 ms was too tight on a slow machine (integration CI: the walk of a small window needed 306 ms and lost a line). What was read until the budget ends is used; OCR adds the rest.

@@ -184,7 +184,7 @@ internal sealed class ComputerAgent:IDisposable
         // ---- a new run (unarmed while "hier" is still to be resolved)
         bool asks=!policy.Unrestricted&&(!more.Empty||mentionsHere);
         more.All=policy.Unrestricted;
-        var nr=new ComputerRun(cmd.Run,goal,more,null,policy.Unrestricted?ComputerCaps.Unrestricted:null,armed:!asks);
+        var nr=new ComputerRun(cmd.Run,goal,more,null,policy.Unrestricted?ComputerCaps.Unrestricted:new RunCaps(StepReport:int.MaxValue),armed:!asks);
         lock(sync)
         {
             run=nr;runSid=w.Sid;handsOnNoted=confirmKeyNoted=hotkeyChecked=false;try{cdp?.Dispose();}catch{ }cdp=null;   /* disposing the socket of a closed run: nothing to report */cdpFailure=null;pendingExec=null;pendingPlan=null;pendingWork=null;lastGatewayGoal=goal;
@@ -279,7 +279,7 @@ internal sealed class ComputerAgent:IDisposable
         if(r.IsHandsOn&&!handsOnNoted)
         {
             handsOnNoted=true;Log("computer.handson",new(){["run"]=r.Id});
-            ui.BeginInvoke(()=>overlay.Update("Du bist dran, sag z. B. „mach weiter“",r.Actions,MaxShown));notice?.Invoke("Du bist dran, sag z. B. „mach weiter“");_=Beat(sid,r);
+            ui.BeginInvoke(()=>overlay.Update("Pausiert · manuelle Eingabe",r.Actions,MaxShown));_=Beat(sid,r);
         }
         // The chord was pressed on the keyboard: the app runs the confirm itself and posts the result as a SECOND result to the action's own command id (the gateway accepts it once, within 120 s).
         if(r.PhysicalConfirmed&&r.Pending is {} pend&&pendingWork is {} pw&&!confirmKeyNoted){confirmKeyNoted=true;try{queue.Add(new(pw.Sid,pw.Cmd with{Op="confirm",Hash=pend.Hash,Digits=""}));}catch(InvalidOperationException){ }}   // the queue was completed by a stop
