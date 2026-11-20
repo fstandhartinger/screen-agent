@@ -51,7 +51,7 @@ internal sealed class ScreenTextSource
             reference = StartupCard.Find(screen.UiaText, out ambiguous);
             return reference is not null || ambiguous ? reference : StartupCard.Find(screen.OcrText, out _);
         }
-        catch (OperationCanceledException) { return null; }
+        catch (OperationCanceledException) { /* The startup capture deadline expired. */ return null; }
     }
 
     // UI Automation providers can hang. Deadline and one background lane keep the hotkey responsive.
