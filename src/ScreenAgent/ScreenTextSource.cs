@@ -35,23 +35,54 @@ internal sealed class ScreenTextSource
     },ct);
     internal async Task<string?> StartupReference(IntPtr foreground, CancellationToken ct)
     {
-        if (foreground == IntPtr.Zero) return null;
+        var clock = Stopwatch.StartNew();
+        string? Done(string? reference, string source, bool ambiguous = false)
+        {
+            // only the reference itself (a#xxxxxx / card:N) and where it came from are logged, never the text read
+            Diag.Event("startup.card", new() { ["found"] = reference is not null, ["ref"] = reference, ["source"] = source, ["ambiguous"] = ambiguous, ["ms"] = clock.ElapsedMilliseconds });
+            return reference;
+        }
+        if (foreground == IntPtr.Zero) return Done(null, "no-window");
         var privacy = new PrivacyCapture(policy, () => allowed() && !ct.IsCancellationRequested);
-        if (!privacy.Allowed(foreground)) return null;
+        if (!privacy.Allowed(foreground)) return Done(null, "privacy");
         var selected = await ReadSelection(foreground, ct);
-        if (!privacy.Allowed(foreground)) return null;
+        if (!privacy.Allowed(foreground)) return Done(null, "privacy");
         var reference = StartupCard.FindSelected(selected, out var ambiguous);
-        if (reference is not null || ambiguous) return reference;
+        if (reference is not null || ambiguous) return Done(reference, "selection", ambiguous);
+        // 20 Nov 2026 (Florian): an agent id or card number in the clipboard also counts. Read only, never written;
+        // only a short text is looked at and only the reference leaves this method.
+        var clip = await ReadClipboardText(ct);
+        if (clip.Length is > 0 and <= 400)
+        {
+            reference = StartupCard.FindSelected(clip, out ambiguous);
+            if (reference is not null || ambiguous) return Done(reference, "clipboard", ambiguous);
+        }
         reference = StartupCard.Find(UiaDriver.TitleOf(foreground), out ambiguous);
-        if (reference is not null || ambiguous) return reference;
+        if (reference is not null || ambiguous) return Done(reference, "title", ambiguous);
         try
         {
             var screen = await Capture("startup-card", ct, null, null, foreground);
-            if (screen is null || !privacy.Allowed(foreground)) return null;
+            if (screen is null || !privacy.Allowed(foreground)) return Done(null, "screen-none");
             reference = StartupCard.Find(screen.UiaText, out ambiguous);
-            return reference is not null || ambiguous ? reference : StartupCard.Find(screen.OcrText, out _);
+            if (reference is not null || ambiguous) return Done(reference, "window-text", ambiguous);
+            reference = StartupCard.Find(screen.OcrText, out ambiguous);
+            return Done(reference, "ocr", ambiguous);
         }
-        catch (OperationCanceledException) { /* The startup capture deadline expired. */ return null; }
+        catch (OperationCanceledException) { /* The startup capture deadline expired. */ return Done(null, "deadline"); }
+    }
+
+    // Clipboard access needs an STA thread; bounded so a busy clipboard owner cannot stall the hotkey.
+    private static Task<string> ReadClipboardText(CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try { tcs.TrySetResult(System.Windows.Forms.Clipboard.ContainsText() ? System.Windows.Forms.Clipboard.GetText() ?? "" : ""); }
+            catch { tcs.TrySetResult(""); }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return tcs.Task.WaitAsync(TimeSpan.FromMilliseconds(250), ct).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : "", TaskScheduler.Default);
     }
 
     // UI Automation providers can hang. Deadline and one background lane keep the hotkey responsive.
