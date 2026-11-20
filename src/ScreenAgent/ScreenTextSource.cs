@@ -40,7 +40,7 @@ internal sealed class ScreenTextSource
         if (!privacy.Allowed(foreground)) return null;
         var selected = await ReadSelection(foreground, ct);
         if (!privacy.Allowed(foreground)) return null;
-        var reference = StartupCard.Find(selected, out var ambiguous);
+        var reference = StartupCard.FindSelected(selected, out var ambiguous);
         if (reference is not null || ambiguous) return reference;
         reference = StartupCard.Find(UiaDriver.TitleOf(foreground), out ambiguous);
         if (reference is not null || ambiguous) return reference;
