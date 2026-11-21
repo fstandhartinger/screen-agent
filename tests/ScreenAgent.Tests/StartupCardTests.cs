@@ -27,7 +27,10 @@ public class StartupCardTests
     [InlineData("Karte-Nr 20081", "card:20081")]
     [InlineData("Karte Nr. 20081", "card:20081")]
     [InlineData("card 20081", "card:20081")]
-    [InlineData("123456", "card:123456")]
+    [InlineData("123456", "a#123456")]
+    [InlineData("870805", "a#870805")]
+    [InlineData(" 870805 ", "a#870805")]
+    [InlineData("1234567", "card:1234567")]
     [InlineData("12", null)]
     [InlineData("hello", null)]
     public void FindsBareSelection(string selected, string? expected)

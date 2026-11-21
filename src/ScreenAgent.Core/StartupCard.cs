@@ -19,11 +19,12 @@ public static partial class StartupCard
     {
         var found = Find(selected, out ambiguous);
         if (found is not null || ambiguous) return found;
+        // 21 Nov 2026 (Florian): artifact ids can be digits only ("a#870805" -> "870805"). Exactly six hex characters are an
+        // artifact id; other plain numbers (card numbers are 5 digits today) are card numbers.
+        var a = BareArtifact().Match(selected);
+        if (a.Success) return "a#" + a.Groups[1].Value.ToLowerInvariant();
         var n = BareNumber().Match(selected);
         if (n.Success) return "card:" + n.Groups[1].Value;
-        var a = BareArtifact().Match(selected);
-        // six hex digits only count as an artifact id when they contain a letter (a pure number is a card number)
-        if (a.Success && a.Groups[1].Value.Any(char.IsLetter)) return "a#" + a.Groups[1].Value.ToLowerInvariant();
         return null;
     }
 
