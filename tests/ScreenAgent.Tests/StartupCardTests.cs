@@ -18,6 +18,34 @@ public class StartupCardTests
         Assert.False(ambiguous);
     }
 
+    [Theory]
+    [InlineData("20081", "card:20081")]
+    [InlineData(" 20081 ", "card:20081")]
+    [InlineData("#20081", "card:20081")]
+    [InlineData("c029b6", "a#c029b6")]
+    [InlineData("a#C029B6", "a#c029b6")]
+    [InlineData("Karte-Nr 20081", "card:20081")]
+    [InlineData("Karte Nr. 20081", "card:20081")]
+    [InlineData("card 20081", "card:20081")]
+    [InlineData("123456", "a#123456")]
+    [InlineData("870805", "a#870805")]
+    [InlineData(" 870805 ", "a#870805")]
+    [InlineData("1234567", "card:1234567")]
+    [InlineData("12", null)]
+    [InlineData("hello", null)]
+    public void FindsBareSelection(string selected, string? expected)
+    {
+        Assert.Equal(expected, StartupCard.FindSelected(selected, out var ambiguous));
+        Assert.False(ambiguous);
+    }
+
+    [Fact]
+    public void BareNumbersCountOnlyInSelections()
+    {
+        Assert.Null(StartupCard.Find("20081", out _));
+        Assert.Null(StartupCard.Find("c029b6", out _));
+    }
+
     [Fact]
     public void UnrelatedCardsAreAmbiguous()
     {

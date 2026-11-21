@@ -5,8 +5,28 @@ namespace ScreenAgent.Core;
 public static partial class StartupCard
 {
     // A paired footer carries one identity. Use its exact artifact ID so the server verifies its binding.
-    [GeneratedRegex(@"(?<![\p{L}\p{N}_])a\s*#\s*([0-9a-f]{6})(?![\p{L}\p{N}_])(?:\s*[·•]\s*Karte\s+([1-9]\d{0,11})(?![\p{L}\p{N}_]))?|(?<![\p{L}\p{N}_])Karte\s+([1-9]\d{0,11})(?![\p{L}\p{N}_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<![\p{L}\p{N}_])a\s*#\s*([0-9a-f]{6})(?![\p{L}\p{N}_])(?:\s*[·•]\s*Karte\s+([1-9]\d{0,11})(?![\p{L}\p{N}_]))?|(?<![\p{L}\p{N}_])(?:Karte(?:[\s-]*Nr\.?)?|Card(?:\s*(?:No\.?|Nr\.?))?)\s*#?\s*([1-9]\d{0,11})(?![\p{L}\p{N}_])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex References();
+
+    // 20 Nov 2026 (Florian): a SELECTION may hold only the bare card number ("20081") or the bare artifact id ("c029b6", "a#c029b6").
+    [GeneratedRegex(@"^\s*#?\s*([1-9]\d{3,11})\s*$", RegexOptions.CultureInvariant)]
+    private static partial Regex BareNumber();
+    [GeneratedRegex(@"^\s*(?:a\s*#\s*)?([0-9a-f]{6})\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex BareArtifact();
+
+    /// <summary>Like <see cref="Find"/>, plus a selection that is only a card number or only an artifact id.</summary>
+    public static string? FindSelected(string selected, out bool ambiguous)
+    {
+        var found = Find(selected, out ambiguous);
+        if (found is not null || ambiguous) return found;
+        // 21 Nov 2026 (Florian): artifact ids can be digits only ("a#870805" -> "870805"). Exactly six hex characters are an
+        // artifact id; other plain numbers (card numbers are 5 digits today) are card numbers.
+        var a = BareArtifact().Match(selected);
+        if (a.Success) return "a#" + a.Groups[1].Value.ToLowerInvariant();
+        var n = BareNumber().Match(selected);
+        if (n.Success) return "card:" + n.Groups[1].Value;
+        return null;
+    }
 
     public static string? Find(string text, out bool ambiguous)
     {
