@@ -113,6 +113,7 @@ internal sealed class DictationManager : IDisposable
             cts.Cancel();rec.Dispose();Store.Delete(rec.Meta);cts.Dispose();throw;
         }
         var caps=captions.BeginDictation(rec.Meta.Id);
+        job.Answered+=(c,text)=>DictationChunkMemo.Remember(rec.Meta,c,text);   // kept in the sidecar: a retry sends only the chunks without an answer
         job.Joined+=text=>captions.Settle(caps,text,job.JoinedSeconds,job.JoinedFinal);   // what will be typed replaces its part of the subtitle while he still talks
         var flow=new DictationFlow{Capture=capture,Job=job,Cts=cts,Process=process,Captions=caps,FieldBefore=fieldBefore};
         rec.Warning+=w=>ui.BeginInvoke(new System.Action(()=>notice(w,Level.Warn)));
@@ -393,12 +394,18 @@ internal sealed class DictationManager : IDisposable
             notice("Diktat · neuer Versuch",Level.Active);
             var ctx=context(m.Process,"");
             using var cts=CancellationTokenSource.CreateLinkedTokenSource(life.Token);
-            var job=new DictationJob(m.Id,"",(r,ct)=>client.DictateChunk(r,ctx,ct),Log,cts.Token);
+            // A retry sends only the chunks without an answer (same index and audio as before), under the same id: the Desk answers a chunk it already has
+            // from memory too. "Again" (fresh) wants a new transcription: a new id on the wire and no reuse.
+            var meta=m;
+            var job=new DictationJob(fresh?$"{m.Id}-n{m.Attempts}":m.Id,"",(r,ct)=>client.DictateChunk(r,ctx,ct),Log,cts.Token){Known=fresh?null:new Func<Chunk,string?>(c=>DictationChunkMemo.Find(meta,c))};
+            if(fresh)m.Chunks=[];
+            job.Answered+=(c,text)=>DictationChunkMemo.Remember(meta,c,text);
             var state=new RetryState();
             var last=await Task.Run(()=>Feed(m,job,state));
             if(state.Missing||state.Samples==0){Fail(m,state.Missing?"Die Aufnahmedatei fehlt":"Die Aufnahmedatei ist leer","retry",0,"",m.PartialText,true);return;}
             if(job.Enqueued==0&&DictationGate.Reject(state.Samples,state.Peak) is {} why){m.State="discarded";m.Reason=why;m.Ended=DateTimeOffset.UtcNow;Save(m);notice(why=="silent"?"Diktat · nichts aufgenommen (stumm)":"Diktat zu kurz",Level.Warn);return;}
             var o=await Polished(job.Complete(last),m.Id,m.Process,"");
+            Log("dictation.retry.chunks",new(){["id"]=m.Id,["chunks"]=o.Chunks,["reused"]=job.Reused,["sent"]=o.Chunks-job.Reused,["failed"]=o.Failed,["fresh"]=fresh});
             await Finish(m,o,m.Process,m.PartialText??"",null,true);
             if(m.State=="done")Release(m.Id);
         }

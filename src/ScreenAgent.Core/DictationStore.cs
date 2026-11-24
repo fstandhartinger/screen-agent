@@ -22,11 +22,23 @@ public sealed class DictationMeta
     // The final text (0.1.9), for the tray's copy and the history window. Local only, gone with the recording (DictationKeepHours); it never leaves the machine.
     public string? Text {get;set;}
     public int Attempts {get;set;}
+    // v0.1.20: the answer of every chunk the Desk transcribed (local only, like Text): a retry sends only the chunks without an answer.
+    public List<DictationChunkMemo> Chunks {get;set;}=[];
     [JsonIgnore] public string Folder {get;set;}="";
     [JsonIgnore] public string MetaPath=>Path.Combine(Folder,$"{Stamp}-{Id}.json");
     [JsonIgnore] public IEnumerable<string> Paths=>Files.Select(f=>Path.Combine(Folder,f));
     [JsonIgnore] public bool Pending=>State=="failed";
     public string Label=>$"Diktat vom {Started.ToLocalTime():HH:mm} ({(int)(Seconds/60)}:{(int)Seconds%60:00})";
+}
+// One answered chunk: index, length and a hash of its audio, so a retry that cuts the recording elsewhere does not reuse a text for other audio.
+public sealed record DictationChunkMemo(int Index,int Samples,string Hash,string Text)
+{
+    public static string HashOf(short[] samples)=>Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(samples.AsSpan())))[..16].ToLowerInvariant();
+    public static DictationChunkMemo Of(Chunk c,string text)=>new(c.Index,c.Samples.Length,HashOf(c.Samples),text);
+    public bool Matches(Chunk c)=>c.Index==Index&&c.Samples.Length==Samples&&HashOf(c.Samples)==Hash;
+    // Copy on write: the sidecar may be serialised on another thread while the job (the only writer) adds an answer.
+    public static void Remember(DictationMeta m,Chunk c,string text)=>m.Chunks=[..m.Chunks.Where(x=>x.Index!=c.Index),Of(c,text)];
+    public static string? Find(DictationMeta m,Chunk c)=>m.Chunks.FirstOrDefault(x=>x.Matches(c))?.Text;
 }
 public sealed record RetentionOptions(TimeSpan Success,TimeSpan Failed,long CapBytes)
 {

@@ -42,9 +42,12 @@ public sealed record DictationOutcome(string Text,int Chunks,int Failed,bool Deg
 {
     public bool Complete=>Failed==0;
 }
-// Sends the chunks of one dictation one at a time, in order, in the background: each with up to 2 retries (1 s, 3 s) for timeouts, 429 and 5xx;
+// Sends the chunks of one dictation one at a time, in order, in the background: each with up to 2 retries (1 s, 3 s) for timeouts and 429, 3 (1 s, 3 s, 8 s) for 5xx;
 // a lost connection does not use up retries, it waits and goes on (LivePatience while he talks, StopPatience after he stopped). A chunk that stays
 // failed is replaced by its fallback (the live caption text) and flagged; the others carry on. Nothing is injected here.
+// v0.1.20 (24 Nov 2026): a chunk that stays failed with no live text but with speech becomes GapMark in the text, so the gap is visible where it is.
+// A retry sends only what has no answer yet: Known gives the text an earlier attempt got for exactly this chunk (same index and audio, DictationChunkMemo),
+// and Answered reports every new answer so the sidecar keeps it. The gateway also answers a re-sent chunk from memory (same id, index and audio).
 public sealed class DictationJob
 {
     readonly string id;readonly ChunkSender send;readonly Action<string,Dictionary<string,object?>> log;
@@ -59,6 +62,10 @@ public sealed class DictationJob
     long stopAt;string? failReason;
     public TimeSpan LivePatience {get;init;}=TimeSpan.FromMinutes(10);
     public TimeSpan StopPatience {get;init;}=TimeSpan.FromSeconds(45);
+    public const string GapMark="[…]";
+    public Func<Chunk,string?>? Known {get;init;}
+    public event Action<Chunk,string>? Answered;
+    public int Reused {get;private set;}
     public int Enqueued=>enqueued;
     public int Done=>done;
     public event Action? Progress;
@@ -88,14 +95,27 @@ public sealed class DictationJob
         {
             await foreach(var (chunk,fallback) in queue.Reader.ReadAllAsync(ct))
             {
-                var result=await Send(chunk);
+                string? known=null;
+                try{known=Known?.Invoke(chunk);}catch(Exception ex){log("dictation.fail",new(){["id"]=id,["stage"]="retry",["reason"]="known",["exType"]=ex.GetType().Name});}
+                ChunkReply? result;
+                if(known is not null)
+                {
+                    result=new(200,known);Reused++;
+                    log("dictation.chunk.reused",new(){["id"]=id,["index"]=chunk.Index,["seconds"]=Math.Round(chunk.Seconds,1),["chars"]=known.Length});
+                }
+                else result=await Send(chunk);
                 string? text=result?.Text;bool ov=chunk.OverlapSamples>0;
                 if(result is null||!result.Ok)
                 {
                     failed++;lastFailedStatus=result?.Status??0;failReason??=result?.Reason??"Abgebrochen";
                     text=fallback();fromFallback|=!string.IsNullOrWhiteSpace(text);ov=false;
+                    if(string.IsNullOrWhiteSpace(text)&&AudioLevel.Peak(chunk.Samples)>=DictationGate.SpeechPeak)text=GapMark;   // he spoke here and no text came: mark the place
                 }
-                else degraded|=result.Degraded;
+                else
+                {
+                    degraded|=result.Degraded;
+                    if(known is null)try{Answered?.Invoke(chunk,result.Text);}catch(Exception ex){log("dictation.fail",new(){["id"]=id,["stage"]="retry",["reason"]="answered",["exType"]=ex.GetType().Name});}
+                }
                 string joined;lock(parts){parts.Add(text??"");overlapped.Add(ov);joined=DictationJoin.Join(parts,overlapped);}
                 JoinedSeconds+=chunk.Seconds-chunk.OverlapSamples/(double)Core.Wav.Rate;JoinedFinal=chunk.Final;
                 done++;Progress?.Invoke();
@@ -135,8 +155,10 @@ public sealed class DictationJob
                 if(clock.ElapsedMilliseconds>=deadline)return reply;
                 networkWaits++;await delay(TimeSpan.FromSeconds(Math.Min(15,Math.Pow(2,Math.Min(networkWaits,4)))),ct);continue;
             }
-            if(!reply.Retryable||attempt>=(reply.Status==-2?2:3))return reply;   // an empty answer is retried once: it rarely differs
-            await delay(TimeSpan.FromSeconds(attempt==1?1:3),ct);
+            // an empty answer is retried once: it rarely differs. A 5xx gets a third retry after 8 s: on 24 Nov the Desk answered 502 for about 15 s
+            // (its registry lookup stalled) and the retries after 1 s and 3 s both fell into that window.
+            if(!reply.Retryable||attempt>=(reply.Status==-2?2:reply.Status>=500?4:3))return reply;
+            await delay(TimeSpan.FromSeconds(attempt switch{1=>1,2=>3,_=>8}),ct);
         }
     }
 }

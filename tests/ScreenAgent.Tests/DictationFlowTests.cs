@@ -45,7 +45,50 @@ public class DictationFlowTests
         var job=Job(s);job.Enqueue(C(0,25));job.Enqueue(C(1,25),()=>"Teil aus Live-Text");
         var o=await job.Complete(C(2,3,final:true));
         Assert.Equal("erster Teil Teil aus Live-Text letzter Teil",o.Text);Assert.Equal(1,o.Failed);Assert.True(o.FromFallback);Assert.False(o.Complete);Assert.Equal(503,o.FailedStatus);
-        Assert.Equal(3,s.Calls.Count(c=>c.Index==1));   // 1 + 2 retries
+        Assert.Equal(4,s.Calls.Count(c=>c.Index==1));   // a 5xx: 1 + 3 retries (1 s, 3 s, 8 s) since v0.1.20
+    }
+    static Chunk Loud(int i,double sec=5,bool final=false){var a=new short[(int)(sec*R)];Array.Fill(a,(short)3000);return new(i,a,final,0);}
+    [Fact] public async Task A5xxGetsAThirdRetryAfterEightSeconds()
+    {
+        var waits=new List<TimeSpan>();
+        var s=new Script((_,a)=>a<4?new ChunkReply(502):Ok("nach der Störung"));
+        var job=new DictationJob("abc","",s.Send,(_,_)=>{},CancellationToken.None,(t,_)=>{waits.Add(t);return Task.CompletedTask;});
+        var o=await job.Complete(C(0,2,final:true));
+        Assert.Equal("nach der Störung",o.Text);Assert.True(o.Complete);
+        Assert.Equal(new[]{1d,3d,8d},waits.Select(w=>w.TotalSeconds));
+    }
+    [Fact] public async Task AFailedTailChunkWithSpeechAndNoLiveTextLeavesAGapMarkAndKeepsTheGoodChunks()
+    {
+        var s=new Script((r,_)=>r.Chunk.Final?new ChunkReply(502):Ok(r.Chunk.Index==0?"erster Teil":"zweiter Teil"));
+        var job=Job(s);job.Enqueue(Loud(0,25));job.Enqueue(Loud(1,25));
+        var o=await job.Complete(Loud(2,4.7,final:true),()=>null);
+        Assert.Equal("erster Teil zweiter Teil "+DictationJob.GapMark,o.Text);Assert.Equal(1,o.Failed);Assert.False(o.FromFallback);Assert.Equal(502,o.FailedStatus);
+    }
+    [Fact] public async Task ARetrySendsOnlyTheChunksWithoutAnAnswerAndRemembersTheNewOne()
+    {
+        var meta=new DictationMeta{Id="e3f63fc1"};
+        var c0=Loud(0,25);var c1=Loud(1,25);var tail=Loud(2,4.7,final:true);
+        DictationChunkMemo.Remember(meta,c0,"erster Teil");DictationChunkMemo.Remember(meta,c1,"zweiter Teil");
+        var s=new Script((r,_)=>Ok("dritter Teil"));var ev=new List<string>();
+        var job=new DictationJob(meta.Id,"",s.Send,(t,_)=>ev.Add(t),CancellationToken.None,NoWait){Known=c=>DictationChunkMemo.Find(meta,c)};
+        job.Answered+=(c,t)=>DictationChunkMemo.Remember(meta,c,t);
+        job.Enqueue(c0);job.Enqueue(c1);
+        var o=await job.Complete(tail);
+        Assert.Equal("erster Teil zweiter Teil dritter Teil",o.Text);Assert.True(o.Complete);
+        Assert.Equal(new[]{2},s.Seen.Select(r=>r.Chunk.Index));Assert.Equal("e3f63fc1",s.Seen[0].DictationId);
+        Assert.Equal(2,job.Reused);Assert.Equal(2,ev.Count(e=>e=="dictation.chunk.reused"));
+        Assert.Equal(3,meta.Chunks.Count);Assert.Equal("dritter Teil",DictationChunkMemo.Find(meta,tail));
+    }
+    [Fact] public void AChunkMemoMatchesOnlyTheSameIndexAndAudioAndSurvivesTheSidecar()
+    {
+        var (store,_,_)=Env();
+        var m=store.Begin("code");var c=Loud(1,3);
+        DictationChunkMemo.Remember(m,c,"Teil");store.Save(m);
+        var back=store.Load(m.MetaPath)!;
+        Assert.Equal("Teil",DictationChunkMemo.Find(back,c));
+        var other=c.Samples.ToArray();other[100]=1;
+        Assert.Null(DictationChunkMemo.Find(back,new Chunk(1,other,false,0)));      // other audio under the same index (the retry cut elsewhere)
+        Assert.Null(DictationChunkMemo.Find(back,new Chunk(2,c.Samples,false,0)));   // same audio, other index
     }
     [Fact] public async Task ClientErrorsAreNotRetried()
     {
